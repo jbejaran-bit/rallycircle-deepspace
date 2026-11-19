@@ -1,0 +1,32 @@
+export interface Court {
+  id: string
+  name: string
+  area: string
+  lat: number
+  lng: number
+  bookingUrl: string
+  directCalendar?: boolean
+}
+
+const cityBooking = 'https://pittsburgh.recdesk.com/Community/Facility'
+
+// Map pins use the City's Courts and Rinks dataset. Confirm current permits
+// and schedules on RecDesk, which is the authority for booking.
+export const courts: Court[] = [
+  { id: 'schenley', name: 'Schenley Oval Tennis Courts', area: 'Schenley Park, Pittsburgh', lat: 40.43295667, lng: -79.94131769, bookingUrl: cityBooking },
+  { id: 'highland', name: 'Highland Park Tennis Courts', area: 'Stanton Avenue, Pittsburgh', lat: 40.4746035, lng: -79.91066409, bookingUrl: 'https://pittsburgh.recdesk.com/Community/Facility/Reserve?facilityId=287&r=l', directCalendar: true },
+  { id: 'frick', name: 'Frick Park Clay Courts', area: 'Regent Square, Pittsburgh', lat: 40.43734057, lng: -79.89754367, bookingUrl: cityBooking },
+]
+
+export function findCourt(id: string | null) {
+  return courts.find(court => court.id === id)
+}
+
+export function distanceMiles(from: { lat: number; lng: number }, to: Court) {
+  const radians = Math.PI / 180
+  const latitude = (to.lat - from.lat) * radians
+  const longitude = (to.lng - from.lng) * radians
+  const a = Math.sin(latitude / 2) ** 2 +
+    Math.cos(from.lat * radians) * Math.cos(to.lat * radians) * Math.sin(longitude / 2) ** 2
+  return 3958.8 * 2 * Math.asin(Math.sqrt(Math.min(a, 1)))
+}

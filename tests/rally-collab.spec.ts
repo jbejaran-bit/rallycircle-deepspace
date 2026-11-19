@@ -9,10 +9,14 @@ test('shared link, mobile RSVP, presence and messaging work across two accounts'
   const [alice, bob] = await users(2)
   const title = `__test-${Date.now()}__ doubles`
   let created = false
-  await alice.page.goto('/rallies')
+  await alice.page.goto('/courts')
   await bob.page.setViewportSize({ width: 390, height: 844 })
   try {
-    await alice.page.getByRole('button', { name: 'New session' }).click()
+    await alice.page.getByRole('button', { name: /Highland Park Tennis Courts/ }).click()
+    await expect(alice.page.getByRole('link', { name: 'Open court calendar' })).toHaveAttribute('href', /pittsburgh\.recdesk\.com/)
+    await alice.page.getByRole('link', { name: 'Plan a Rally here' }).click()
+    await expect(alice.page.getByPlaceholder('Schenley Park')).toHaveValue('Highland Park Tennis Courts')
+    await expect(alice.page.getByPlaceholder('Pittsburgh, PA')).toHaveValue('Stanton Avenue, Pittsburgh')
     await alice.page.getByPlaceholder('Sunday doubles & rallies').fill(title)
     await alice.page.getByPlaceholder('Schenley Park').fill('Test court')
     await alice.page.getByPlaceholder('Pittsburgh, PA').fill('Test location')

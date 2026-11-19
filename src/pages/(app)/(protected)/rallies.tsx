@@ -1,3 +1,4 @@
+import { findCourt, type Court } from '@/lib/courts'
 import { useMemo, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth, useMessages, useMutations, usePresenceRoom, useQuery, useUserLookup, type Channel, type Message } from 'deepspace'
@@ -12,16 +13,16 @@ function ErrorMessage({ message }: { message: string | null }) {
   return message ? <p role="alert" className="rounded-xl border border-rose-400/30 bg-rose-400/10 px-3 py-2 text-sm text-rose-200">{message}</p> : null
 }
 
-function CreateSession({ userId, onCreated }: { userId: string; onCreated: (id: string) => void }) {
+function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; onCreated: (id: string) => void; selectedCourt?: Court }) {
   const { createConfirmed, putConfirmed, ready } = useMutations<RallySession>('sessions')
   const { createConfirmed: createChannel } = useMutations<Channel>('channels')
   const { createConfirmed: createRSVP, ready: rsvpReady } = useMutations<RallyRSVP>('rsvps')
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(Boolean(selectedCourt))
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [title, setTitle] = useState('')
-  const [court, setCourt] = useState('')
-  const [location, setLocation] = useState('')
+  const [court, setCourt] = useState(selectedCourt?.name ?? '')
+  const [location, setLocation] = useState(selectedCourt?.area ?? '')
   const [startsAt, setStartsAt] = useState('')
   const [durationMinutes, setDurationMinutes] = useState(90)
   const [targetPlayers, setTargetPlayers] = useState(4)
@@ -246,10 +247,14 @@ export default function RalliesPage() {
   const { records: rsvps, status: rsvpStatus } = useQuery<RallyRSVP>('rsvps')
   const [searchParams, setSearchParams] = useSearchParams()
   const activeId = searchParams.get('session')
+  const selectedCourt = findCourt(searchParams.get('court'))
   function chooseSession(id: string | null) {
     setSearchParams(current => {
       const next = new URLSearchParams(current)
-      if (id) next.set('session', id)
+      if (id) {
+        next.set('session', id)
+        next.delete('court')
+      }
       else next.delete('session')
       return next
     }, { replace: true })
@@ -269,7 +274,7 @@ export default function RalliesPage() {
           <h1 className="text-4xl font-black leading-[1.05] tracking-[-0.045em] sm:text-5xl lg:text-6xl">Better tennis starts <span className="text-[#d7fc83]">together.</span></h1>
           <p className="mt-4 max-w-2xl text-base leading-relaxed text-white/55">One place to plan a hit, find your people and show up ready. No group-chat chaos.</p>
         </div>
-        <CreateSession userId={signedInId} onCreated={chooseSession}/>
+        <CreateSession userId={signedInId} onCreated={chooseSession} selectedCourt={selectedCourt}/>
       </div>
       <div className="mb-8 grid gap-3 sm:grid-cols-3">
         <div className="rounded-2xl border border-white/10 bg-[#15201a] px-5 py-4"><p className="mb-1 text-xs font-medium text-white/50">Upcoming sessions</p><strong className="text-3xl font-black text-[#d7fc83]">{totalUpcoming}</strong></div>
