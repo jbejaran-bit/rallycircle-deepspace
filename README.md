@@ -2,6 +2,12 @@
 
 RallyCircle helps tennis players organize practice sessions. A host publishes a session and shares a direct link. Players can RSVP, see the group update live, and use the session chat to coordinate.
 
+## Court finder
+
+The Courts tab maps three Pittsburgh tennis venues. Players can optionally sort by straight-line distance using their browser location, open the official Pittsburgh RecDesk booking portal in a new tab, and start a Rally with the selected court already filled in. RecDesk supplies permit availability and completes bookings. RallyCircle does not infer walk-on occupancy or create a reservation.
+
+Map data © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright). Court locations are based on the [City of Pittsburgh Courts and Rinks dataset](https://data.wprdc.org/dataset/city-of-pittsburgh-courts).
+
 ## DeepSpace features
 
 | Feature | What RallyCircle uses it for |
