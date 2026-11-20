@@ -36,7 +36,12 @@ export async function runRallyCommand(command: RallyCommand): Promise<void> {
     },
     body: JSON.stringify(command),
   })
-  const result: unknown = await response.json()
+  if (response.status === 401) throw new Error('Sign in before updating this session.')
+
+  const result: unknown = await response.json().catch(() => null)
+  if (!response.ok && !isRallyCommandResponse(result)) {
+    throw new Error('The session update could not be completed. Try again.')
+  }
   if (!isRallyCommandResponse(result)) {
     throw new Error('The session update returned an invalid response.')
   }
