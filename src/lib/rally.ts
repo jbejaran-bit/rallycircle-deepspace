@@ -1,5 +1,6 @@
 export type Level = 'All levels' | 'Beginner' | 'Intermediate' | 'Advanced'
 export type RSVPStatus = 'going' | 'maybe'
+export type CapacityMode = 'open' | 'limited'
 
 export interface RallySession {
   title: string
@@ -13,12 +14,57 @@ export interface RallySession {
   hostId: string
   chatChannelId: string
   status: 'open' | 'cancelled'
+  // Optional: absent on sessions created before capacity mode existed.
+  // Read as open participation with no cap (see resolveCapacity).
+  capacityMode?: CapacityMode
+  maxPlayers?: number
 }
 
 export interface RallyRSVP {
   sessionId: string
   userId: string
   status: RSVPStatus
+}
+
+export interface RallyWaitlist {
+  sessionId: string
+  userId: string
+}
+
+/**
+ * Resolve a session's effective capacity. A malformed stored value is
+ * treated as open participation, not clamped to a cap the host never set:
+ * host session edits go through a direct record write with no server-side
+ * range validation, so maxPlayers can hold any number. The UI only ever
+ * offers 2–12.
+ */
+export function resolveCapacity(session: Pick<RallySession, 'capacityMode' | 'maxPlayers'>): { limited: boolean; maxPlayers: number } {
+  if (session.capacityMode !== 'limited') return { limited: false, maxPlayers: 0 }
+  const max = typeof session.maxPlayers === 'number' ? Math.floor(session.maxPlayers) : 0
+  if (!Number.isFinite(max) || max < 2 || max > 12) return { limited: false, maxPlayers: 0 }
+  return { limited: true, maxPlayers: max }
+}
+
+export interface WaitlistRow {
+  recordId: string
+  createdAt: string
+  data: RallyWaitlist
+}
+
+/** Sort waitlist rows FIFO: earliest created first, recordId breaks ties. */
+export function sortWaitlistRows(rows: WaitlistRow[]): WaitlistRow[] {
+  return [...rows].sort((a, b) =>
+    a.createdAt === b.createdAt
+      ? (a.recordId < b.recordId ? -1 : a.recordId > b.recordId ? 1 : 0)
+      : (a.createdAt < b.createdAt ? -1 : 1),
+  )
+}
+
+/** 1-based FIFO position of a user on a session's waitlist; 0 when not listed. */
+export function waitlistPosition(rows: WaitlistRow[], sessionId: string, userId: string): number {
+  const ordered = sortWaitlistRows(rows.filter(r => r.data.sessionId === sessionId))
+  const index = ordered.findIndex(r => r.data.userId === userId)
+  return index === -1 ? 0 : index + 1
 }
 
 /** Validate the input BEFORE sending a write. Server schema still enforces ownership and uniqueness. */
@@ -30,6 +76,8 @@ export function validateSession(input: Omit<RallySession, 'hostId' | 'chatChanne
   if (!Number.isFinite(time) || time <= now) return 'Choose a future date and time.'
   if (![60, 90, 120, 150].includes(input.durationMinutes)) return 'Select a valid session duration.'
   if (!Number.isInteger(input.targetPlayers) || input.targetPlayers < 2 || input.targetPlayers > 12) return 'Choose 2–12 target players.'
+  if (input.capacityMode !== undefined && input.capacityMode !== 'open' && input.capacityMode !== 'limited') return 'Choose open or limited participation.'
+  if (input.capacityMode === 'limited' && (!Number.isInteger(input.maxPlayers) || (input.maxPlayers as number) < 2 || (input.maxPlayers as number) > 12)) return 'Choose 2–12 maximum players for a limited session.'
   if (!['All levels', 'Beginner', 'Intermediate', 'Advanced'].includes(input.level)) return 'Select a skill level.'
   if (input.notes.length > 400) return 'Keep notes under 400 characters.'
   return null
