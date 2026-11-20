@@ -1,5 +1,5 @@
 import type { ActionHandler, ActionResult, GetActionData, MutateActionData, QueryActionData } from 'deepspace/worker'
-import type { RallyRSVP, RallySession, RSVPStatus } from '../lib/rally.js'
+import { validCapacity, type RallyRSVP, type RallySession, type RSVPStatus } from '../lib/rally.js'
 import { awardPoint, createMatchScore, readMatchScore, scoreEditSchema } from '../lib/rally-score.js'
 import type { z } from 'zod'
 import type { Env } from '../../worker.js'
@@ -80,6 +80,18 @@ async function applyCommand(command: RallyCommand, tool: RecordTool): Promise<Ra
   if (!existingResult.success) return failure('Your existing RSVP could not be checked.')
 
   const existing = existingResult.data.records[0]
+  // All transitions that can increase occupancy go through this session's
+  // queue. A concurrent self-withdrawal can only decrease occupancy.
+  if (session.capacity != null && command.status === 'going' && existing?.data.status !== 'going') {
+    if (!validCapacity(session.capacity)) return failure('This session has an invalid capacity.')
+    const occupants = await tool<QueryActionData<RallyRSVP>>('records.query', {
+      collection: 'rsvps',
+      where: { sessionId: command.sessionId, status: 'going' },
+      limit: session.capacity,
+    }, command.userId)
+    if (!occupants.success) return failure('Available places could not be checked.')
+    if (occupants.data.records.length >= session.capacity) return failure('This session is full.')
+  }
   const result = existing
     ? await tool<MutateActionData>(
       'records.update',

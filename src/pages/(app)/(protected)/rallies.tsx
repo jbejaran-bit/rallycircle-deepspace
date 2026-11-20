@@ -18,14 +18,16 @@ function ErrorMessage({ message }: { message: string | null }) {
   return message ? <p role="alert" className="rounded-xl border border-rose-400/30 bg-rose-400/10 px-3 py-2 text-sm text-rose-200">{message}</p> : null
 }
 
-function ReadinessPanel({ confirmed, target, status, error, cancelled }: {
+function ReadinessPanel({ confirmed, target, status, error, cancelled, full, format }: {
   confirmed: number
   target: number
   status: 'loading' | 'ready' | 'error'
   error?: string
   cancelled: boolean
+  full: boolean
+  format?: SessionFormat
 }) {
-  const readiness = summarizeReadiness(confirmed, target)
+  const readiness = summarizeReadiness(confirmed, target, format)
   const progressMax = Math.max(1, readiness.targetPlayers)
   const progressValue = Math.min(readiness.confirmedPlayers, progressMax)
   const progressWidth = Math.min(100, (progressValue / progressMax) * 100)
@@ -62,10 +64,10 @@ function ReadinessPanel({ confirmed, target, status, error, cancelled }: {
             <div className="h-full rounded-full bg-[#d7fc83] transition-[width] duration-300" style={{ width: `${progressWidth}%` }} />
           </div>
           <div aria-live="polite" className="mt-3">
-            <p data-testid="readiness-status" className={`text-sm font-bold ${readiness.remainingForDoubles === 0 ? 'text-[#d7fc83]' : 'text-white'}`}>
+            <p data-testid="readiness-status" className={`text-sm font-bold ${readiness.ready ? 'text-[#d7fc83]' : 'text-white'}`}>
               {readiness.status}
             </p>
-            {readiness.detail && <p className="mt-1 text-xs text-white/55">{readiness.detail}</p>}
+            {(full || readiness.detail) && <p className="mt-1 text-xs text-white/55">{full ? "This session is full." : readiness.detail}</p>}
           </div>
         </>
       )}
@@ -87,6 +89,7 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
   const [startsAt, setStartsAt] = useState('')
   const [durationMinutes, setDurationMinutes] = useState(90)
   const [targetPlayers, setTargetPlayers] = useState(4)
+  const [capacity, setCapacity] = useState<number>()
   const [level, setLevel] = useState<Level>('All levels')
   const [notes, setNotes] = useState('')
 
@@ -111,7 +114,7 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
     const candidate = {
       format, title: title.trim(), court: court.trim(), location: location.trim(),
       startsAt: Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : startsAt,
-      durationMinutes, targetPlayers, level, notes: notes.trim(),
+      durationMinutes, targetPlayers, capacity, level, notes: notes.trim(),
     }
     const problem = validateSession(candidate)
     if (problem) { setError(problem); return }
@@ -142,6 +145,7 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
         console.warn('Session created without a chat channel', e)
       }
       setFormat('Practice')
+      setCapacity(undefined)
       setTitle(''); setCourt(''); setLocation(''); setStartsAt(''); setNotes('')
       setOpen(false)
     } catch (cause) {
@@ -177,8 +181,14 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
               <label className="block text-xs font-medium text-white/75">Target players<select className={`${field} mt-1.5`} value={targetPlayers} onChange={e=>setTargetPlayers(Number(e.target.value))}>{Array.from({length:11},(_,i)=>i+2).map(n=><option key={n} value={n}>{n} players</option>)}</select></label>
               <label className="block text-xs font-medium text-white/75">Level<select className={`${field} mt-1.5`} value={level} onChange={e=>setLevel(e.target.value as Level)}>{(['All levels','Beginner','Intermediate','Advanced'] as Level[]).map(n=><option key={n}>{n}</option>)}</select></label>
             </div>
+            <label className="block text-xs font-medium text-white/75">Maximum confirmed players
+              <select className={`${field} mt-1.5`} value={capacity ?? ''} onChange={event => setCapacity(event.target.value ? Number(event.target.value) : undefined)}>
+                <option value="">No limit</option>
+                {Array.from({ length: 11 }, (_, index) => index + 2).map(size => <option key={size} value={size}>{size} players</option>)}
+              </select>
+            </label>
             <label className="block text-xs font-medium text-white/75">Notes (optional)<textarea maxLength={400} rows={3} className={`${field} mt-1.5 resize-none`} placeholder="Bring fresh balls. We'll warm up for 15 minutes." value={notes} onChange={e=>setNotes(e.target.value)}/></label>
-            <div className="rounded-xl bg-white/5 px-3 py-2 text-xs text-white/60">Target players is a planning goal, not a hard attendance cap. Session details and chat are visible to signed-in members.</div>
+            <div className="rounded-xl bg-white/5 px-3 py-2 text-xs text-white/60">The target is a planning goal. A maximum limits confirmed RSVPs and stays fixed after publishing. Session details and chat are visible to signed-in members.</div>
             <ErrorMessage message={error}/>
             <button type="submit" disabled={pending || !ready} className={`${accent} w-full`}>{pending ? 'Creating…' : 'Publish session'}</button>
           </form>
@@ -250,6 +260,7 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
   const myRSVP = people.find(r => r.data.userId === userId)
   const {going, maybe} = summarizeAttendance(people.map(r=>r.data), sessionId)
   const cancelled = session.status === 'cancelled'
+  const full = session.capacity != null && going >= session.capacity
   const canChangeRsvp = rsvpStatus === 'ready' && rsvpReady && !busy && !cancelled
 
   const calendarEvent = !cancelled && (session.hostId === userId || myRSVP?.data.status === 'going')
@@ -299,20 +310,20 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
           <div className="flex items-center gap-2"><CalendarDays size={16} className="text-[#d7fc83]"/>{formatSessionTime(session.startsAt)}</div>
           <div className="flex items-center gap-2"><Clock3 size={16} className="text-[#d7fc83]"/>{session.durationMinutes} minutes</div>
           <div className="flex items-center gap-2"><MapPin size={16} className="text-[#d7fc83]"/>{session.court} · {session.location}</div>
-          <div className="flex items-center gap-2"><Users size={16} className="text-[#d7fc83]"/>{going} going · target {session.targetPlayers}</div>
+          <div className="flex items-center gap-2"><Users size={16} className="text-[#d7fc83]"/>{going} going · target {session.targetPlayers}{session.capacity != null && ` · max ${session.capacity}`}</div>
         </div>
       </div>
     </div>
     <div className="space-y-6 p-6 sm:p-8">
-      <ReadinessPanel confirmed={going} target={session.targetPlayers} status={rsvpStatus} error={rsvpError} cancelled={cancelled} />
+      <ReadinessPanel confirmed={going} target={session.targetPlayers} status={rsvpStatus} error={rsvpError} cancelled={cancelled} full={full} format={session.format} />
       <section>
         <div className="mb-3 flex items-center justify-between"><h3 className="text-sm font-bold text-white">Who's playing</h3><span className="text-xs text-white/45">{going} confirmed · {maybe} maybe</span></div>
         <div className="flex flex-wrap gap-2">{people.filter(p=>p.data.status==='going').map(r=><span key={r.recordId} className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/80"><span className="mr-1.5 text-[#d7fc83]">●</span>{getName(r.data.userId) ?? 'Player'}</span>)}{going===0&&<p className="text-sm text-white/50">No confirmations yet. Be the first!</p>}</div>
-        <p className="mt-3 text-xs text-white/50">Hosted by {getName(session.hostId) ?? 'a community player'}. Extra players can still join after the target is reached.</p>
+        <p className="mt-3 text-xs text-white/50">Hosted by {getName(session.hostId) ?? 'a community player'}.{session.capacity == null && ' Extra players can still join after the target is reached.'}</p>
         {session.notes && <p className="mt-4 rounded-xl bg-white/5 p-4 text-sm leading-relaxed text-white/70">{session.notes}</p>}
       </section>
       {cancelled ? <p className="rounded-xl bg-rose-500/10 p-4 text-sm font-medium text-rose-300">This session was cancelled by its organizer.</p> : <div className="flex flex-wrap gap-2">
-        <button type="button" disabled={!canChangeRsvp} onClick={()=>void respond('going')} className={`${myRSVP?.data.status==='going'?accent:'rounded-xl border border-[#d7fc83]/50 px-4 py-3 text-sm font-bold text-[#d7fc83] hover:bg-[#d7fc83]/10'} inline-flex items-center gap-2 disabled:opacity-50`}><Check size={16}/>{busy ? 'Saving…' : myRSVP?.data.status==='going'?'Going ✓':'I’m in'}</button>
+        <button type="button" disabled={!canChangeRsvp || (full && myRSVP?.data.status !== 'going')} onClick={()=>void respond('going')} className={`${myRSVP?.data.status==='going'?accent:'rounded-xl border border-[#d7fc83]/50 px-4 py-3 text-sm font-bold text-[#d7fc83] hover:bg-[#d7fc83]/10'} inline-flex items-center gap-2 disabled:opacity-50`}><Check size={16}/>{busy ? 'Saving…' : myRSVP?.data.status==='going'?'Going ✓':'I’m in'}</button>
         <button type="button" disabled={!canChangeRsvp} onClick={()=>void respond('maybe')} className="rounded-xl border border-white/15 px-4 py-3 text-sm font-semibold text-white/85 hover:bg-white/10 disabled:opacity-50">{myRSVP?.data.status==='maybe'?'Maybe ✓':'Maybe'}</button>
         {myRSVP&&<button type="button" disabled={!canChangeRsvp} onClick={()=>void respond(null)} className="rounded-xl px-3 py-3 text-sm text-white/50 hover:bg-white/10 hover:text-white">Withdraw</button>}
       </div>}
@@ -402,7 +413,7 @@ export default function RalliesPage() {
               <h3 className="text-lg font-extrabold tracking-tight text-white">{s.data.title}</h3>
               <p className="mt-2 flex items-center gap-2 text-xs text-white/60"><CalendarDays size={13}/>{formatSessionTime(s.data.startsAt)}</p>
               <p className="mt-2 flex items-center gap-2 text-xs text-white/60"><MapPin size={13}/>{s.data.court}, {s.data.location}</p>
-              <div className="mt-4 flex items-center justify-between border-t border-white/10 pt-3"><span className="flex items-center gap-1.5 text-xs font-semibold text-white/75"><Users size={14} className="text-[#d7fc83]"/>{going} going / target {s.data.targetPlayers}</span><span className={`text-[11px] font-bold ${s.data.status==='cancelled'?'text-rose-300':'text-[#d7fc83]'}`}>{s.data.status==='cancelled'?'Cancelled':going>=s.data.targetPlayers?'Target reached':'Open to join'}</span></div>
+              <div className="mt-4 flex items-center justify-between border-t border-white/10 pt-3"><span className="flex items-center gap-1.5 text-xs font-semibold text-white/75"><Users size={14} className="text-[#d7fc83]"/>{going} going / target {s.data.targetPlayers}</span><span className={`text-[11px] font-bold ${s.data.status==='cancelled'?'text-rose-300':'text-[#d7fc83]'}`}>{s.data.status==='cancelled'?'Cancelled':s.data.capacity != null && going >= s.data.capacity?'Full':going>=s.data.targetPlayers?'Target reached':'Open to join'}</span></div>
             </button>
           })}</div>}
         </section>

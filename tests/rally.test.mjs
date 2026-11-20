@@ -23,6 +23,7 @@ test('readiness identifies the final player needed for doubles', () => {
     targetPlayers: 4,
     remainingToTarget: 1,
     remainingForDoubles: 1,
+    ready: false,
     status: 'One more player needed',
     detail: '',
   })
@@ -36,6 +37,7 @@ test('readiness separates doubles from a larger session target', () => {
     targetPlayers: 6,
     remainingToTarget: 3,
     remainingForDoubles: 1,
+    ready: false,
     status: '3 more players needed',
     detail: 'One more player to make doubles.',
   })
@@ -72,4 +74,17 @@ test('grouped responses preserve withdrawal IDs and stay scoped to their session
   const afterWithdrawal = groupSessionRsvps(rsvps.filter(record => record.recordId !== 'one'))
   assert.deepEqual(afterWithdrawal.get('a'), [rsvps[2]])
   assert.deepEqual(afterWithdrawal.get('b'), [rsvps[1]])
+})
+
+test('readiness reflects singles and practice formats', () => {
+  assert.equal(summarizeReadiness(2, 3, 'Singles').status, 'Singles ready!')
+  assert.equal(summarizeReadiness(1, 3, 'Singles').status, '2 more players needed')
+  assert.equal(summarizeReadiness(2, 3, 'Practice').status, 'One more player needed')
+  assert.equal(summarizeReadiness(3, 3, 'Practice').status, 'Target reached')
+})
+
+test('a session maximum must cover its planning target', () => {
+  assert.match(validate({ ...base, capacity: 3 }), /target cannot exceed/)
+  assert.match(validate({ ...base, capacity: 4.5 }), /capacity/)
+  assert.equal(validate({ ...base, capacity: 4 }), null)
 })

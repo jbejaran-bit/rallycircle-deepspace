@@ -13,6 +13,7 @@ export interface RallySession {
   startsAt: string
   durationMinutes: number
   targetPlayers: number
+  capacity?: number
   level: Level
   notes: string
   hostId: string
@@ -35,10 +36,16 @@ export function validateSession(input: Omit<RallySession, 'hostId' | 'chatChanne
   const time = Date.parse(input.startsAt)
   if (!Number.isFinite(time) || time <= now) return 'Choose a future date and time.'
   if (![60, 90, 120, 150].includes(input.durationMinutes)) return 'Select a valid session duration.'
+  if (input.capacity != null && !validCapacity(input.capacity)) return 'Choose a capacity of 2–12 players.'
   if (!Number.isInteger(input.targetPlayers) || input.targetPlayers < 2 || input.targetPlayers > 12) return 'Choose 2–12 target players.'
+  if (input.capacity != null && input.targetPlayers > input.capacity) return 'The planning target cannot exceed the maximum.'
   if (!['All levels', 'Beginner', 'Intermediate', 'Advanced'].includes(input.level)) return 'Select a skill level.'
   if (input.notes.length > 400) return 'Keep notes under 400 characters.'
   return null
+}
+
+export function validCapacity(value: number): boolean {
+  return Number.isInteger(value) && value >= 2 && value <= 12
 }
 
 /** Index record envelopes without losing the record IDs used for withdrawal. */
@@ -61,11 +68,26 @@ export function summarizeAttendance(rsvps: RallyRSVP[], sessionId: string) {
   }
 }
 
-export function summarizeReadiness(confirmed: number, target: number) {
+export function summarizeReadiness(confirmed: number, target: number, format?: SessionFormat) {
   const confirmedPlayers = Number.isFinite(confirmed) ? Math.max(0, Math.floor(confirmed)) : 0
   const targetPlayers = Number.isFinite(target) ? Math.max(0, Math.floor(target)) : 0
   const remainingToTarget = Math.max(0, targetPlayers - confirmedPlayers)
   const remainingForDoubles = Math.max(0, 4 - confirmedPlayers)
+
+  if (format === 'Singles' || format === 'Practice') {
+    const minimum = format === 'Singles' ? 2 : targetPlayers
+    const ready = confirmedPlayers >= minimum
+    const remaining = remainingToTarget || Math.max(0, minimum - confirmedPlayers)
+    return {
+      confirmedPlayers, targetPlayers, remainingToTarget, remainingForDoubles, ready,
+      status: ready
+        ? (format === 'Singles' ? 'Singles ready!' : 'Target reached')
+        : remaining === 1 ? 'One more player needed' : `${remaining} more players needed`,
+      detail: ready && remainingToTarget > 0
+        ? `${remainingToTarget} more ${remainingToTarget === 1 ? 'player' : 'players'} to reach your target.`
+        : '',
+    }
+  }
 
   let status: string
   if (remainingForDoubles === 0) {
@@ -92,6 +114,7 @@ export function summarizeReadiness(confirmed: number, target: number) {
     targetPlayers,
     remainingToTarget,
     remainingForDoubles,
+    ready: remainingForDoubles === 0,
     status,
     detail,
   }

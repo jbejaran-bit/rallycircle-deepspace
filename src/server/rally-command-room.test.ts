@@ -2,7 +2,7 @@ import { canCreate, canDelete, canUpdate, checkFieldPermissions } from 'deepspac
 import type { ActionTools } from 'deepspace/worker'
 import { describe, expect, it } from 'vitest'
 import { rsvpsSchema, sessionsSchema } from '../schemas/rally-schema.js'
-import type { RallyRSVP, RallySession } from '../lib/rally.js'
+import type { RallyRSVP, RallySession, RSVPStatus } from '../lib/rally.js'
 import type { Env } from '../../worker.js'
 import { readMatchScore } from '../lib/rally-score.js'
 import { rallyCommandAction, RallyCommandRoom } from './rally-command-room.js'
@@ -297,6 +297,25 @@ describe('RallyCircle server-side session and RSVP rules', () => {
     expect(readMatchScore(session.matchScore)).toMatchObject({ revision: 1, points: [1, 0] })
     await expect(harness.command('host', { operation: 'cancel', sessionId })).resolves.toMatchObject({ success: true })
     await expect(harness.command('host', { ...point, revision: 1 })).resolves.toMatchObject({ success: false })
+  })
+
+  it('serializes confirmations for the last spot and permits a join after withdrawal', async () => {
+    const harness = createHarness()
+    const sessionId = 'limited'
+    harness.addSession(sessionId, 'host')
+    harness.sessions.get(sessionId)!.data.capacity = 2
+    const respond = (user: string, status: RSVPStatus = 'going') =>
+      harness.command(user, { operation: 'rsvp', sessionId, status })
+    await expect(respond('host')).resolves.toMatchObject({ success: true })
+    await expect(respond('first', 'maybe')).resolves.toMatchObject({ success: true })
+    const lastSpot = await Promise.all([respond('first'), respond('second')])
+    expect(lastSpot.map(result => result.success)).toEqual([true, false])
+    await expect(respond('first')).resolves.toMatchObject({ success: true })
+    await expect(respond('second', 'maybe')).resolves.toMatchObject({ success: true })
+    const hostRsvp = [...harness.rsvps.values()].find(record => record.data.userId === 'host')!
+    harness.rsvps.delete(hostRsvp.recordId)
+    await expect(respond('second')).resolves.toMatchObject({ success: true })
+    expect([...harness.rsvps.values()].filter(record => record.data.status === 'going')).toHaveLength(2)
   })
 
   it('keeps direct writes closed while preserving own-RSVP withdrawal', () => {
