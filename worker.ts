@@ -34,6 +34,7 @@ import {
   isCourtboardMarkerLabel,
 } from './src/lib/courtboard.js'
 import { schemas } from './src/schemas.js'
+import { registerCourtDiscoveryRoutes } from './src/server/court-discovery.js'
 import { registerActionRoutes } from './src/server/action-routes.js'
 import { getRallyCanvasAccess } from './src/server/courtboard-access.js'
 import { RallyCommandRoom } from './src/server/rally-command-room.js'
@@ -262,6 +263,7 @@ app.use('*', async (c, next) => {
 registerAuthAndIntegrationRoutes(app)
 registerRealtimeRoutes(app)
 registerActionRoutes(app, resolveAuth)
+registerCourtDiscoveryRoutes(app, resolveAuth)
 // Every scaffold exposes selected tools through HTTP, MCP and browser tools.
 // Only copilot owns the collections needed for the in-app chat UI.
 registerAgent(app, {
