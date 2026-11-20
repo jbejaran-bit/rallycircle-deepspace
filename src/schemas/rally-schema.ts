@@ -1,6 +1,8 @@
 import type { CollectionSchema } from 'deepspace/schema'
+import { SESSION_FORMATS } from '../lib/rally.js'
 
 const sessionMemberWritableFields = [
+  'format',
   'title',
   'court',
   'location',
@@ -16,6 +18,7 @@ const sessionMemberWritableFields = [
 export const sessionsSchema: CollectionSchema = {
   name: 'sessions',
   columns: [
+    { name: 'format', storage: 'text', interpretation: { kind: 'select', options: [...SESSION_FORMATS] } },
     { name: 'title', storage: 'text', interpretation: 'plain', required: true },
     { name: 'court', storage: 'text', interpretation: 'plain', required: true },
     { name: 'location', storage: 'text', interpretation: 'plain', required: true },

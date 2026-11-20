@@ -1,7 +1,11 @@
 export type Level = 'All levels' | 'Beginner' | 'Intermediate' | 'Advanced'
+export const SESSION_FORMATS = ['Singles', 'Doubles', 'Practice'] as const
+export type SessionFormat = typeof SESSION_FORMATS[number]
+
 export type RSVPStatus = 'going' | 'maybe'
 
 export interface RallySession {
+  format?: SessionFormat
   title: string
   court: string
   location: string
@@ -23,6 +27,7 @@ export interface RallyRSVP {
 
 /** Validate the input BEFORE sending a write. Server schema still enforces ownership and uniqueness. */
 export function validateSession(input: Omit<RallySession, 'hostId' | 'chatChannelId' | 'status'>, now = Date.now()): string | null {
+  if (input.format !== undefined && !SESSION_FORMATS.includes(input.format)) return 'Select a session format.'
   if (!input.title.trim() || input.title.trim().length > 72) return 'Use a title between 1 and 72 characters.'
   if (!input.court.trim() || input.court.trim().length > 100) return 'Enter a court name (up to 100 characters).'
   if (!input.location.trim() || input.location.trim().length > 100) return 'Enter a location (up to 100 characters).'

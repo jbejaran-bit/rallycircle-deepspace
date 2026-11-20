@@ -3,8 +3,9 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth, useMessages, useMutations, usePresenceRoom, useQuery, useUserLookup, type Channel, type Message } from 'deepspace'
 import { CalendarDays, Check, ChevronRight, Clock3, Copy, MapPin, MessageCircle, Plus, Radio, Send, Share2, ShieldCheck, Sparkles, Users, X } from 'lucide-react'
-import { buildSessionUrl, formatSessionTime, groupSessionRsvps, summarizeAttendance, summarizeReadiness, validateSession, type Level, type RallyRSVP, type RallySession, type RSVPStatus } from '@/lib/rally'
+import { buildSessionUrl, formatSessionTime, groupSessionRsvps, SESSION_FORMATS, summarizeAttendance, summarizeReadiness, validateSession, type Level, type RallyRSVP, type RallySession, type RSVPStatus, type SessionFormat } from '@/lib/rally'
 import { runRallyCommand } from '@/lib/rally-actions'
+import { buildCalendarEvent } from '@/lib/rally-calendar'
 import LiveCourtboard from '@/components/LiveCourtboard'
 
 const surface = 'rounded-3xl border border-white/10 bg-[#141b1a] shadow-[0_18px_60px_rgba(0,0,0,0.17)]'
@@ -77,6 +78,7 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [hostRsvpError, setHostRsvpError] = useState<string | null>(null)
+  const [format, setFormat] = useState<SessionFormat>('Practice')
   const [title, setTitle] = useState('')
   const [court, setCourt] = useState(selectedCourt?.name ?? '')
   const [location, setLocation] = useState(selectedCourt?.area ?? '')
@@ -89,6 +91,7 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
   function fillExample() {
     const sampleTime = new Date(Date.now() + 3 * 86400_000)
     const pad = (n: number) => String(n).padStart(2, '0')
+    setFormat('Doubles')
     setTitle('Weekend doubles & rally practice')
     setCourt('Schenley Park Tennis Courts')
     setLocation('Pittsburgh, PA')
@@ -104,7 +107,7 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
     if (pending || !ready || !userId) return
     const timestamp = Date.parse(startsAt)
     const candidate = {
-      title: title.trim(), court: court.trim(), location: location.trim(),
+      format, title: title.trim(), court: court.trim(), location: location.trim(),
       startsAt: Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : startsAt,
       durationMinutes, targetPlayers, level, notes: notes.trim(),
     }
@@ -136,6 +139,7 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
         // A session remains usable even if its optional discussion cannot initialize.
         console.warn('Session created without a chat channel', e)
       }
+      setFormat('Practice')
       setTitle(''); setCourt(''); setLocation(''); setStartsAt(''); setNotes('')
       setOpen(false)
     } catch (cause) {
@@ -159,6 +163,7 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
           </div>
           <button type="button" onClick={fillExample} className="mb-5 rounded-xl border border-[#d7fc83]/50 px-4 py-2 text-xs font-bold text-[#d7fc83] hover:bg-[#d7fc83]/10">Fill sample session</button>
           <form onSubmit={e => void submit(e)} className="space-y-4">
+            <label className="block text-xs font-medium text-white/75">Format<select className={`${field} mt-1.5`} value={format} onChange={e => setFormat(e.target.value as SessionFormat)}>{SESSION_FORMATS.map(option => <option key={option}>{option}</option>)}</select></label>
             <label className="block text-xs font-medium text-white/75">Session title<input required maxLength={72} className={`${field} mt-1.5`} placeholder="Sunday doubles & rallies" value={title} onChange={e => setTitle(e.target.value)}/></label>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <label className="block text-xs font-medium text-white/75">Court<input required maxLength={100} className={`${field} mt-1.5`} placeholder="Schenley Park" value={court} onChange={e => setCourt(e.target.value)}/></label>
@@ -245,6 +250,10 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
   const cancelled = session.status === 'cancelled'
   const canChangeRsvp = rsvpStatus === 'ready' && rsvpReady && !busy && !cancelled
 
+  const calendarEvent = !cancelled && (session.hostId === userId || myRSVP?.data.status === 'going')
+    ? buildCalendarEvent(session, buildSessionUrl(window.location.origin, sessionId))
+    : null
+
   async function shareSession() {
     try {
       await navigator.clipboard.writeText(buildSessionUrl(window.location.origin, sessionId))
@@ -275,9 +284,14 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
     <div className="relative overflow-hidden bg-[#243529] px-6 pb-7 pt-8 sm:px-8">
       <div aria-hidden className="absolute -right-8 -top-6 h-44 w-44 rounded-full border-[18px] border-[#d7fc83]/15"/>
       <div className="relative">
-        <div className="mb-5 flex items-center justify-between gap-3"><span className="inline-flex items-center gap-1.5 rounded-full bg-[#d7fc83]/15 px-3 py-1 text-xs font-bold uppercase tracking-wider text-[#d7fc83]"><Radio size={12}/> {cancelled?'Cancelled':'Session details'}</span><span className="text-xs text-white/65">{session.level}</span></div>
+        <div className="mb-5 flex items-center justify-between gap-3"><span className="inline-flex items-center gap-1.5 rounded-full bg-[#d7fc83]/15 px-3 py-1 text-xs font-bold uppercase tracking-wider text-[#d7fc83]"><Radio size={12}/> {cancelled?'Cancelled':'Session details'}</span><span className="text-xs text-white/65">{[session.format, session.level].filter(Boolean).join(' · ')}</span></div>
         <button type="button" onClick={() => void shareSession()} className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/25 bg-black/15 px-3 py-2 text-xs font-semibold text-white hover:border-[#d7fc83]"><Share2 size={14}/>{copyState === 'copied' ? 'Link copied!' : 'Share this session'}{copyState === 'copied' && <Copy size={13}/>}</button>
-        {copyState === 'error' && <p role="alert" className="mb-3 text-xs text-rose-200">Copy failed. You can copy this page’s URL instead.</p>}
+        {calendarEvent && (
+          <a download="rallycircle-session.ics" href={`data:text/calendar;charset=utf-8,${encodeURIComponent(calendarEvent)}`} className="mb-4 ml-2 inline-flex items-center gap-2 rounded-full border border-white/25 px-3 py-2 text-xs font-semibold text-white hover:border-[#d7fc83]">
+            <CalendarDays size={14} aria-hidden /> Add to calendar
+          </a>
+        )}
+        {copyState === 'error'  && <p role="alert" className="mb-3 text-xs text-rose-200">Copy failed. You can copy this page’s URL instead.</p>}
         <h2 className="max-w-lg text-3xl font-black tracking-tight text-white sm:text-4xl">{session.title}</h2>
         <div className="mt-5 grid gap-3 text-sm text-white/80 sm:grid-cols-2">
           <div className="flex items-center gap-2"><CalendarDays size={16} className="text-[#d7fc83]"/>{formatSessionTime(session.startsAt)}</div>
@@ -368,7 +382,7 @@ export default function RalliesPage() {
             const going = rsvpsBySession.get(s.recordId)?.filter(rsvp => rsvp.data.status === 'going').length ?? 0
             const chosen=selected?.recordId===s.recordId
             return <button type="button" key={s.recordId} onClick={()=>chooseSession(s.recordId)} aria-pressed={chosen} className={`w-full rounded-2xl border p-4 text-left transition ${chosen?'border-[#d7fc83]/70 bg-[#d7fc83]/10':'border-white/10 bg-white/3 hover:border-white/25 hover:bg-white/7'}`}>
-              <div className="mb-3 flex items-center justify-between"><span className="rounded-lg bg-white/10 px-2.5 py-1 text-[11px] font-bold text-white/85">{s.data.level}</span><ChevronRight size={17} className={chosen?'text-[#d7fc83]':'text-white/30'}/></div>
+              <div className="mb-3 flex items-center justify-between"><span className="rounded-lg bg-white/10 px-2.5 py-1 text-[11px] font-bold text-white/85">{[s.data.format, s.data.level].filter(Boolean).join(' · ')}</span><ChevronRight size={17} className={chosen?'text-[#d7fc83]':'text-white/30'}/></div>
               <h3 className="text-lg font-extrabold tracking-tight text-white">{s.data.title}</h3>
               <p className="mt-2 flex items-center gap-2 text-xs text-white/60"><CalendarDays size={13}/>{formatSessionTime(s.data.startsAt)}</p>
               <p className="mt-2 flex items-center gap-2 text-xs text-white/60"><MapPin size={13}/>{s.data.court}, {s.data.location}</p>
