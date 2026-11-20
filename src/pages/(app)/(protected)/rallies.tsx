@@ -291,7 +291,10 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
   const canChangeRsvp = rsvpStatus === 'ready' && !busy && !cancelled
 
   const calendarEvent = !cancelled && (session.hostId === userId || myRSVP?.data.status === 'going')
-    ? buildCalendarEvent(session, buildSessionUrl(window.location.origin, sessionId))
+    ? buildCalendarEvent(session, buildSessionUrl(window.location.origin, sessionId), new Date(), { sequence: session.scheduleRevision ?? 0 })
+    : null
+  const calendarCancellation = cancelled && (session.hostId === userId || myRSVP?.data.status === 'going')
+    ? buildCalendarEvent(session, buildSessionUrl(window.location.origin, sessionId), new Date(), { method: 'CANCEL', sequence: session.scheduleRevision ?? 0 })
     : null
 
   async function shareSession() {
@@ -329,6 +332,11 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
         {calendarEvent && (
           <a download="rallycircle-session.ics" href={`data:text/calendar;charset=utf-8,${encodeURIComponent(calendarEvent)}`} className="mb-4 ml-2 inline-flex items-center gap-2 rounded-full border border-white/25 px-3 py-2 text-xs font-semibold text-white hover:border-[#d7fc83]">
             <CalendarDays size={14} aria-hidden /> Add to calendar
+          </a>
+        )}
+        {calendarCancellation && (
+          <a download="rallycircle-session-cancel.ics" href={`data:text/calendar;charset=utf-8,${encodeURIComponent(calendarCancellation)}`} className="mb-4 ml-2 inline-flex items-center gap-2 rounded-full border border-white/25 px-3 py-2 text-xs font-semibold text-white hover:border-[#d7fc83]">
+            <CalendarDays size={14} aria-hidden /> Download cancellation (.ics)
           </a>
         )}
         {copyState === 'error'  && <p role="alert" className="mb-3 text-xs text-rose-200">Copy failed. You can copy this page’s URL instead.</p>}
