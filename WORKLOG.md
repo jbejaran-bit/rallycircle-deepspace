@@ -4,6 +4,8 @@
 
 Stage 1 is committed as `3b9455f` on isolated branch `feature/ready-to-play`, based on `d7c96ea`. Stage 2 is complete and its listed validation gates pass. Stage 3 was evaluated but not implemented: the target remains a planning goal, not a capacity limit. No production deployment, app identity change, data deletion, or internship submission was made.
 
+Publication is blocked: pushing `feature/ready-to-play` to the existing GitHub remote returned HTTP 403 (`sonybej-art` lacks write permission). The two tested stage commits remain local; no pull request was created.
+
 ## Stage 1 — Real-time readiness experience
 
 ### What changed and why
