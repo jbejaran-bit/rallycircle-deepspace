@@ -2,17 +2,23 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Env } from '../../worker'
 import { getRallyCanvasAccess } from './courtboard-access'
 
+type CanvasSession = { hostId: string; status: 'open' | 'cancelled' }
+
+function isSingleSession(
+  value: CanvasSession | Record<string, CanvasSession>,
+): value is CanvasSession {
+  return typeof (value as { hostId?: unknown }).hostId === 'string'
+}
+
 function makeEnv(
-  session:
-    | { hostId: string; status: 'open' | 'cancelled' }
-    | Record<string, { hostId: string; status: 'open' | 'cancelled' }>,
+  session: CanvasSession | Record<string, CanvasSession>,
   rsvps: Array<{ sessionId: string; userId: string; status: 'going' | 'maybe' }>,
   failTool?: 'records.get' | 'records.query',
 ) {
   // Single-session form keeps the old call sites working; the map form lets
   // K06 tests put two sessions behind one env.
-  const sessionsById: Record<string, { hostId: string; status: 'open' | 'cancelled' }> =
-    'hostId' in session ? { 'session-1': session } : session
+  const sessionsById: Record<string, CanvasSession> =
+    isSingleSession(session) ? { 'session-1': session } : session
   const fetch = vi.fn(async (request: Request) => {
     const { tool, params } = await request.json() as {
       tool: string
