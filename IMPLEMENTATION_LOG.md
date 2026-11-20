@@ -171,4 +171,8 @@ and the interrupted-promotion expectation superseded by Track A D1
 
 ## 7. Commits
 
-(To be filled in after committing — see `git log`.)
+- `05f7fe2` — poll/recurrence/notification lib, emitter, actions, contracts
+- `6ac4e24` — register poll/series/notification collections; calendar SEQUENCE/CANCEL
+- `c70388c` — command-room polls, series, notification wiring
+- `b2d71b9` — harness extensions + poll/series/notification tests
+- `aa3dd9b` — implementation log with verification evidence
