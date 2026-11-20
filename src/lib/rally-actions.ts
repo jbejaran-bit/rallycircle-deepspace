@@ -5,6 +5,23 @@ type RallyCommand =
   | { operation: 'rsvp'; sessionId: string; status: RSVPStatus }
   | { operation: 'cancel'; sessionId: string }
   | { operation: 'withdraw'; sessionId: string }
+  | { operation: 'joinWaitlist'; sessionId: string }
+  | { operation: 'leaveWaitlist'; sessionId: string }
+
+export const SESSION_FULL_PREFIX = 'SESSION_FULL: '
+
+/** True when a command failed because a limited session is full. */
+export function isSessionFullError(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith(SESSION_FULL_PREFIX)
+}
+
+/** The human-readable part of a command error, without the SESSION_FULL prefix. */
+export function commandErrorMessage(error: unknown): string {
+  if (!(error instanceof Error)) return 'The session update was rejected.'
+  return error.message.startsWith(SESSION_FULL_PREFIX)
+    ? error.message.slice(SESSION_FULL_PREFIX.length)
+    : error.message
+}
 
 interface RallyCommandResponse {
   success: boolean

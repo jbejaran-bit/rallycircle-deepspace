@@ -1,15 +1,20 @@
 import { canCreate, canDelete, canUpdate, checkFieldPermissions } from 'deepspace/worker'
 import type { ActionTools } from 'deepspace/worker'
 import { describe, expect, it } from 'vitest'
-import { rsvpsSchema, sessionsSchema } from '../schemas/rally-schema.js'
-import type { RallyRSVP, RallySession } from '../lib/rally.js'
+import { rsvpsSchema, sessionsSchema, waitlistsSchema } from '../schemas/rally-schema.js'
+import type { RallyRSVP, RallySession, RallyWaitlist } from '../lib/rally.js'
 import type { Env } from '../../worker.js'
 import { rallyCommandAction, RallyCommandRoom } from './rally-command-room.js'
 
 function createHarness() {
   const sessions = new Map<string, { recordId: string; createdBy: string; data: RallySession }>()
   const rsvps = new Map<string, { recordId: string; createdBy: string; data: RallyRSVP }>()
+  const waitlists = new Map<string, { recordId: string; createdBy: string; createdAt: string; data: RallyWaitlist }>()
   let nextRecordId = 0
+  // Monotonic clock: every waitlist row gets a strictly increasing
+  // createdAt, mirroring the server-assigned timestamps in production.
+  let clock = 0
+  const nextCreatedAt = () => new Date(Date.UTC(2026, 0, 1, 0, 0, ++clock)).toISOString()
 
   const recordRoom = {
     async fetch(request: Request) {
@@ -26,12 +31,28 @@ function createHarness() {
           : Response.json({ success: false, error: 'Record not found' })
       }
 
-      if (tool === 'records.query' && params.collection === 'rsvps') {
-        const where = params.where as Partial<RallyRSVP>
-        const records = Array.from(rsvps.values()).filter(record =>
-          Object.entries(where).every(([key, value]) => record.data[key as keyof RallyRSVP] === value),
+      if (tool === 'records.query' && (params.collection === 'rsvps' || params.collection === 'waitlists')) {
+        const where = params.where as Record<string, unknown>
+        const source: { recordId: string; createdAt?: string; data: unknown }[] =
+          params.collection === 'waitlists'
+            ? Array.from(waitlists.values())
+            : Array.from(rsvps.values())
+        const records = source.filter(record =>
+          Object.entries(where).every(([key, value]) => (record.data as Record<string, unknown>)[key] === value),
         )
         return Response.json({ success: true, data: { records, count: records.length } })
+      }
+
+      if (tool === 'records.create' && params.collection === 'waitlists') {
+        const data = params.data as { sessionId: string }
+        const userId = request.headers.get('X-User-Id') ?? ''
+        const duplicate = Array.from(waitlists.values()).some(record =>
+          record.data.sessionId === data.sessionId && record.data.userId === userId,
+        )
+        if (duplicate) return Response.json({ success: false, error: 'Duplicate waitlist row' })
+        const recordId = `waitlist-${++nextRecordId}`
+        waitlists.set(recordId, { recordId, createdBy: userId, createdAt: nextCreatedAt(), data: { ...data, userId } })
+        return Response.json({ success: true, data: { recordId } })
       }
 
       if (tool === 'records.create' && params.collection === 'rsvps') {
@@ -46,10 +67,11 @@ function createHarness() {
         return Response.json({ success: true, data: { recordId } })
       }
 
-      if (tool === 'records.delete' && params.collection === 'rsvps') {
+      if (tool === 'records.delete' && (params.collection === 'rsvps' || params.collection === 'waitlists')) {
         const recordId = String(params.recordId)
-        if (!rsvps.has(recordId)) return Response.json({ success: false, error: 'Record not found' })
-        rsvps.delete(recordId)
+        const source = params.collection === 'waitlists' ? waitlists : rsvps
+        if (!source.has(recordId)) return Response.json({ success: false, error: 'Record not found' })
+        source.delete(recordId)
         return Response.json({ success: true, data: { recordId } })
       }
 
@@ -89,7 +111,12 @@ function createHarness() {
   }
   const actionEnv = { ...env, RALLY_COMMAND_ROOMS: commandNamespace } as unknown as Env
 
-  function addSession(recordId: string, hostId: string, status: RallySession['status'] = 'open') {
+  function addSession(
+    recordId: string,
+    hostId: string,
+    status: RallySession['status'] = 'open',
+    capacity: { capacityMode: 'open' | 'limited'; maxPlayers: number } = { capacityMode: 'open', maxPlayers: 0 },
+  ) {
     sessions.set(recordId, {
       recordId,
       createdBy: hostId,
@@ -105,8 +132,18 @@ function createHarness() {
         hostId,
         chatChannelId: '',
         status,
+        capacityMode: capacity.capacityMode,
+        maxPlayers: capacity.maxPlayers,
       },
     })
+  }
+
+  // Seed a waitlist row directly, bypassing the command room — used to
+  // simulate a stale row left behind by a failed delete.
+  function seedWaitlist(sessionId: string, userId: string) {
+    const recordId = `waitlist-${++nextRecordId}`
+    waitlists.set(recordId, { recordId, createdBy: userId, createdAt: nextCreatedAt(), data: { sessionId, userId } })
+    return recordId
   }
 
   async function command(userId: string, params: Record<string, unknown>) {
@@ -129,7 +166,7 @@ function createHarness() {
     })
   }
 
-  return { addSession, command, rsvps, sessions }
+  return { addSession, seedWaitlist, command, rsvps, sessions, waitlists }
 }
 
 describe('RallyCircle server-side session and RSVP rules', () => {
@@ -309,6 +346,212 @@ describe('RallyCircle server-side session and RSVP rules', () => {
     expect(cancelFirst.rsvps.size).toBe(0)
   })
 
+describe('Session capacity and waitlists', () => {
+  const limited = { capacityMode: 'limited' as const, maxPlayers: 2 }
+
+  async function go(harness: ReturnType<typeof createHarness>, userId: string, sessionId: string) {
+    return harness.command(userId, { operation: 'rsvp', sessionId, status: 'going' })
+  }
+
+  it('caps going RSVPs at maxPlayers and returns a SESSION_FULL signal', async () => {
+    const harness = createHarness()
+    harness.addSession('s', 'host', 'open', limited)
+
+    await expect(go(harness, 'host', 's')).resolves.toMatchObject({ success: true })
+    await expect(go(harness, 'p2', 's')).resolves.toMatchObject({ success: true })
+    await expect(go(harness, 'p3', 's')).resolves.toMatchObject({
+      success: false,
+      error: expect.stringContaining('SESSION_FULL'),
+    })
+    expect(harness.rsvps.size).toBe(2)
+    // 'maybe' never consumes a spot, even when full.
+    await expect(harness.command('p3', {
+      operation: 'rsvp', sessionId: 's', status: 'maybe',
+    })).resolves.toMatchObject({ success: true })
+    expect(harness.rsvps.size).toBe(3)
+  })
+
+  it('treats a malformed stored cap as open participation', async () => {
+    const harness = createHarness()
+    harness.addSession('too-big', 'host', 'open', { capacityMode: 'limited', maxPlayers: 99 })
+    harness.addSession('too-small', 'host', 'open', { capacityMode: 'limited', maxPlayers: 1 })
+
+    for (const sessionId of ['too-big', 'too-small']) {
+      for (const userId of ['a', 'b', 'c', 'd']) {
+        await expect(go(harness, userId, sessionId)).resolves.toMatchObject({ success: true })
+      }
+    }
+    expect(harness.rsvps.size).toBe(8)
+  })
+
+  it('lets open sessions exceed their target (regression)', async () => {
+    const harness = createHarness()
+    harness.addSession('s', 'host')
+
+    for (const userId of ['host', 'p2', 'p3', 'p4', 'p5']) {
+      await expect(go(harness, userId, 's')).resolves.toMatchObject({ success: true })
+    }
+    expect(harness.rsvps.size).toBe(5)
+  })
+
+  it('joins the waitlist idempotently and refuses it while spots are free or the caller is confirmed', async () => {
+    const harness = createHarness()
+    harness.addSession('full', 'host', 'open', limited)
+    harness.addSession('roomy', 'host', 'open', limited)
+    harness.addSession('open', 'host')
+    await go(harness, 'host', 'full')
+    await go(harness, 'p2', 'full')
+    await go(harness, 'host', 'roomy')
+
+    const first = await harness.command('w1', { operation: 'joinWaitlist', sessionId: 'full' })
+    const second = await harness.command('w1', { operation: 'joinWaitlist', sessionId: 'full' })
+    expect(first.success).toBe(true)
+    expect(second).toMatchObject(first)
+    expect(harness.waitlists.size).toBe(1)
+
+    await expect(harness.command('p2', {
+      operation: 'joinWaitlist', sessionId: 'full',
+    })).resolves.toMatchObject({ success: false, error: expect.stringContaining('already confirmed') })
+    await expect(harness.command('w2', {
+      operation: 'joinWaitlist', sessionId: 'roomy',
+    })).resolves.toMatchObject({ success: false, error: expect.stringContaining('Spots are still available') })
+    await expect(harness.command('w2', {
+      operation: 'joinWaitlist', sessionId: 'open',
+    })).resolves.toMatchObject({ success: false, error: expect.stringContaining('open participation') })
+  })
+
+  it('leaves the waitlist and rejoins at the back', async () => {
+    const harness = createHarness()
+    harness.addSession('s', 'host', 'open', limited)
+    await go(harness, 'host', 's')
+    await go(harness, 'p2', 's')
+    await harness.command('w1', { operation: 'joinWaitlist', sessionId: 's' })
+    await harness.command('w2', { operation: 'joinWaitlist', sessionId: 's' })
+
+    // Leaving when not listed is a no-op success.
+    await expect(harness.command('nobody', {
+      operation: 'leaveWaitlist', sessionId: 's',
+    })).resolves.toMatchObject({ success: true })
+
+    await expect(harness.command('w1', {
+      operation: 'leaveWaitlist', sessionId: 's',
+    })).resolves.toMatchObject({ success: true })
+    expect(harness.waitlists.size).toBe(1)
+    await harness.command('w1', { operation: 'joinWaitlist', sessionId: 's' })
+
+    const order = Array.from(harness.waitlists.values())
+      .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1))
+      .map(r => r.data.userId)
+    expect(order).toEqual(['w2', 'w1'])
+  })
+
+  it('promotes only the earliest waiter when a confirmed player withdraws', async () => {
+    const harness = createHarness()
+    harness.addSession('s', 'host', 'open', limited)
+    await go(harness, 'host', 's')
+    await go(harness, 'p2', 's')
+    await harness.command('w1', { operation: 'joinWaitlist', sessionId: 's' })
+    await harness.command('w2', { operation: 'joinWaitlist', sessionId: 's' })
+
+    await expect(harness.command('p2', {
+      operation: 'withdraw', sessionId: 's',
+    })).resolves.toMatchObject({ success: true })
+
+    const going = Array.from(harness.rsvps.values())
+      .filter(r => r.data.status === 'going')
+      .map(r => r.data.userId)
+      .sort()
+    expect(going).toEqual(['host', 'w1'])
+    expect(harness.waitlists.size).toBe(1)
+    expect(Array.from(harness.waitlists.values())[0].data.userId).toBe('w2')
+  })
+
+  it('promotes the next waiter when a confirmed player switches to maybe', async () => {
+    const harness = createHarness()
+    harness.addSession('s', 'host', 'open', limited)
+    await go(harness, 'host', 's')
+    await go(harness, 'p2', 's')
+    await harness.command('w1', { operation: 'joinWaitlist', sessionId: 's' })
+
+    await expect(harness.command('p2', {
+      operation: 'rsvp', sessionId: 's', status: 'maybe',
+    })).resolves.toMatchObject({ success: true })
+
+    const w1 = Array.from(harness.rsvps.values()).find(r => r.data.userId === 'w1')
+    expect(w1?.data.status).toBe('going')
+    expect(harness.waitlists.size).toBe(0)
+    expect(Array.from(harness.rsvps.values()).find(r => r.data.userId === 'p2')?.data.status).toBe('maybe')
+  })
+
+  it('closes waitlist joins and RSVPs when the host cancels, and leaves rows inert', async () => {
+    const harness = createHarness()
+    harness.addSession('s', 'host', 'open', limited)
+    await go(harness, 'host', 's')
+    await go(harness, 'p2', 's')
+    await harness.command('w1', { operation: 'joinWaitlist', sessionId: 's' })
+    await harness.command('host', { operation: 'cancel', sessionId: 's' })
+
+    await expect(go(harness, 'p3', 's')).resolves.toMatchObject({ success: false })
+    await expect(harness.command('p3', {
+      operation: 'joinWaitlist', sessionId: 's',
+    })).resolves.toMatchObject({ success: false, error: expect.stringContaining('not open') })
+    // The waitlisted player can still leave; the row is never promoted.
+    await expect(harness.command('w1', {
+      operation: 'leaveWaitlist', sessionId: 's',
+    })).resolves.toMatchObject({ success: true })
+    expect(harness.waitlists.size).toBe(0)
+    expect(harness.rsvps.size).toBe(2)
+  })
+
+  it('never overbooks under five concurrent joins', async () => {
+    const harness = createHarness()
+    harness.addSession('s', 'host', 'open', limited)
+
+    const results = await Promise.all(
+      ['p1', 'p2', 'p3', 'p4', 'p5'].map(userId => go(harness, userId, 's')),
+    )
+    expect(results.filter(r => r.success).length).toBe(2)
+    expect(results.filter(r => !r.success).length).toBe(3)
+    for (const result of results.filter(r => !r.success)) {
+      expect(result).toMatchObject({ error: expect.stringContaining('SESSION_FULL') })
+    }
+    expect(harness.rsvps.size).toBe(2)
+  })
+
+  it('drops a stale waitlist row for an already-confirmed player and promotes the next waiter', async () => {
+    const harness = createHarness()
+    harness.addSession('s', 'host', 'open', limited)
+    await go(harness, 'host', 's')
+    await go(harness, 'p2', 's')
+    // Simulate a row left behind by a failed delete: the host is already
+    // confirmed but still holds the earliest waitlist row.
+    harness.seedWaitlist('s', 'host')
+    await harness.command('w1', { operation: 'joinWaitlist', sessionId: 's' })
+    await harness.command('w2', { operation: 'joinWaitlist', sessionId: 's' })
+
+    await harness.command('p2', { operation: 'withdraw', sessionId: 's' })
+
+    const going = Array.from(harness.rsvps.values())
+      .filter(r => r.data.status === 'going')
+      .map(r => r.data.userId)
+      .sort()
+    expect(going).toEqual(['host', 'w1'])
+    expect(Array.from(harness.waitlists.values()).map(r => r.data.userId)).toEqual(['w2'])
+  })
+
+  it('lets a user withdraw from a cancelled session', async () => {
+    const harness = createHarness()
+    harness.addSession('s', 'host', 'open', limited)
+    await go(harness, 'host', 's')
+    await harness.command('host', { operation: 'cancel', sessionId: 's' })
+
+    await expect(harness.command('host', {
+      operation: 'withdraw', sessionId: 's',
+    })).resolves.toMatchObject({ success: true })
+    expect(harness.rsvps.size).toBe(0)
+  })
+})
+
   it('keeps direct writes closed while preserving own-RSVP withdrawal', () => {
     const rsvp = {
       data: { sessionId: 'session', userId: 'player', status: 'going' },
@@ -319,6 +562,19 @@ describe('RallyCircle server-side session and RSVP rules', () => {
     expect(canCreate(rsvpsSchema, 'member')).toBe(false)
     expect(canUpdate(rsvpsSchema, 'member', rsvp, 'player')).toBe(false)
     expect(canDelete(rsvpsSchema, 'member', rsvp, 'player')).toBe(true)
+    expect(canCreate(waitlistsSchema, 'member')).toBe(false)
+    expect(canUpdate(waitlistsSchema, 'member', {
+      data: { sessionId: 'session', userId: 'player' },
+      createdBy: 'player',
+      recordId: 'waitlist',
+    }, 'player')).toBe(false)
+    expect(canDelete(waitlistsSchema, 'member', {
+      data: { sessionId: 'session', userId: 'player' },
+      createdBy: 'player',
+      recordId: 'waitlist',
+    }, 'player')).toBe(true)
+    expect(checkFieldPermissions(sessionsSchema, 'member', { capacityMode: 'limited' })).toBeNull()
+    expect(checkFieldPermissions(sessionsSchema, 'member', { maxPlayers: 4 })).toBeNull()
     expect(checkFieldPermissions(sessionsSchema, 'member', { status: 'cancelled' })).toContain('status')
     expect(checkFieldPermissions(sessionsSchema, 'member', { status: 'open' })).toContain('status')
     expect(canUpdate(sessionsSchema, 'member', {
