@@ -69,16 +69,16 @@ function ReadinessPanel({ confirmed, target, status, error, cancelled }: {
   )
 }
 
-function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; onCreated: (id: string) => void; selectedCourt?: Court }) {
+function CreateSession({ userId, onCreated, selectedCourt, prefillCourt, prefillArea }: { userId: string; onCreated: (id: string) => void; selectedCourt?: Court; prefillCourt?: string; prefillArea?: string }) {
   const { createConfirmed, putConfirmed, ready } = useMutations<Omit<RallySession, 'hostId' | 'status'>>('sessions')
   const { createConfirmed: createChannel } = useMutations<Channel>('channels')
-  const [open, setOpen] = useState(Boolean(selectedCourt))
+  const [open, setOpen] = useState(Boolean(selectedCourt || prefillCourt))
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [hostRsvpError, setHostRsvpError] = useState<string | null>(null)
   const [title, setTitle] = useState('')
-  const [court, setCourt] = useState(selectedCourt?.name ?? '')
-  const [location, setLocation] = useState(selectedCourt?.area ?? '')
+  const [court, setCourt] = useState(selectedCourt?.name ?? prefillCourt ?? '')
+  const [location, setLocation] = useState(selectedCourt?.area ?? prefillArea ?? '')
   const [startsAt, setStartsAt] = useState('')
   const [durationMinutes, setDurationMinutes] = useState(90)
   const [targetPlayers, setTargetPlayers] = useState(4)
@@ -314,12 +314,16 @@ export default function RalliesPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const activeId = searchParams.get('session')
   const selectedCourt = findCourt(searchParams.get('court'))
+  const prefillCourtName = searchParams.get('courtName') ?? undefined
+  const prefillCourtArea = searchParams.get('courtArea') ?? undefined
   function chooseSession(id: string | null) {
     setSearchParams(current => {
       const next = new URLSearchParams(current)
       if (id) {
         next.set('session', id)
         next.delete('court')
+        next.delete('courtName')
+        next.delete('courtArea')
       }
       else next.delete('session')
       return next
@@ -340,7 +344,7 @@ export default function RalliesPage() {
           <h1 className="text-4xl font-black leading-[1.05] tracking-[-0.045em] sm:text-5xl lg:text-6xl">Better tennis starts <span className="text-[#d7fc83]">together.</span></h1>
           <p className="mt-4 max-w-2xl text-base leading-relaxed text-white/55">One place to plan a hit, find your people and show up ready. No group-chat chaos.</p>
         </div>
-        <CreateSession userId={signedInId} onCreated={chooseSession} selectedCourt={selectedCourt}/>
+        <CreateSession userId={signedInId} onCreated={chooseSession} selectedCourt={selectedCourt} prefillCourt={prefillCourtName} prefillArea={prefillCourtArea}/>
       </div>
       <div className="mb-8 grid gap-3 sm:grid-cols-3">
         <div className="rounded-2xl border border-white/10 bg-[#15201a] px-5 py-4"><p className="mb-1 text-xs font-medium text-white/50">Upcoming sessions</p><strong className="text-3xl font-black text-[#d7fc83]">{totalUpcoming}</strong></div>
