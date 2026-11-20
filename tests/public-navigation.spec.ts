@@ -27,13 +27,14 @@ test.describe('signed-out navigation on mobile', () => {
 
   test('exposes the mobile menu expansion state to assistive technology', async ({ page }) => {
     await page.goto('/home')
+    await expect(page).toHaveURL(url => url.pathname === '/rallies')
+    await expect(page.getByRole('heading', { name: 'Sign in to continue' })).toBeVisible()
     const menu = page.getByRole('button', { name: 'Toggle menu' })
     await expect(menu).toHaveAttribute('aria-expanded', 'false')
-    await menu.focus()
-    await page.keyboard.press('Space')
+    await menu.press('Space')
     await expect(menu).toHaveAttribute('aria-expanded', 'true')
     await expect(menu).toBeFocused()
-    await page.keyboard.press('Space')
+    await menu.press('Space')
     await expect(menu).toHaveAttribute('aria-expanded', 'false')
   })
 })
