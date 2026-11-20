@@ -1,5 +1,17 @@
 import type { CollectionSchema } from 'deepspace/schema'
 
+const sessionMemberWritableFields = [
+  'title',
+  'court',
+  'location',
+  'startsAt',
+  'durationMinutes',
+  'targetPlayers',
+  'level',
+  'notes',
+  'chatChannelId',
+]
+
 // A session is a public invitation to signed-in members, not a commercial court booking.
 export const sessionsSchema: CollectionSchema = {
   name: 'sessions',
@@ -19,8 +31,8 @@ export const sessionsSchema: CollectionSchema = {
   ownerField: 'hostId',
   permissions: {
     '*': { read: false, create: false, update: false, delete: false },
-    member: { read: true, create: true, update: 'own', delete: false },
-    admin: { read: true, create: true, update: true, delete: true },
+    member: { read: true, create: true, update: 'own', delete: false, writableFields: sessionMemberWritableFields },
+    admin: { read: true, create: true, update: true, delete: true, writableFields: sessionMemberWritableFields },
   },
 }
 
@@ -37,7 +49,7 @@ export const rsvpsSchema: CollectionSchema = {
   ownerField: 'userId',
   permissions: {
     '*': { read: false, create: false, update: false, delete: false },
-    member: { read: true, create: true, update: 'own', delete: 'own' },
-    admin: { read: true, create: true, update: true, delete: true },
+    member: { read: true, create: false, update: false, delete: 'own' },
+    admin: { read: true, create: false, update: false, delete: true },
   },
 }
