@@ -35,6 +35,18 @@ export function validateSession(input: Omit<RallySession, 'hostId' | 'chatChanne
   return null
 }
 
+/** Index record envelopes without losing the record IDs used for withdrawal. */
+export function groupSessionRsvps<T extends { data: RallyRSVP }>(records: readonly T[]): Map<string, T[]> {
+  const bySession = new Map<string, T[]>()
+  for (const record of records) {
+    const sessionId = record.data.sessionId
+    const group = bySession.get(sessionId)
+    if (group) group.push(record)
+    else bySession.set(sessionId, [record])
+  }
+  return bySession
+}
+
 export function summarizeAttendance(rsvps: RallyRSVP[], sessionId: string) {
   const people = rsvps.filter(r => r.sessionId === sessionId)
   return {

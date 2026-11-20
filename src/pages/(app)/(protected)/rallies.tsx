@@ -3,7 +3,7 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth, useMessages, useMutations, usePresenceRoom, useQuery, useUserLookup, type Channel, type Message } from 'deepspace'
 import { CalendarDays, Check, ChevronRight, Clock3, Copy, MapPin, MessageCircle, Plus, Radio, Send, Share2, ShieldCheck, Sparkles, Users, X } from 'lucide-react'
-import { buildSessionUrl, formatSessionTime, summarizeAttendance, summarizeReadiness, validateSession, type Level, type RallyRSVP, type RallySession, type RSVPStatus } from '@/lib/rally'
+import { buildSessionUrl, formatSessionTime, groupSessionRsvps, summarizeAttendance, summarizeReadiness, validateSession, type Level, type RallyRSVP, type RallySession, type RSVPStatus } from '@/lib/rally'
 import { runRallyCommand } from '@/lib/rally-actions'
 import LiveCourtboard from '@/components/LiveCourtboard'
 
@@ -226,11 +226,11 @@ function ChatPanel({ channelId, sessionId, userId }: { channelId: string; sessio
   )
 }
 
-function SessionDetail({ session, sessionId, userId, allRsvps, rsvpStatus, rsvpError }: {
+function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, rsvpError }: {
   session: RallySession
   sessionId: string
   userId: string
-  allRsvps: {recordId: string; data: RallyRSVP}[]
+  sessionRsvps: {recordId: string; data: RallyRSVP}[]
   rsvpStatus: 'loading' | 'ready' | 'error'
   rsvpError?: string
 }) {
@@ -239,7 +239,7 @@ function SessionDetail({ session, sessionId, userId, allRsvps, rsvpStatus, rsvpE
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
-  const people = allRsvps.filter(r => r.data.sessionId === sessionId)
+  const people = sessionRsvps
   const myRSVP = people.find(r => r.data.userId === userId)
   const {going, maybe} = summarizeAttendance(people.map(r=>r.data), sessionId)
   const cancelled = session.status === 'cancelled'
@@ -337,12 +337,15 @@ export default function RalliesPage() {
   }
   const [view, setView] = useState<'upcoming'|'all'|'mine'>('upcoming')
   const now = Date.now()
-  const listings = useMemo(() => sessions.filter(s => view === 'all' || (view === 'mine' ? (s.data.hostId === userId || rsvps.some(r=>r.data.sessionId===s.recordId&&r.data.userId===userId)) : Date.parse(s.data.startsAt) > now && s.data.status==='open')), [sessions, view, rsvps, userId, now])
+  const rsvpsBySession = useMemo(() => groupSessionRsvps(rsvps), [rsvps])
+  const upcoming = sessions.filter(s => Date.parse(s.data.startsAt) > now && s.data.status === 'open')
+  const listings = view === 'upcoming' ? upcoming : view === 'all' ? sessions : sessions.filter(s =>
+    s.data.hostId === userId || rsvpsBySession.get(s.recordId)?.some(rsvp => rsvp.data.userId === userId),
+  )
   const selected = activeId ? sessions.find(s => s.recordId === activeId) : listings[0]
   const signedInId = userId ?? ''
-  const totalUpcoming = sessions.filter(s=>Date.parse(s.data.startsAt)>now&&s.data.status==='open').length
 
-  return <main className="min-h-[calc(100vh-64px)] bg-[#0b110f] text-white">
+  return <div className="min-h-[calc(100vh-64px)] bg-[#0b110f] text-white">
     <div className="mx-auto max-w-7xl px-5 pb-20 pt-10 sm:px-8 lg:pt-16">
       <div className="mb-10 flex flex-col justify-between gap-6 lg:flex-row lg:items-end">
         <div className="max-w-3xl">
@@ -353,7 +356,7 @@ export default function RalliesPage() {
         <CreateSession userId={signedInId} onCreated={chooseSession} selectedCourt={selectedCourt}/>
       </div>
       <div className="mb-8 grid gap-3 sm:grid-cols-3">
-        <div className="rounded-2xl border border-white/10 bg-[#15201a] px-5 py-4"><p className="mb-1 text-xs font-medium text-white/50">Upcoming sessions</p><strong className="text-3xl font-black text-[#d7fc83]">{totalUpcoming}</strong></div>
+        <div className="rounded-2xl border border-white/10 bg-[#15201a] px-5 py-4"><p className="mb-1 text-xs font-medium text-white/50">Upcoming sessions</p><strong className="text-3xl font-black text-[#d7fc83]">{upcoming.length}</strong></div>
         <div className="rounded-2xl border border-white/10 bg-[#15201a] px-5 py-4"><p className="mb-1 text-xs font-medium text-white/50">Community RSVPs</p><strong className="text-3xl font-black">{rsvps.filter(r=>r.data.status==='going').length}</strong></div>
         <div className="rounded-2xl border border-white/10 bg-[#15201a] px-5 py-4"><p className="mb-1 text-xs font-medium text-white/50">Built for real players</p><p className="mt-2 flex items-center gap-2 text-sm font-semibold text-white/80"><ShieldCheck size={17} className="text-[#d7fc83]"/>Real-time. No refresh.</p></div>
       </div>
@@ -361,21 +364,21 @@ export default function RalliesPage() {
         <section aria-labelledby="sessions-heading" className={`${surface} p-5 sm:p-6 ${activeId ? "order-2 lg:order-first" : ""}`}>
           <div className="mb-5 flex items-center justify-between gap-2"><h2 id="sessions-heading" className="text-lg font-bold">Find a rally</h2><span className="text-xs text-white/40">Choose a session</span></div>
           <div className="mb-5 flex gap-2">{(['upcoming','all','mine'] as const).map(tab=><button key={tab} type="button" onClick={()=>{setView(tab);chooseSession(null)}} className={`rounded-full px-3.5 py-2 text-xs font-bold capitalize transition ${view===tab?'bg-[#d7fc83] text-[#0e180f]':'bg-white/5 text-white/55 hover:bg-white/10'}`}>{tab === 'mine' ? 'My sessions' : tab}</button>)}</div>
-          {sessionStatus==='loading'||rsvpStatus==='loading'?<div role="status" aria-busy="true" className="space-y-3">{[1,2,3].map(n=><div key={n} className="h-32 animate-pulse rounded-2xl bg-white/5"/>)}</div>:sessionStatus==='error'||rsvpStatus==='error'?<ErrorMessage message={sessionStatus==='error'?(sessionsError??'Sessions could not load.'): (rsvpError??'Player confirmations could not load. Refresh to try again.')}/>:listings.length===0?<div className="rounded-2xl border border-dashed border-white/20 p-10 text-center"><Sparkles size={28} className="mx-auto mb-3 text-[#d7fc83]"/><p className="text-sm font-bold">No sessions here yet</p><p className="mt-2 text-xs leading-relaxed text-white/50">Create a session and invite your hitting partners to join.</p></div>:<div className="space-y-3">{listings.map(s=>{
-            const counts=summarizeAttendance(rsvps.map(r=>r.data),s.recordId)
+          {sessionStatus==='loading'||rsvpStatus==='loading'?<div role="status" className="space-y-3"><span className="sr-only">Loading sessions and responses…</span>{[1,2,3].map(n=><div key={n} className="h-32 motion-safe:animate-pulse rounded-2xl bg-white/5"/>)}</div>:sessionStatus==='error'||rsvpStatus==='error'?<ErrorMessage message={sessionStatus==='error'?(sessionsError??'Sessions could not load.'): (rsvpError??'Player confirmations could not load. Refresh to try again.')}/>:listings.length===0?<div className="rounded-2xl border border-dashed border-white/20 p-10 text-center"><Sparkles size={28} className="mx-auto mb-3 text-[#d7fc83]"/><p className="text-sm font-bold">No sessions here yet</p><p className="mt-2 text-xs leading-relaxed text-white/50">Create a session and invite your hitting partners to join.</p></div>:<div className="space-y-3">{listings.map(s=>{
+            const going = rsvpsBySession.get(s.recordId)?.filter(rsvp => rsvp.data.status === 'going').length ?? 0
             const chosen=selected?.recordId===s.recordId
             return <button type="button" key={s.recordId} onClick={()=>chooseSession(s.recordId)} aria-pressed={chosen} className={`w-full rounded-2xl border p-4 text-left transition ${chosen?'border-[#d7fc83]/70 bg-[#d7fc83]/10':'border-white/10 bg-white/3 hover:border-white/25 hover:bg-white/7'}`}>
               <div className="mb-3 flex items-center justify-between"><span className="rounded-lg bg-white/10 px-2.5 py-1 text-[11px] font-bold text-white/85">{s.data.level}</span><ChevronRight size={17} className={chosen?'text-[#d7fc83]':'text-white/30'}/></div>
               <h3 className="text-lg font-extrabold tracking-tight text-white">{s.data.title}</h3>
               <p className="mt-2 flex items-center gap-2 text-xs text-white/60"><CalendarDays size={13}/>{formatSessionTime(s.data.startsAt)}</p>
               <p className="mt-2 flex items-center gap-2 text-xs text-white/60"><MapPin size={13}/>{s.data.court}, {s.data.location}</p>
-              <div className="mt-4 flex items-center justify-between border-t border-white/10 pt-3"><span className="flex items-center gap-1.5 text-xs font-semibold text-white/75"><Users size={14} className="text-[#d7fc83]"/>{counts.going} going / target {s.data.targetPlayers}</span><span className={`text-[11px] font-bold ${s.data.status==='cancelled'?'text-rose-300':'text-[#d7fc83]'}`}>{s.data.status==='cancelled'?'Cancelled':counts.going>=s.data.targetPlayers?'Target reached':'Open to join'}</span></div>
+              <div className="mt-4 flex items-center justify-between border-t border-white/10 pt-3"><span className="flex items-center gap-1.5 text-xs font-semibold text-white/75"><Users size={14} className="text-[#d7fc83]"/>{going} going / target {s.data.targetPlayers}</span><span className={`text-[11px] font-bold ${s.data.status==='cancelled'?'text-rose-300':'text-[#d7fc83]'}`}>{s.data.status==='cancelled'?'Cancelled':going>=s.data.targetPlayers?'Target reached':'Open to join'}</span></div>
             </button>
           })}</div>}
         </section>
-        {activeId && !selected && sessionStatus === "ready" ? <section className={`${surface} p-6`}><h2 className="text-xl font-bold">Session unavailable</h2><p className="mt-2 text-sm text-white/65">Check the shared link or choose another session.</p></section> : selected ? <SessionDetail key={selected.recordId} sessionId={selected.recordId} session={selected.data} userId={signedInId} allRsvps={rsvps} rsvpStatus={rsvpStatus} rsvpError={rsvpError}/>:<section className={`${surface} flex min-h-96 flex-col items-center justify-center p-10 text-center`}><div className="mb-5 grid h-20 w-20 place-items-center rounded-full border border-[#d7fc83]/35 bg-[#d7fc83]/10"><Users size={35} className="text-[#d7fc83]"/></div><h2 className="text-2xl font-black">The next match starts here.</h2><p className="mt-3 max-w-sm text-sm leading-relaxed text-white/50">Select an upcoming session or create your own. Every RSVP syncs to the group automatically.</p></section>}
+        {activeId && !selected && sessionStatus === "ready" ? <section className={`${surface} p-6`}><h2 className="text-xl font-bold">Session unavailable</h2><p className="mt-2 text-sm text-white/65">Check the shared link or choose another session.</p></section> : selected ? <SessionDetail key={selected.recordId} sessionId={selected.recordId} session={selected.data} userId={signedInId} sessionRsvps={rsvpsBySession.get(selected.recordId) ?? []} rsvpStatus={rsvpStatus} rsvpError={rsvpError}/>:<section className={`${surface} flex min-h-96 flex-col items-center justify-center p-10 text-center`}><div className="mb-5 grid h-20 w-20 place-items-center rounded-full border border-[#d7fc83]/35 bg-[#d7fc83]/10"><Users size={35} className="text-[#d7fc83]"/></div><h2 className="text-2xl font-black">The next match starts here.</h2><p className="mt-3 max-w-sm text-sm leading-relaxed text-white/50">Select an upcoming session or create your own. Every RSVP syncs to the group automatically.</p></section>}
       </div>
       <footer className="mt-12 flex flex-col justify-between gap-3 border-t border-white/10 pt-5 text-xs text-white/40 sm:flex-row"><span>RallyCircle / Made for hitting partners, not bookings</span><span className="flex items-center gap-2"><Radio size={13}/> Powered by DeepSpace auth, records, messaging and presence</span></footer>
     </div>
-  </main>
+  </div>
 }
