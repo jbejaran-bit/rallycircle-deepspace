@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { validateSession, summarizeAttendance, formatSessionTime, buildSessionUrl } from '../src/lib/rally.ts'
+import { validateSession, summarizeAttendance, summarizeReadiness, formatSessionTime, buildSessionUrl } from '../src/lib/rally.ts'
 
 const future = new Date(Date.now() + 86400000).toISOString()
 const base = {title:'Saturday doubles',court:'Schenley Park',location:'Pittsburgh, PA',startsAt:future,durationMinutes:90,targetPlayers:4,level:'Intermediate',notes:'Bring balls'}
@@ -15,6 +15,32 @@ test('attendance counts exclude another session',()=>assert.deepEqual(summarizeA
   {sessionId:'a',userId:'1',status:'going'}, {sessionId:'a',userId:'2',status:'maybe'},
   {sessionId:'a',userId:'3',status:'going'}, {sessionId:'b',userId:'4',status:'going'}
 ], 'a'), {going:2,maybe:1}))
+test('readiness identifies the final player needed for doubles', () => {
+  assert.deepEqual(summarizeReadiness(3, 4), {
+    confirmedPlayers: 3,
+    targetPlayers: 4,
+    remainingToTarget: 1,
+    remainingForDoubles: 1,
+    status: 'One more player needed',
+    detail: '',
+  })
+})
+test('readiness marks four confirmed players as ready', () => {
+  assert.equal(summarizeReadiness(4, 4).status, 'Doubles ready!')
+})
+test('readiness separates doubles from a larger session target', () => {
+  assert.deepEqual(summarizeReadiness(3, 6), {
+    confirmedPlayers: 3,
+    targetPlayers: 6,
+    remainingToTarget: 3,
+    remainingForDoubles: 1,
+    status: '3 more players needed',
+    detail: 'One more player to make doubles.',
+  })
+})
+test('readiness remains meaningful when target is already reached below doubles size', () => {
+  assert.equal(summarizeReadiness(2, 2).status, '2 more players needed for doubles')
+})
 test('invalid date shows safe fallback',()=>assert.equal(formatSessionTime('invalid'), 'Time unavailable'))
 
 test('share link preserves opaque IDs', () => {

@@ -4,7 +4,7 @@
  */
 import { test, expect } from 'deepspace/testing'
 
-test('shared link, mobile RSVP, presence and messaging work across two accounts', async ({ users, page }) => {
+test('shared link and live readiness update across two accounts', async ({ users, page }) => {
   test.setTimeout(120_000)
   const [alice, bob] = await users(2)
   const title = `__test-${Date.now()}__ doubles`
@@ -20,6 +20,7 @@ test('shared link, mobile RSVP, presence and messaging work across two accounts'
     await alice.page.getByPlaceholder('Sunday doubles & rallies').fill(title)
     await alice.page.getByPlaceholder('Schenley Park').fill('Test court')
     await alice.page.getByPlaceholder('Pittsburgh, PA').fill('Test location')
+    await alice.page.getByLabel('Target players').selectOption('3')
     // datetime-local expects wall-clock time, not UTC, so avoid toISOString().
     const d = new Date(Date.now() + 5 * 86400_000)
     const pad = (n: number) => String(n).padStart(2, '0')
@@ -37,23 +38,34 @@ test('shared link, mobile RSVP, presence and messaging work across two accounts'
     await bob.page.goto(invitation)
     await expect(bob.page.getByRole('heading', { name: title }).last()).toBeVisible({ timeout: 30_000 })
     expect(await bob.page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+    await expect(alice.page.getByTestId('readiness-count')).toHaveText('1 / 3 confirmed')
+    await expect(bob.page.getByTestId('readiness-count')).toHaveText('1 / 3 confirmed')
     await bob.page.getByRole('button', { name: /I.m in/i }).click()
     await expect(bob.page.getByRole('button', { name: /Going/ })).toBeVisible()
     await expect(bob.page.getByRole('button', { name: 'Cancel my session' })).toHaveCount(0)
-    await expect(alice.page.getByText(/2 confirmed/)).toBeVisible({ timeout: 30_000 })
+    await expect(alice.page.getByTestId('readiness-count')).toHaveText('2 / 3 confirmed', { timeout: 30_000 })
+    await expect(alice.page.getByTestId('readiness-status')).toHaveText('One more player needed')
+    await expect(bob.page.getByTestId('readiness-count')).toHaveText('2 / 3 confirmed', { timeout: 30_000 })
+    await expect(bob.page.getByTestId('readiness-status')).toHaveText('One more player needed')
+    await alice.page.getByTestId('readiness-panel').screenshot({ path: 'test-results/ready-to-play-desktop.png' })
+    await bob.page.getByTestId('readiness-panel').screenshot({ path: 'test-results/ready-to-play-mobile.png' })
     await expect(alice.page.getByRole('heading', { name: 'Session chat' })).toBeVisible({ timeout: 30_000 })
     await expect(alice.page.getByText('2 here now')).toBeVisible({ timeout: 30_000 })
     await alice.page.getByRole('textbox', { name: 'Your message' }).fill('Bring extra balls')
     await alice.page.getByRole('button', { name: 'Send message' }).click()
     await expect(bob.page.getByText('Bring extra balls')).toBeVisible({ timeout: 30_000 })
     await bob.page.getByRole('button', { name: 'Withdraw' }).click()
-    await expect(alice.page.getByText(/1 confirmed/)).toBeVisible()
+    await expect(alice.page.getByTestId('readiness-count')).toHaveText('1 / 3 confirmed', { timeout: 30_000 })
+    await expect(alice.page.getByTestId('readiness-status')).toHaveText('2 more players needed')
+    await expect(bob.page.getByTestId('readiness-count')).toHaveText('1 / 3 confirmed', { timeout: 30_000 })
   } finally {
     // Cancel rather than pretending the user can erase other players' records.
     if (created) {
       alice.page.once('dialog', dialog => void dialog.accept())
       await alice.page.getByRole('button', { name: 'Cancel my session' }).click()
       await expect(alice.page.getByText('This session was cancelled')).toBeVisible()
+      await expect(alice.page.getByText('This session is cancelled; player responses are closed.')).toBeVisible()
+      await expect(alice.page.getByRole('button', { name: /I.m in/i })).toHaveCount(0)
     }
   }
 })

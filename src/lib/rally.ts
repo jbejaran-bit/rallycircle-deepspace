@@ -43,6 +43,42 @@ export function summarizeAttendance(rsvps: RallyRSVP[], sessionId: string) {
   }
 }
 
+export function summarizeReadiness(confirmed: number, target: number) {
+  const confirmedPlayers = Number.isFinite(confirmed) ? Math.max(0, Math.floor(confirmed)) : 0
+  const targetPlayers = Number.isFinite(target) ? Math.max(0, Math.floor(target)) : 0
+  const remainingToTarget = Math.max(0, targetPlayers - confirmedPlayers)
+  const remainingForDoubles = Math.max(0, 4 - confirmedPlayers)
+
+  let status: string
+  if (remainingForDoubles === 0) {
+    status = 'Doubles ready!'
+  } else if (remainingToTarget === 1) {
+    status = 'One more player needed'
+  } else if (remainingToTarget > 1) {
+    status = `${remainingToTarget} more players needed`
+  } else {
+    status = `${remainingForDoubles} more ${remainingForDoubles === 1 ? 'player' : 'players'} needed for doubles`
+  }
+
+  let detail = ''
+  if (remainingForDoubles > 0 && remainingToTarget > 0 && remainingToTarget !== remainingForDoubles) {
+    detail = `${remainingForDoubles === 1 ? 'One more player' : `${remainingForDoubles} more players`} to make doubles.`
+  } else if (remainingForDoubles === 0 && remainingToTarget > 0) {
+    detail = `${remainingToTarget} more ${remainingToTarget === 1 ? 'player' : 'players'} to reach your target.`
+  } else if (remainingForDoubles === 0) {
+    detail = 'Your target is reached. Extra players can still join.'
+  }
+
+  return {
+    confirmedPlayers,
+    targetPlayers,
+    remainingToTarget,
+    remainingForDoubles,
+    status,
+    detail,
+  }
+}
+
 export function formatSessionTime(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return 'Time unavailable'
