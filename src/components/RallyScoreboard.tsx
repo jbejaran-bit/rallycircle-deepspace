@@ -18,6 +18,7 @@ const resultLabels = {
   confirmed: 'Partially confirmed result',
   disputed: 'Disputed result',
   final: 'Final result',
+  corrected: 'Corrected result',
 }
 
 const sides = [0, 1] as const

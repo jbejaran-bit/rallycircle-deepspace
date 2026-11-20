@@ -1,7 +1,8 @@
 import type { ActionHandler, ActionResult, GetActionData, MutateActionData, QueryActionData } from 'deepspace/worker'
 import { validCapacity, type RallyRSVP, type RallySession, type RallyWaitlist, type RSVPStatus } from '../lib/rally.js'
-import { awardPoint, createMatchScore, readMatchScore, reviewResult, scoreEditSchema } from '../lib/rally-score.js'
+import { awardPoint, correctResult, createMatchScore, isFinalTransition, readMatchScore, resultStatus, reviewResult, scoreEditSchema, validateCorrectedSets } from '../lib/rally-score.js'
 import type { z } from 'zod'
+import { applyFinalization, reverseFinalization, writeAudit } from './result-finalization.js'
 import { fetchGeocodedPlaces, GEOCODER_MIN_GAP_MS } from './court-discovery.js'
 import type { Env } from '../../worker.js'
 
@@ -65,7 +66,7 @@ async function applyCommand(command: RallyCommand, tool: RecordTool): Promise<Ra
       : failure('The session could not be cancelled.')
   }
 
-  if (command.operation === 'startMatch' || command.operation === 'scorePoint' || command.operation === 'reviewResult') {
+  if (command.operation === 'startMatch' || command.operation === 'scorePoint' || command.operation === 'reviewResult' || command.operation === 'correctResult') {
     return applyScoreEdit(command, session, tool)
   }
 
@@ -197,6 +198,27 @@ async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: R
   } else if (command.operation === 'reviewResult') {
     next = current && reviewResult(current, command.userId, command.decision)
     if (!next) return failure('This result is closed or unavailable for your review.')
+    if (current && isFinalTransition(current, next)) {
+      // Stats/history/audit are written BEFORE the session is saved, so a
+      // failure here leaves the result un-finalized and the client can
+      // retry; applyFinalization is idempotent for the same revision.
+      const finalized = await applyFinalization(tool, session, command.sessionId, next, command.userId)
+      if (!finalized.ok) return failure('The result could not be finalized. Try again.')
+    }
+  } else if (command.operation === 'correctResult') {
+    if (!current) return failure('There is no result to correct.')
+    const previousStatus = resultStatus(current)
+    if (previousStatus !== 'final' && previousStatus !== 'disputed') {
+      return failure('Only a finalized or disputed result can be corrected.')
+    }
+    const invalid = validateCorrectedSets(command.sets, command.winner)
+    if (invalid) return failure(invalid)
+    next = correctResult(current, command.sets, command.winner)
+    if (!next) return failure('This result cannot be corrected.')
+    if (previousStatus === 'final') {
+      const reversed = await reverseFinalization(tool, command.sessionId, command.userId)
+      if (!reversed) return failure('The previous result could not be reversed. Try again.')
+    }
   } else {
     if (!current || current.winner !== null) return failure('There is no active scoreboard.')
     if (current.revision !== command.revision) return failure('The score changed. Check the latest score before trying again.')
@@ -208,9 +230,25 @@ async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: R
     recordId: command.sessionId,
     data: { matchScore: JSON.stringify(next) },
   }, command.userId)
-  return result.success
-    ? { success: true, data: { recordId: command.sessionId } }
-    : failure('The score could not be saved.')
+  if (!result.success) return failure('The score could not be saved.')
+  if (command.operation === 'reviewResult' && next && current && next.disputed && !current.disputed) {
+    await writeAudit(tool, command.sessionId, command.userId, 'disputed', {
+      sets: next.sets,
+      winner: next.winner,
+      revision: next.revision,
+    }, next.revision)
+  }
+  if (command.operation === 'correctResult' && next && current) {
+    await writeAudit(tool, command.sessionId, command.userId, 'corrected', {
+      previousSets: current.sets,
+      previousWinner: current.winner,
+      previousRevision: current.revision,
+      sets: next.sets,
+      winner: next.winner,
+      revision: next.revision,
+    }, next.revision)
+  }
+  return { success: true, data: { recordId: command.sessionId } }
 }
 
 export class RallyCommandRoom {
@@ -309,6 +347,8 @@ export const rallyCommandAction: ActionHandler<Env> = async ({ userId, params, t
     side: params.side,
     revision: params.revision,
     decision: params.decision,
+    sets: params.sets,
+    winner: params.winner,
     userId,
   })
   if (!command) return failure('Invalid rally command.')
