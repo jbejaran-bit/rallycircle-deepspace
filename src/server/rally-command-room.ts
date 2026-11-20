@@ -97,6 +97,11 @@ async function applyAttendance(command: AttendanceCommand, session: RallySession
 
   // Persist the RSVP before deleting the queue entry. The next command can
   // repair that intermediate state without consuming a second place.
+  // A single retry of the queue delete happens inside this same command, so
+  // one transient storage failure does not block the caller's own command
+  // and does not leave a stale row behind. If the retry also fails, the
+  // command returns null and the next attendance command repairs the row
+  // (fillVacancies skips a waitlisted user who already holds a going RSVP).
   async function fillVacancies(): Promise<number | null> {
     if (capacity == null || session.status !== 'open') return 0
     for (let attempt = 0; attempt < 32; attempt++) {
@@ -115,7 +120,9 @@ async function applyAttendance(command: AttendanceCommand, session: RallySession
         if (count >= capacity) return count
         if (!(await save(player, 'going', rsvp?.recordId)).success) return null
       }
-      if (!(await remove('waitlists', first.recordId)).success) return null
+      const deleted = (await remove('waitlists', first.recordId)).success ||
+        (await remove('waitlists', first.recordId)).success
+      if (!deleted) return null
     }
     return null
   }
