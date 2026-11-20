@@ -15,18 +15,14 @@
  * no known coordinates simply has no distance; it is never geocoded, and
  * no coordinates are fabricated for it.
  *
- * Capacity: the 8fd8c2c base has no capacity mode — `targetPlayers` is a
- * planning goal, not a cap. So there is no invented "full" state here:
- * a session is "target reached" when going >= target, and it stays joinable.
- * If a capacity mode lands later, add a `capacity` field to the annotation
- * and a `full` status; the filter shape does not need to change.
+ * Capacity comes from the optional immutable session maximum, independently of the target.
  */
 
 import { haversineMiles, matchesArea, normalizePlaceName, type LatLng } from './geo.ts'
 import type { Level, RallyRSVP, RallySession } from './rally'
 
-export type GameFormat = 'any' | 'singles' | 'doubles'
-export type GameStatus = 'needs-players' | 'target-reached'
+export type GameFormat = 'any' | 'singles' | 'doubles' | 'practice'
+export type GameStatus = 'needs-players' | 'target-reached' | 'full'
 
 export interface GameFilters {
   /** Free-text area/court substring; empty means no area filter. */
@@ -69,7 +65,10 @@ export const DEFAULT_GAME_RADIUS_MILES = 10
 /** Tokens too generic to identify a court on their own. */
 const COURT_NAME_STOPWORDS = new Set(['tennis', 'court', 'courts'])
 
-function sessionFormat(session: RallySession): 'singles' | 'doubles' | 'other' {
+function sessionFormat(session: RallySession): Exclude<GameFormat, 'any'> | 'other' {
+  if (session.format === 'Singles') return 'singles'
+  if (session.format === 'Doubles') return 'doubles'
+  if (session.format === 'Practice') return 'practice'
   if (session.targetPlayers === 2) return 'singles'
   if (session.targetPlayers >= 4) return 'doubles'
   return 'other'
@@ -103,6 +102,13 @@ export function filterGames(
   const fromMs = filters.fromDate ? Date.parse(`${filters.fromDate}T00:00:00`) : undefined
   const toMs = filters.toDate ? Date.parse(`${filters.toDate}T23:59:59.999`) : undefined
 
+  const attendance = new Map<string, { going: number; maybe: number; isMine: boolean }>()
+  for (const rsvp of rsvps) {
+    const existing = attendance.get(rsvp.sessionId) ?? { going: 0, maybe: 0, isMine: false }
+    existing[rsvp.status]++
+    existing.isMine ||= rsvp.userId === options.userId
+    attendance.set(rsvp.sessionId, existing)
+  }
   const annotated: AnnotatedGame[] = []
   for (const { recordId, data: session } of sessions) {
     const startMs = Date.parse(session.startsAt)
@@ -116,8 +122,7 @@ export function filterGames(
     if (fromMs !== undefined && Number.isFinite(fromMs) && Number.isFinite(startMs) && startMs < fromMs) continue
     if (toMs !== undefined && Number.isFinite(toMs) && Number.isFinite(startMs) && startMs > toMs) continue
 
-    const going = rsvps.filter(r => r.sessionId === recordId && r.status === 'going').length
-    const maybe = rsvps.filter(r => r.sessionId === recordId && r.status === 'maybe').length
+    const { going, maybe, isMine } = attendance.get(recordId) ?? { going: 0, maybe: 0, isMine: false }
 
     // Distance only when the session's court matches a court with known
     // coordinates. Matching is by normalised name — whole-name substring
@@ -152,14 +157,14 @@ export function filterGames(
       session,
       going,
       maybe,
-      status: going >= session.targetPlayers ? 'target-reached' : 'needs-players',
+      status: session.capacity != null && going >= session.capacity ? 'full' : going >= session.targetPlayers ? 'target-reached' : 'needs-players',
       cancelled,
       past,
       distanceMiles,
       isMine:
         options.userId !== undefined &&
         (session.hostId === options.userId ||
-          rsvps.some(r => r.sessionId === recordId && r.userId === options.userId)),
+          isMine),
     })
   }
 
@@ -178,5 +183,6 @@ export function filterGames(
 export function gameStatusLabel(game: AnnotatedGame): string {
   if (game.cancelled) return 'Cancelled'
   if (game.past) return 'Past session'
+  if (game.status === 'full') return 'Full · waitlist available'
   return game.status === 'target-reached' ? 'Target reached' : 'Needs players'
 }

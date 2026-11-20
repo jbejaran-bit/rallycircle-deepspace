@@ -80,8 +80,8 @@ function isGeocodeResponse(value: unknown): value is GeocodeResponse {
 
 export async function fetchNearbyCourts(center: LatLng, radiusKm: number): Promise<NearbyCourtsResponse> {
   const params = new URLSearchParams({
-    lat: String(center.lat),
-    lng: String(center.lng),
+    lat: center.lat.toFixed(3),
+    lng: center.lng.toFixed(3),
     radiusKm: String(radiusKm),
   })
   return authedJson(`/api/courts/nearby?${params}`, isNearbyResponse)

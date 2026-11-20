@@ -101,7 +101,7 @@ function NearbyCourts() {
   const [found, setFound] = useState<DiscoveredCourt[]>([])
   const [selected, setSelected] = useState<DiscoveredCourt | null>(null)
   const [status, setStatus] = useState<'idle' | 'locating' | 'searching' | 'ready' | 'error'>('idle')
-  const [message, setMessage] = useState('Use your location, or search for a place — courts are found through OpenStreetMap, not a booking service.')
+  const [message, setMessage] = useState('Search by place or share an approximate location with OpenStreetMap services to find mapped courts.')
   const [searchCount, setSearchCount] = useState(0)
 
   const searchNearby = useCallback(async (center: LatLng, radius: number) => {

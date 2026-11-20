@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test'
 test.describe('signed-out navigation on mobile', () => {
   test.use({ viewport: { width: 390, height: 844 } })
 
-  for (const path of ['/rallies?session=invite%2Fid%26detail', '/courts', '/settings', '/api-status']) {
+  for (const path of ['/rallies?session=invite%2Fid%26detail', '/courts', '/games', '/settings', '/api-status']) {
     test(`keeps ${path} behind the sign-in gate`, async ({ page }) => {
       await page.goto(path)
       await expect(page).toHaveURL(url => url.pathname + url.search === path)

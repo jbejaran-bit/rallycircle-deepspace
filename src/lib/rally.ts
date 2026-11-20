@@ -21,6 +21,11 @@ export interface RallySession {
   status: 'open' | 'cancelled'
 }
 
+export interface RallyWaitlist {
+  sessionId: string
+  userId: string
+}
+
 export interface RallyRSVP {
   sessionId: string
   userId: string

@@ -115,9 +115,10 @@ export default function GamesPage() {
             <label className="block text-xs font-medium text-white/75">
               Format
               <select value={format} onChange={e => setFormat(e.target.value as GameFormat)} className="mt-1.5 w-full rounded-xl border border-white/15 bg-[#0e1513] px-3.5 py-3 text-sm text-white outline-none">
-                <option value="any">Singles or doubles</option>
-                <option value="singles">Singles (2 players)</option>
-                <option value="doubles">Doubles (4+ players)</option>
+                <option value="any">Any format</option>
+                <option value="singles">Singles</option>
+                <option value="doubles">Doubles</option>
+                <option value="practice">Practice</option>
               </select>
             </label>
             <label className="block text-xs font-medium text-white/75">

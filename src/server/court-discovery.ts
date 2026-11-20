@@ -151,6 +151,15 @@ export function createGeocodePacer(minGapMs = GEOCODER_MIN_GAP_MS, now: () => nu
   }
 }
 
+export async function fetchGeocodedPlaces(query: string, fetchFn: typeof fetch = fetch) {
+  const response = await fetchFn(buildNominatimUrl(query), {
+    headers: { 'User-Agent': USER_AGENT, Referer: REFERER },
+    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+  })
+  if (!response.ok) throw upstreamError(response.status)
+  return parseNominatimResponse(await response.json())
+}
+
 export function registerCourtDiscoveryRoutes(
   app: Hono<AppContext>,
   resolveAuth: AuthResolver,
@@ -220,14 +229,19 @@ export function registerCourtDiscoveryRoutes(
     }
 
     try {
-      const places = await paceGeocode(async () => {
-        const res = await fetchFn(buildNominatimUrl(q), {
-          headers: { 'User-Agent': USER_AGENT, Referer: REFERER },
-          signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-        })
-        if (!res.ok) throw upstreamError(res.status)
-        return parseNominatimResponse((await res.json()) as unknown)
-      })
+      let places: ReturnType<typeof parseNominatimResponse>
+      if (deps.fetchFn) {
+        places = await paceGeocode(() => fetchGeocodedPlaces(q, fetchFn))
+      } else {
+        const namespace = c.env.RALLY_COMMAND_ROOMS
+        const room = namespace.get(namespace.idFromName('court-discovery:nominatim'))
+        const response = await room.fetch(new Request('https://internal/geocode', {
+          method: 'POST',
+          body: q,
+        }))
+        if (!response.ok) return response
+        places = await response.json()
+      }
       if (geocodeCache.size >= COURT_CACHE_MAX_ENTRIES) {
         const oldest = geocodeCache.keys().next().value
         if (oldest !== undefined) geocodeCache.delete(oldest)

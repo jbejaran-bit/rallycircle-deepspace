@@ -55,7 +55,22 @@ export const rsvpsSchema: CollectionSchema = {
   ownerField: 'userId',
   permissions: {
     '*': { read: false, create: false, update: false, delete: false },
-    member: { read: true, create: false, update: false, delete: 'own' },
+    member: { read: true, create: false, update: false, delete: false },
     admin: { read: true, create: false, update: false, delete: true },
+  },
+}
+
+export const waitlistsSchema: CollectionSchema = {
+  name: 'waitlists',
+  columns: [
+    { name: 'sessionId', storage: 'text', interpretation: 'plain', required: true, immutable: true },
+    { name: 'userId', storage: 'text', interpretation: 'plain', userBound: true, immutable: true },
+  ],
+  uniqueOn: ['sessionId', 'userId'],
+  ownerField: 'userId',
+  permissions: {
+    '*': { read: false, create: false, update: false, delete: false },
+    member: { read: 'own', create: false, update: false, delete: false },
+    admin: { read: true, create: false, update: false, delete: false },
   },
 }
