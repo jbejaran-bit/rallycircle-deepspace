@@ -327,7 +327,12 @@ function ConnectedCourtboard({
 
   function nudgeMarker(marker: RallyMarkerShape, dx: number, dy: number) {
     if (!canEdit) return
-    const preview = clampCourtboardPosition({ x: marker.x + dx, y: marker.y + dy })
+    // Base the nudge on the pending local preview when one exists: marker.x/y
+    // is the last server-confirmed position, so repeated nudges before the
+    // server round-trip would otherwise all target the same coordinates and
+    // collapse into a single step.
+    const base = movePreviews[marker.id] ?? { x: marker.x, y: marker.y }
+    const preview = clampCourtboardPosition({ x: base.x + dx, y: base.y + dy })
     if (!preview) return
     setSelectedId(marker.id)
     setMovePreviews((current) => ({

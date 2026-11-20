@@ -1,8 +1,8 @@
 import { canCreate, canDelete, canUpdate, checkFieldPermissions } from 'deepspace/worker'
 import type { ActionTools } from 'deepspace/worker'
 import { describe, expect, it } from 'vitest'
-import { rsvpsSchema, sessionsSchema } from '../schemas/rally-schema.js'
-import type { RallyRSVP, RallySession, RSVPStatus } from '../lib/rally.js'
+import { rsvpsSchema, sessionsSchema, waitlistsSchema } from '../schemas/rally-schema.js'
+import type { RallyRSVP, RallySession, RallyWaitlist, RSVPStatus } from '../lib/rally.js'
 import type { Env } from '../../worker.js'
 import { awardPoint, createMatchScore, readMatchScore, resultStatus } from '../lib/rally-score.js'
 import { rallyCommandAction, RallyCommandRoom } from './rally-command-room.js'
@@ -10,7 +10,9 @@ import { rallyCommandAction, RallyCommandRoom } from './rally-command-room.js'
 function createHarness() {
   const sessions = new Map<string, { recordId: string; createdBy: string; data: RallySession }>()
   const rsvps = new Map<string, { recordId: string; createdBy: string; data: RallyRSVP }>()
+  const waitlists = new Map<string, { recordId: string; data: RallyWaitlist }>()
   let nextRecordId = 0
+  let failNextQueueDelete = false
 
   const recordRoom = {
     async fetch(request: Request) {
@@ -33,6 +35,34 @@ function createHarness() {
           Object.entries(where).every(([key, value]) => record.data[key as keyof RallyRSVP] === value),
         )
         return Response.json({ success: true, data: { records, count: records.length } })
+      }
+
+      if (tool === 'records.query' && params.collection === 'waitlists') {
+        const where = params.where as Partial<RallyWaitlist>
+        const records = [...waitlists.values()].filter(record =>
+          Object.entries(where).every(([key, value]) => record.data[key as keyof RallyWaitlist] === value),
+        ).slice(0, Number(params.limit))
+        return Response.json({ success: true, data: { records, count: records.length } })
+      }
+
+      if (tool === 'records.create' && params.collection === 'waitlists') {
+        const { sessionId } = params.data as { sessionId: string }
+        const userId = request.headers.get('X-User-Id') ?? ''
+        const recordId = `waiting-${++nextRecordId}`
+        waitlists.set(recordId, { recordId, data: { sessionId, userId } })
+        return Response.json({ success: true, data: { recordId } })
+      }
+
+      if (tool === 'records.delete' && (params.collection === 'rsvps' || params.collection === 'waitlists')) {
+        if (params.collection === 'waitlists' && failNextQueueDelete) {
+          failNextQueueDelete = false
+          return Response.json({ success: false, error: 'Temporary delete failure' })
+        }
+        const collection = params.collection === 'rsvps' ? rsvps : waitlists
+        const recordId = String(params.recordId)
+        return Response.json(collection.delete(recordId)
+          ? { success: true, data: { recordId } }
+          : { success: false, error: 'Not found' })
       }
 
       if (tool === 'records.create' && params.collection === 'rsvps') {
@@ -123,7 +153,10 @@ function createHarness() {
     })
   }
 
-  return { addSession, command, rsvps, sessions }
+  return {
+    addSession, command, rsvps, sessions, waitlists,
+    interruptQueueCleanup: () => { failNextQueueDelete = true },
+  }
 }
 
 describe('RallyCircle server-side session and RSVP rules', () => {
@@ -334,7 +367,55 @@ describe('RallyCircle server-side session and RSVP rules', () => {
     expect([...harness.rsvps.values()].filter(record => record.data.status === 'going')).toHaveLength(2)
   })
 
-  it('keeps direct writes closed while preserving own-RSVP withdrawal', () => {
+  it('promotes in queue order, upgrades a tentative RSVP and stops on cancellation', async () => {
+    const harness = createHarness()
+    const sessionId = 'queue'
+    harness.addSession(sessionId, 'host')
+    harness.sessions.get(sessionId)!.data.capacity = 2
+    const act = (user: string, operation: string, status?: RSVPStatus) =>
+      harness.command(user, { sessionId, operation, status, userId: 'host' })
+    for (const player of ['host', 'guest']) {
+      expect((await act(player, 'rsvp', 'going')).success).toBe(true)
+    }
+    expect((await act('first', 'rsvp', 'maybe')).success).toBe(true)
+    expect((await act('first', 'joinWaitlist')).success).toBe(true)
+    expect((await act('first', 'joinWaitlist')).success).toBe(true)
+    expect((await act('second', 'joinWaitlist')).success).toBe(true)
+    expect(harness.waitlists.size).toBe(2)
+    expect((await act('host', 'rsvp', 'maybe')).success).toBe(true)
+    expect([...harness.rsvps.values()].filter(row => row.data.userId === 'first').map(row => row.data.status)).toEqual(['going'])
+    expect([...harness.waitlists.values()].map(row => row.data.userId)).toEqual(['second'])
+    expect((await act('host', 'cancel')).success).toBe(true)
+    expect((await act('guest', 'withdraw')).success).toBe(true)
+    expect([...harness.waitlists.values()].map(row => row.data.userId)).toEqual(['second'])
+    expect((await act('second', 'leaveWaitlist')).success).toBe(true)
+    expect(harness.waitlists.size).toBe(0)
+  })
+
+  it('repairs an interrupted promotion without duplicate spots or queue jumping', async () => {
+    const harness = createHarness()
+    const sessionId = 'recovery'
+    harness.addSession(sessionId, 'host')
+    harness.sessions.get(sessionId)!.data.capacity = 2
+    const act = (user: string, operation: string, status?: RSVPStatus) =>
+      harness.command(user, { sessionId, operation, status })
+    for (const player of ['host', 'guest']) {
+      expect((await act(player, 'rsvp', 'going')).success).toBe(true)
+    }
+    for (const player of ['first', 'second']) {
+      expect((await act(player, 'joinWaitlist')).success).toBe(true)
+    }
+    harness.interruptQueueCleanup()
+    expect((await act('guest', 'withdraw')).success).toBe(true)
+    expect(harness.waitlists.size).toBe(2)
+    expect((await act('outsider', 'rsvp', 'going')).success).toBe(false)
+    expect([...harness.waitlists.values()].map(row => row.data.userId)).toEqual(['second'])
+    expect((await act('first', 'withdraw')).success).toBe(true)
+    expect([...harness.rsvps.values()].map(row => row.data.userId).sort()).toEqual(['host', 'second'])
+    expect(harness.waitlists.size).toBe(0)
+  })
+
+  it('requires the serialized command path for RSVP withdrawal', () => {
     const rsvp = {
       data: { sessionId: 'session', userId: 'player', status: 'going' },
       createdBy: 'player',
@@ -343,7 +424,9 @@ describe('RallyCircle server-side session and RSVP rules', () => {
 
     expect(canCreate(rsvpsSchema, 'member')).toBe(false)
     expect(canUpdate(rsvpsSchema, 'member', rsvp, 'player')).toBe(false)
-    expect(canDelete(rsvpsSchema, 'member', rsvp, 'player')).toBe(true)
+    expect(canDelete(rsvpsSchema, 'member', rsvp, 'player')).toBe(false)
+    expect(canCreate(waitlistsSchema, 'member')).toBe(false)
+    expect(canDelete(rsvpsSchema, 'admin', rsvp, 'player')).toBe(false)
     expect(canDelete(rsvpsSchema, 'member', rsvp, 'other-player')).toBe(false)
     expect(canDelete(rsvpsSchema, 'anonymous', rsvp, 'player')).toBe(false)
     expect(checkFieldPermissions(sessionsSchema, 'member', { status: 'cancelled' })).toContain('status')

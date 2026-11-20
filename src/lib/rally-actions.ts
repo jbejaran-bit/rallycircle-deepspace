@@ -4,6 +4,7 @@ import type { RSVPStatus } from './rally'
 
 type RallyCommand =
   | { operation: 'rsvp'; sessionId: string; status: RSVPStatus }
+  | { operation: 'withdraw' | 'joinWaitlist' | 'leaveWaitlist'; sessionId: string }
   | { operation: 'cancel'; sessionId: string }
   | { operation: 'reviewResult'; sessionId: string; decision: 'approve' | 'dispute' }
   | { operation: 'startMatch'; sessionId: string; teams: MatchTeams }

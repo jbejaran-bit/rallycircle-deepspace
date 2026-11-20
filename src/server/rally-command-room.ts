@@ -1,7 +1,8 @@
 import type { ActionHandler, ActionResult, GetActionData, MutateActionData, QueryActionData } from 'deepspace/worker'
-import { validCapacity, type RallyRSVP, type RallySession, type RSVPStatus } from '../lib/rally.js'
+import { validCapacity, type RallyRSVP, type RallySession, type RallyWaitlist, type RSVPStatus } from '../lib/rally.js'
 import { awardPoint, createMatchScore, readMatchScore, reviewResult, scoreEditSchema } from '../lib/rally-score.js'
 import type { z } from 'zod'
+import { fetchGeocodedPlaces, GEOCODER_MIN_GAP_MS } from './court-discovery.js'
 import type { Env } from '../../worker.js'
 
 type ScoreEdit = z.infer<typeof scoreEditSchema> & { sessionId: string; userId: string }
@@ -9,6 +10,7 @@ type ScoreEdit = z.infer<typeof scoreEditSchema> & { sessionId: string; userId: 
 type RallyCommand =
   | ScoreEdit
   | { operation: 'rsvp'; sessionId: string; status: RSVPStatus; userId: string }
+  | { operation: 'withdraw' | 'joinWaitlist' | 'leaveWaitlist'; sessionId: string; userId: string }
   | { operation: 'cancel'; sessionId: string; userId: string }
 
 type RallyCommandResult = ActionResult<{ recordId: string }>
@@ -24,7 +26,8 @@ function parseCommand(value: unknown): RallyCommand | null {
     return null
   }
 
-  if (value.operation === 'cancel') {
+  if (value.operation === 'cancel' || value.operation === 'withdraw' ||
+      value.operation === 'joinWaitlist' || value.operation === 'leaveWaitlist') {
     return { operation: value.operation, sessionId: value.sessionId, userId: value.userId }
   }
   if (value.operation === 'rsvp' && (value.status === 'going' || value.status === 'maybe')) {
@@ -66,47 +69,105 @@ async function applyCommand(command: RallyCommand, tool: RecordTool): Promise<Ra
     return applyScoreEdit(command, session, tool)
   }
 
-  if (session.status !== 'open') return failure('This session is not open for responses.')
+  return applyAttendance(command, session, tool)
+}
 
-  const existingResult = await tool<QueryActionData<RallyRSVP>>(
-    'records.query',
-    {
-      collection: 'rsvps',
-      where: { sessionId: command.sessionId, userId: command.userId },
-      limit: 1,
-    },
-    command.userId,
-  )
-  if (!existingResult.success) return failure('Your existing RSVP could not be checked.')
+type AttendanceCommand = Extract<RallyCommand, { operation: 'rsvp' | 'withdraw' | 'joinWaitlist' | 'leaveWaitlist' }>
 
-  const existing = existingResult.data.records[0]
-  // All transitions that can increase occupancy go through this session's
-  // queue. A concurrent self-withdrawal can only decrease occupancy.
-  if (session.capacity != null && command.status === 'going' && existing?.data.status !== 'going') {
-    if (!validCapacity(session.capacity)) return failure('This session has an invalid capacity.')
-    const occupants = await tool<QueryActionData<RallyRSVP>>('records.query', {
-      collection: 'rsvps',
-      where: { sessionId: command.sessionId, status: 'going' },
-      limit: session.capacity,
-    }, command.userId)
-    if (!occupants.success) return failure('Available places could not be checked.')
-    if (occupants.data.records.length >= session.capacity) return failure('This session is full.')
+async function applyAttendance(command: AttendanceCommand, session: RallySession, tool: RecordTool): Promise<RallyCommandResult> {
+  const { sessionId, userId, operation } = command
+  if (session.status !== 'open' && operation !== 'leaveWaitlist' && operation !== 'withdraw') {
+    return failure('This session is not open for responses.')
   }
-  const result = existing
-    ? await tool<MutateActionData>(
-      'records.update',
-      { collection: 'rsvps', recordId: existing.recordId, data: { status: command.status } },
-      command.userId,
-    )
-    : await tool<MutateActionData>(
-      'records.create',
-      { collection: 'rsvps', data: { sessionId: command.sessionId, status: command.status } },
-      command.userId,
-    )
+  const owns = { sessionId, userId }
+  const capacity = session.capacity
+  if (capacity != null && !validCapacity(capacity)) return failure('This session has an invalid capacity.')
 
-  return result.success
-    ? { success: true, data: { recordId: result.data.recordId } }
-    : failure('Your RSVP could not be saved.')
+  const query = <T>(collection: string, where: Record<string, unknown>, limit = 1, oldest = false) =>
+    tool<QueryActionData<T>>('records.query', {
+      collection, where, limit, ...(oldest ? { orderBy: 'createdAt', orderDir: 'asc' } : {}),
+    }, userId)
+  const remove = (collection: string, recordId: string) =>
+    tool<MutateActionData>('records.delete', { collection, recordId }, userId)
+  const save = (player: string, status: RSVPStatus, recordId?: string) =>
+    recordId
+      ? tool<MutateActionData>('records.update', { collection: 'rsvps', recordId, data: { status } }, player)
+      : tool<MutateActionData>('records.create', { collection: 'rsvps', data: { sessionId, status } }, player)
+  const success = (recordId = sessionId): RallyCommandResult => ({ success: true, data: { recordId } })
+
+  // Persist the RSVP before deleting the queue entry. The next command can
+  // repair that intermediate state without consuming a second place.
+  async function fillVacancies(): Promise<number | null> {
+    if (capacity == null || session.status !== 'open') return 0
+    for (let attempt = 0; attempt < 32; attempt++) {
+      const confirmed = await query<RallyRSVP>('rsvps', { sessionId, status: 'going' }, capacity)
+      if (!confirmed.success) return null
+      const count = confirmed.data.records.length
+      const queued = await query<RallyWaitlist>('waitlists', { sessionId }, 1, true)
+      if (!queued.success) return null
+      const first = queued.data.records[0]
+      if (!first) return count
+      const player = first.data.userId
+      const response = await query<RallyRSVP>('rsvps', { sessionId, userId: player })
+      if (!response.success) return null
+      const rsvp = response.data.records[0]
+      if (rsvp?.data.status !== 'going') {
+        if (count >= capacity) return count
+        if (!(await save(player, 'going', rsvp?.recordId)).success) return null
+      }
+      if (!(await remove('waitlists', first.recordId)).success) return null
+    }
+    return null
+  }
+
+  if (operation === 'leaveWaitlist' || operation === 'withdraw') {
+    if (capacity != null) {
+      const response = await query<RallyWaitlist>('waitlists', owns)
+      if (!response.success) return failure('Your waitlist entry could not be checked.')
+      const waiting = response.data.records[0]
+      if (waiting && !(await remove('waitlists', waiting.recordId)).success) return failure('You could not leave the waitlist.')
+    }
+    if (operation === 'withdraw') {
+      const response = await query<RallyRSVP>('rsvps', owns)
+      if (!response.success) return failure('Your existing RSVP could not be checked.')
+      const existing = response.data.records[0]
+      if (existing && !(await remove('rsvps', existing.recordId)).success) return failure('Your RSVP could not be withdrawn.')
+    }
+    await fillVacancies()
+    return success()
+  }
+
+  if (capacity == null && operation === 'joinWaitlist') return failure('This session has no waitlist.')
+  const filled = capacity != null ? await fillVacancies() : 0
+  const response = await query<RallyRSVP>('rsvps', owns)
+  if (!response.success) return failure('Your existing RSVP could not be checked.')
+  const existing = response.data.records[0]
+  if (operation === 'joinWaitlist') {
+    if (existing?.data.status === 'going') return failure('You are already confirmed for this session.')
+    if (filled === null) return failure('The waitlist is temporarily unavailable. Try again.')
+    if (capacity != null && filled < capacity) return failure('A spot is available. Choose Going to join.')
+    const queued = await query<RallyWaitlist>('waitlists', owns)
+    if (!queued.success) return failure('Your waitlist entry could not be checked.')
+    const waiting = queued.data.records[0]
+    if (waiting) return success(waiting.recordId)
+    const created = await tool<MutateActionData>('records.create', {
+      collection: 'waitlists', data: { sessionId },
+    }, userId)
+    return created.success ? success(created.data.recordId) : failure('You could not join the waitlist.')
+  }
+
+  if (operation !== 'rsvp') return failure('Invalid attendance command.')
+  if (capacity != null && command.status === 'going' && existing?.data.status !== 'going') {
+    if (filled === null) return failure('Available places could not be checked. Try again.')
+    if (filled >= capacity) return failure('This session is full. You can join the waitlist.')
+  }
+  const wasGoing = existing?.data.status === 'going'
+  const result = await save(userId, command.status, existing?.recordId)
+  if (!result.success) return failure('Your RSVP could not be saved.')
+  if (command.status === 'maybe' && wasGoing) {
+    await fillVacancies()
+  }
+  return success(result.data.recordId)
 }
 
 async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: RecordTool): Promise<RallyCommandResult> {
@@ -156,14 +217,43 @@ export class RallyCommandRoom {
   private queue: Promise<void> = Promise.resolve()
 
   constructor(
-    _state: DurableObjectState,
+    private readonly state: DurableObjectState,
     private readonly env: Env,
   ) {}
 
   fetch(request: Request): Promise<Response> {
+    if (request.method === 'POST' && new URL(request.url).pathname === '/geocode') {
+      return this.geocode(request)
+    }
     const result = this.queue.then(() => this.handle(request))
     this.queue = result.then(() => undefined, () => undefined)
     return result
+  }
+
+  private async geocode(request: Request): Promise<Response> {
+    const query = (await request.text()).trim()
+    if (query.length < 2 || query.length > 200) return Response.json({ error: 'Invalid place name.' }, { status: 400 })
+
+    // Every Worker isolate uses this same object ID, so the provider limit
+    // survives both concurrent calls and object eviction.
+    const allowed = await this.state.storage.transaction(async storage => {
+      const now = Date.now()
+      const last = await storage.get<number>('geocodeLastStart')
+      if (last !== undefined && now - last < GEOCODER_MIN_GAP_MS) return false
+      await storage.put('geocodeLastStart', now)
+      return true
+    })
+    if (!allowed) return Response.json({ error: 'Place search is busy. Try again in a moment.' }, {
+      status: 429,
+      headers: { 'Retry-After': '2' },
+    })
+
+    try {
+      return Response.json(await fetchGeocodedPlaces(query))
+    } catch (cause) {
+      if (cause instanceof Response) return cause
+      return Response.json({ error: 'Place search is unavailable.' }, { status: 502 })
+    }
   }
 
   private async handle(request: Request): Promise<Response> {
@@ -229,14 +319,20 @@ export const rallyCommandAction: ActionHandler<Env> = async ({ userId, params, t
   const room = env.RALLY_COMMAND_ROOMS.get(
     env.RALLY_COMMAND_ROOMS.idFromName(`rally:${env.DEEPSPACE_APP_ID}:${command.sessionId}`),
   )
-  const response = await room.fetch(
-    new Request('https://internal/rally-command', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(command),
-    }),
-  )
-  const result: unknown = await response.json()
+  let result: unknown
+  try {
+    const response = await room.fetch(
+      new Request('https://internal/rally-command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(command),
+      }),
+    )
+    if (!response.ok) return failure('The session service is temporarily unavailable. Try again.')
+    result = await response.json()
+  } catch {
+    return failure('The session service is temporarily unavailable. Try again.')
+  }
   if (
     isRecord(result) &&
     ((result.success === true && isRecord(result.data) && typeof result.data.recordId === 'string') ||
