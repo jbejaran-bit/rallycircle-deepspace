@@ -9,12 +9,14 @@ import {
 import { usersSchema } from './schemas/users-schema'
 import { settingsSchema } from './schemas/admin-schema'
 import { sessionsSchema, rsvpsSchema } from './schemas/rally-schema'
+import { matchScoresSchema } from './schemas/scoreboard-schema'
 
 export const schemas: CollectionSchema[] = [
   usersSchema,
   settingsSchema,
   sessionsSchema,
   rsvpsSchema,
+  matchScoresSchema,
   CHANNELS_SCHEMA,
   MESSAGES_SCHEMA,
   REACTIONS_SCHEMA,
