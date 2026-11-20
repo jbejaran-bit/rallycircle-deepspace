@@ -7,15 +7,18 @@ import type { Env } from '../../worker.js'
 import { awardPoint, createMatchScore, readMatchScore, resultStatus } from '../lib/rally-score.js'
 import { rallyCommandAction, RallyCommandRoom } from './rally-command-room.js'
 
-function createHarness() {
+function createHarness(clock: () => number = Date.now) {
   const sessions = new Map<string, { recordId: string; createdBy: string; data: RallySession }>()
   const rsvps = new Map<string, { recordId: string; createdBy: string; data: RallyRSVP }>()
   const waitlists = new Map<string, { recordId: string; data: RallyWaitlist }>()
   let nextRecordId = 0
   let failNextQueueDelete = false
+  let recordFetchThrows = false
 
   const recordRoom = {
     async fetch(request: Request) {
+      // K05 fault injection: the record room itself is unreachable.
+      if (recordFetchThrows) throw new Error('Record room unavailable')
       const { tool, params } = await request.json() as {
         tool: string
         params: Record<string, unknown>
@@ -106,7 +109,7 @@ function createHarness() {
       get: () => recordRoom,
     },
   } as unknown as Env
-  const room = new RallyCommandRoom({} as DurableObjectState, env)
+  const room = new RallyCommandRoom({} as DurableObjectState, env, clock)
   const commandNamespace = {
     idFromName: (name: string) => name,
     get: () => ({ fetch: (request: Request) => room.fetch(request) }),
@@ -154,8 +157,9 @@ function createHarness() {
   }
 
   return {
-    addSession, command, rsvps, sessions, waitlists,
+    addSession, command, room, rsvps, sessions, waitlists,
     interruptQueueCleanup: () => { failNextQueueDelete = true },
+    setRecordFetchThrows: (value: boolean) => { recordFetchThrows = value },
   }
 }
 
@@ -438,5 +442,177 @@ describe('RallyCircle server-side session and RSVP rules', () => {
       createdBy: 'host',
       recordId: 'session',
     }, 'player')).toBe(false)
+  })
+})
+
+describe('RallyCommandRoom hardening (Track K)', () => {
+  const marker = { 'X-App-Action': 'true', 'Content-Type': 'application/json' }
+
+  it('rejects direct room fetches without the internal-caller marker (K01, N-03)', async () => {
+    const harness = createHarness()
+    harness.addSession('open-session', 'host')
+
+    // The exact N-03 probe: a forged cancel naming the host, no marker.
+    const response = await harness.room.fetch(new Request('https://internal/rally-command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ operation: 'cancel', sessionId: 'open-session', userId: 'host' }),
+    }))
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({
+      success: false,
+      error: 'Invalid rally command request.',
+    })
+    expect(harness.sessions.get('open-session')?.data.status).toBe('open')
+
+    // The same fetch with the marker reaches the handler — which is why the
+    // marker is defense in depth, not authentication: only the worker's
+    // action (Bearer-verified) ever sends it in production.
+    const marked = await harness.room.fetch(new Request('https://internal/rally-command', {
+      method: 'POST',
+      headers: marker,
+      body: JSON.stringify({ operation: 'cancel', sessionId: 'open-session', userId: 'host' }),
+    }))
+    expect(marked.status).toBe(200)
+    await expect(marked.json()).resolves.toMatchObject({ success: true })
+  })
+
+  it('rejects over-long user and session ids in the command body (K02)', async () => {
+    const harness = createHarness()
+    harness.addSession('open-session', 'host')
+
+    await expect(harness.command('player', {
+      operation: 'rsvp',
+      sessionId: 'x'.repeat(201),
+      status: 'going',
+    })).resolves.toMatchObject({ success: false, error: 'Invalid rally command.' })
+    await expect(harness.command('u'.repeat(201), {
+      operation: 'rsvp',
+      sessionId: 'open-session',
+      status: 'going',
+    })).resolves.toMatchObject({ success: false, error: 'Invalid rally command.' })
+    expect(harness.rsvps.size).toBe(0)
+  })
+
+  it('rate-limits RSVP flapping per user and session, independently (K03)', async () => {
+    let now = Date.now()
+    const harness = createHarness(() => now)
+    harness.addSession('open-session', 'host')
+    const rsvp = (user: string) => harness.command(user, {
+      operation: 'rsvp',
+      sessionId: 'open-session',
+      status: 'going',
+    })
+
+    for (let attempt = 0; attempt < 30; attempt++) {
+      await expect(rsvp('flapper')).resolves.toMatchObject({ success: true })
+    }
+    await expect(rsvp('flapper')).resolves.toMatchObject({
+      success: false,
+      error: 'Too many requests. Try again shortly.',
+    })
+    // Another user on the same session is unaffected.
+    await expect(rsvp('calm')).resolves.toMatchObject({ success: true })
+    // The window resets after 60 s.
+    now += 61_000
+    await expect(rsvp('flapper')).resolves.toMatchObject({ success: true })
+  })
+
+  it('rate-limits cancels at 5/minute and scores at 120/minute (K03)', async () => {
+    const harness = createHarness()
+    harness.addSession('open-session', 'host')
+    const cancel = () => harness.command('host', { operation: 'cancel', sessionId: 'open-session' })
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await expect(cancel()).resolves.toMatchObject({ success: true })
+    }
+    await expect(cancel()).resolves.toMatchObject({
+      success: false,
+      error: 'Too many requests. Try again shortly.',
+    })
+
+    // Score commands share one budget, counted before the score is applied,
+    // so a bogus revision still consumes budget — 120 pass, the 121st stops.
+    const point = () => harness.command('host', {
+      operation: 'scorePoint',
+      sessionId: 'open-session',
+      side: 0,
+      revision: 0,
+    })
+    for (let attempt = 0; attempt < 120; attempt++) {
+      const result = await point()
+      expect(result.success).toBe(false)
+      expect((result as { error?: string }).error).not.toBe('Too many requests. Try again shortly.')
+    }
+    await expect(point()).resolves.toMatchObject({
+      success: false,
+      error: 'Too many requests. Try again shortly.',
+    })
+  })
+
+  it('rejects malformed and oversized command bodies with a generic error (K05)', async () => {
+    const harness = createHarness()
+    harness.addSession('open-session', 'host')
+
+    const malformed = await harness.room.fetch(new Request('https://internal/rally-command', {
+      method: 'POST',
+      headers: marker,
+      body: '{not json',
+    }))
+    expect(malformed.status).toBe(400)
+    await expect(malformed.json()).resolves.toMatchObject({
+      success: false,
+      error: 'Invalid rally command request.',
+    })
+
+    const oversized = await harness.room.fetch(new Request('https://internal/rally-command', {
+      method: 'POST',
+      headers: marker,
+      body: JSON.stringify({ operation: 'rsvp', sessionId: 'open-session', userId: 'player', pad: 'x'.repeat(70_000) }),
+    }))
+    expect(oversized.status).toBe(400)
+    await expect(oversized.json()).resolves.toMatchObject({
+      success: false,
+      error: 'Invalid rally command request.',
+    })
+    expect(harness.rsvps.size).toBe(0)
+  })
+
+  it('returns a generic failure and keeps the queue moving when the record room throws (K05)', async () => {
+    const harness = createHarness()
+    harness.addSession('open-session', 'host')
+
+    harness.setRecordFetchThrows(true)
+    await expect(harness.command('player', {
+      operation: 'rsvp',
+      sessionId: 'open-session',
+      status: 'going',
+    })).resolves.toMatchObject({
+      success: false,
+      error: 'The session service is temporarily unavailable. Try again.',
+    })
+    // The queue did not deadlock: the next command after recovery succeeds.
+    harness.setRecordFetchThrows(false)
+    await expect(harness.command('player', {
+      operation: 'rsvp',
+      sessionId: 'open-session',
+      status: 'going',
+    })).resolves.toMatchObject({ success: true })
+    expect(harness.rsvps.size).toBe(1)
+  })
+
+  it('carries the stable API version on action responses (L14)', async () => {
+    const harness = createHarness()
+    harness.addSession('open-session', 'host')
+
+    await expect(harness.command('player', {
+      operation: 'rsvp',
+      sessionId: 'open-session',
+      status: 'going',
+    })).resolves.toMatchObject({ success: true, apiVersion: '1' })
+    await expect(harness.command('player', {
+      operation: 'rsvp',
+      sessionId: 'missing-session',
+      status: 'going',
+    })).resolves.toMatchObject({ success: false, apiVersion: '1' })
   })
 })

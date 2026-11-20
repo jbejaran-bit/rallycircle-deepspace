@@ -237,6 +237,8 @@ export function registerCourtDiscoveryRoutes(
         const room = namespace.get(namespace.idFromName('court-discovery:nominatim'))
         const response = await room.fetch(new Request('https://internal/geocode', {
           method: 'POST',
+          // K01: the internal-caller marker the room requires.
+          headers: { 'X-App-Action': 'true' },
           body: q,
         }))
         if (!response.ok) return response

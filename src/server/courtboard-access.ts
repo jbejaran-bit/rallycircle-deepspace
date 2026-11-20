@@ -1,4 +1,5 @@
 import type { Env } from '../../worker.js'
+import { loggableError } from 'deepspace/worker'
 
 type AccessRole = 'member' | 'viewer'
 type AccessResult =
@@ -47,7 +48,10 @@ async function executeRecordTool(
 
     return { kind: 'success', data: payload.data }
   } catch (error) {
-    console.error('Courtboard authorization lookup failed', error)
+    // K04: log the SDK's bounded rendering (8 KB, truncated) rather than the
+    // raw error object, so a lookup failure can never spill an unexpected
+    // payload — e.g. headers — into server logs.
+    console.error('Courtboard authorization lookup failed', loggableError(error))
     return { kind: 'unavailable' }
   }
 }

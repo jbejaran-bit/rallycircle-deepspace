@@ -1,9 +1,44 @@
 import type { ActionHandler, ActionResult, GetActionData, MutateActionData, QueryActionData } from 'deepspace/worker'
+import { BodyTooLargeError, readBoundedBodyText } from 'deepspace/worker'
 import { validCapacity, type RallyRSVP, type RallySession, type RallyWaitlist, type RSVPStatus } from '../lib/rally.js'
 import { awardPoint, createMatchScore, readMatchScore, reviewResult, scoreEditSchema } from '../lib/rally-score.js'
 import type { z } from 'zod'
 import { fetchGeocodedPlaces, GEOCODER_MIN_GAP_MS } from './court-discovery.js'
 import type { Env } from '../../worker.js'
+
+/**
+ * Stable API version carried on every `rallyCommand` action response (L14).
+ * Codex checks this to detect backend capability; bump only on a breaking
+ * change to an action's response shape.
+ */
+export const API_VERSION = '1'
+
+/**
+ * Internal-caller marker (K01). The worker's own action and geocode paths
+ * send `X-App-Action: 'true'` on every fetch to this Durable Object — the
+ * same convention the RecordRoom app-action calls use. The command room
+ * rejects any fetch without it. This is defense in depth, NOT the auth
+ * boundary: the action still verifies the Bearer token first and the
+ * marker is not a secret. It closes finding N-03
+ * (docs/NEW_BRANCH_REVIEW.md): a direct `room.fetch` with a forged
+ * `userId` can no longer reach the command handler at all.
+ */
+const APP_ACTION_HEADER = 'X-App-Action'
+const APP_ACTION_MARKER = 'true'
+
+/** Largest command body the room will read (K05). Commands are small JSON; anything larger is rejected, never parsed. */
+const MAX_COMMAND_BODY_BYTES = 64 * 1024
+
+/** Per-user, per-session, per-class rate limits (K03), fixed 60 s windows, kept in memory on the DO instance. */
+const RATE_LIMIT_WINDOW_MS = 60_000
+const RATE_LIMITS = { attendance: 30, score: 120, cancel: 5 } as const
+type RateLimitClass = keyof typeof RATE_LIMITS
+
+function rateLimitClass(operation: string): RateLimitClass {
+  if (operation === 'cancel') return 'cancel'
+  if (operation === 'startMatch' || operation === 'scorePoint' || operation === 'reviewResult') return 'score'
+  return 'attendance'
+}
 
 type ScoreEdit = z.infer<typeof scoreEditSchema> & { sessionId: string; userId: string }
 
@@ -21,7 +56,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function parseCommand(value: unknown): RallyCommand | null {
-  if (!isRecord(value) || typeof value.userId !== 'string' || !value.userId ||
+  // K02: userId and sessionId are both length-capped. The userId here is the
+  // verified caller on the action path, but the room must not trust an
+  // unbounded string on any path that reaches it.
+  if (!isRecord(value) || typeof value.userId !== 'string' || !value.userId || value.userId.length > 200 ||
       typeof value.sessionId !== 'string' || !value.sessionId || value.sessionId.length > 200) {
     return null
   }
@@ -215,19 +253,64 @@ async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: R
 
 export class RallyCommandRoom {
   private queue: Promise<void> = Promise.resolve()
+  private rateLimits = new Map<string, { count: number; windowStart: number }>()
+  private clock: () => number
 
   constructor(
     private readonly state: DurableObjectState,
     private readonly env: Env,
-  ) {}
+    // Injectable clock for tests (defaults to Date.now). The platform
+    // constructs DOs with (state, env); the third argument is optional.
+    clock: () => number = Date.now,
+  ) {
+    this.clock = clock
+  }
 
   fetch(request: Request): Promise<Response> {
-    if (request.method === 'POST' && new URL(request.url).pathname === '/geocode') {
-      return this.geocode(request)
+    // K01: reject any fetch that did not come from the worker's own action
+    // or geocode path. Same generic body as other invalid requests, so the
+    // response reveals nothing about which check failed.
+    if (request.headers.get(APP_ACTION_HEADER) !== APP_ACTION_MARKER) {
+      return Promise.resolve(Response.json(failure('Invalid rally command request.'), { status: 400 }))
     }
-    const result = this.queue.then(() => this.handle(request))
+    if (request.method === 'POST' && new URL(request.url).pathname === '/geocode') {
+      // K05: an unexpected throw in geocoding answers 502, never a bare 500.
+      return this.geocode(request).catch(() =>
+        Response.json({ error: 'Place search is unavailable.' }, { status: 502 }),
+      )
+    }
+    // K05: an unexpected throw inside the queued handler answers with the
+    // same generic failure the action returns when the room is unreachable,
+    // and the queue keeps processing the next command.
+    const result = this.queue.then(() => this.handle(request).catch(() =>
+      Response.json(failure('The session service is temporarily unavailable. Try again.')),
+    ))
     this.queue = result.then(() => undefined, () => undefined)
     return result
+  }
+
+  /**
+   * K03: fixed-window per-user, per-session rate limit. Returns true when
+   * the command may proceed. Budgets are deliberately generous for
+   * legitimate use (a fast match scores well under 120 points/minute; a
+   * user toggling RSVP 30 times a minute is flapping). Counters live in
+   * memory on this DO instance: object eviction resets them, which is
+   * acceptable for abuse mitigation — the action's Bearer verification
+   * remains the auth boundary. Malformed commands never reach this check,
+   * so garbage cannot consume another user's budget.
+   */
+  private checkRateLimit(userId: string, sessionId: string, operation: string): boolean {
+    const rateClass = rateLimitClass(operation)
+    const key = `${userId}:${sessionId}:${rateClass}`
+    const now = this.clock()
+    const entry = this.rateLimits.get(key)
+    if (!entry || now - entry.windowStart >= RATE_LIMIT_WINDOW_MS) {
+      this.rateLimits.set(key, { count: 1, windowStart: now })
+      return true
+    }
+    if (entry.count >= RATE_LIMITS[rateClass]) return false
+    entry.count++
+    return true
   }
 
   private async geocode(request: Request): Promise<Response> {
@@ -261,18 +344,33 @@ export class RallyCommandRoom {
       return Response.json(failure('Invalid rally command request.'), { status: 400 })
     }
 
-    let body: unknown
+    // K05: bounded body read — an oversized body is rejected before parsing,
+    // never buffered unboundedly. Malformed JSON gets the same generic body.
+    let text: string
     try {
-      body = await request.json()
+      text = await readBoundedBodyText(request, MAX_COMMAND_BODY_BYTES)
     } catch (cause) {
-      if (cause instanceof SyntaxError) {
+      if (cause instanceof BodyTooLargeError) {
         return Response.json(failure('Invalid rally command request.'), { status: 400 })
       }
       throw cause
     }
+    let body: unknown
+    try {
+      body = JSON.parse(text)
+    } catch {
+      return Response.json(failure('Invalid rally command request.'), { status: 400 })
+    }
 
     const command = parseCommand(body)
     if (!command) return Response.json(failure('Invalid rally command.'), { status: 400 })
+
+    // K03: HTTP 200 here is deliberate — the action maps any non-2xx room
+    // response to its generic "temporarily unavailable" failure, which would
+    // hide the rate-limit message from the client. The JSON body carries it.
+    if (!this.checkRateLimit(command.userId, command.sessionId, command.operation)) {
+      return Response.json(failure('Too many requests. Try again shortly.'))
+    }
 
     const recordRoom = this.env.RECORD_ROOMS.get(
       this.env.RECORD_ROOMS.idFromName(`app:${this.env.DEEPSPACE_APP_ID}`),
@@ -300,6 +398,13 @@ export class RallyCommandRoom {
   }
 }
 
+export type VersionedRallyCommandResult = RallyCommandResult & { apiVersion: string }
+
+/** L14: every `rallyCommand` action response carries the stable API version. */
+function withApiVersion(result: RallyCommandResult): VersionedRallyCommandResult {
+  return { ...result, apiVersion: API_VERSION }
+}
+
 export const rallyCommandAction: ActionHandler<Env> = async ({ userId, params, tools, env }) => {
   const command = parseCommand({
     operation: params.operation,
@@ -311,10 +416,10 @@ export const rallyCommandAction: ActionHandler<Env> = async ({ userId, params, t
     decision: params.decision,
     userId,
   })
-  if (!command) return failure('Invalid rally command.')
+  if (!command) return withApiVersion(failure('Invalid rally command.'))
 
   const sessionResult = await tools.get('sessions', command.sessionId)
-  if (!sessionResult.success) return failure('This session is unavailable.')
+  if (!sessionResult.success) return withApiVersion(failure('This session is unavailable.'))
 
   const room = env.RALLY_COMMAND_ROOMS.get(
     env.RALLY_COMMAND_ROOMS.idFromName(`rally:${env.DEEPSPACE_APP_ID}:${command.sessionId}`),
@@ -324,21 +429,25 @@ export const rallyCommandAction: ActionHandler<Env> = async ({ userId, params, t
     const response = await room.fetch(
       new Request('https://internal/rally-command', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          // K01: the internal-caller marker the room requires (see above).
+          [APP_ACTION_HEADER]: APP_ACTION_MARKER,
+        },
         body: JSON.stringify(command),
       }),
     )
-    if (!response.ok) return failure('The session service is temporarily unavailable. Try again.')
+    if (!response.ok) return withApiVersion(failure('The session service is temporarily unavailable. Try again.'))
     result = await response.json()
   } catch {
-    return failure('The session service is temporarily unavailable. Try again.')
+    return withApiVersion(failure('The session service is temporarily unavailable. Try again.'))
   }
   if (
     isRecord(result) &&
     ((result.success === true && isRecord(result.data) && typeof result.data.recordId === 'string') ||
       (result.success === false && typeof result.error === 'string'))
   ) {
-    return result as RallyCommandResult
+    return withApiVersion(result as RallyCommandResult)
   }
-  return failure('The rally command returned an invalid response.')
+  return withApiVersion(failure('The rally command returned an invalid response.'))
 }

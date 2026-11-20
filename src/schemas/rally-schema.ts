@@ -19,7 +19,10 @@ const sessionMemberWritableFields = [
 export const sessionsSchema: CollectionSchema = {
   name: 'sessions',
   columns: [
-    { name: 'matchScore', storage: 'text', interpretation: 'plain' },
+    // K02: matchScore is server-written JSON (max 3 sets, 4 player ids of at
+    // most 200 chars each, plus approvals) — 4000 leaves ~2x headroom so
+    // the SDK's server-side maxLength enforcement can never break scoring.
+    { name: 'matchScore', storage: 'text', interpretation: 'plain', maxLength: 4000 },
     { name: 'format', storage: 'text', interpretation: { kind: 'select', options: [...SESSION_FORMATS] } },
     { name: 'title', storage: 'text', interpretation: 'plain', required: true, maxLength: 72 },
     { name: 'court', storage: 'text', interpretation: 'plain', required: true, maxLength: 100 },
@@ -31,7 +34,9 @@ export const sessionsSchema: CollectionSchema = {
     { name: 'level', storage: 'text', interpretation: { kind: 'select', options: ['All levels', 'Beginner', 'Intermediate', 'Advanced'] }, required: true },
     { name: 'notes', storage: 'text', interpretation: 'plain', default: '', maxLength: 400 },
     { name: 'hostId', storage: 'text', interpretation: 'plain', userBound: true, immutable: true },
-    { name: 'chatChannelId', storage: 'text', interpretation: 'plain', default: '' },
+    // K02: channel ids are server-assigned short identifiers; cap the column
+    // so a member write can never store an unbounded string here.
+    { name: 'chatChannelId', storage: 'text', interpretation: 'plain', default: '', maxLength: 200 },
     { name: 'status', storage: 'text', interpretation: { kind: 'select', options: ['open', 'cancelled'] }, default: 'open' },
   ],
   ownerField: 'hostId',
