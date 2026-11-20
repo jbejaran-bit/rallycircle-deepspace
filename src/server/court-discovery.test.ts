@@ -169,3 +169,44 @@ it('uses the shared geocoder room for production requests and preserves throttli
   expect(response.status).toBe(429)
   expect(response.headers.get('Retry-After')).toBe('2')
 })
+
+describe('A14 upstream failure modes (mocked fetch)', () => {
+  it('turns an upstream 500 into a generic 502 without leaking the upstream body', async () => {
+    const fetchFn = vi.fn(async () => new Response('{"internal":"detail"}', { status: 500 }))
+    const app = buildApp({ authed: true, fetchFn })
+    const res = await app.request('https://rallycircle.example/api/courts/nearby?lat=40.44&lng=-79.95', {}, {})
+    expect(res.status).toBe(502)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).not.toContain('internal')
+    expect(body.error).not.toMatch(/wait a moment/)
+  })
+
+  it('turns a network failure into a 502, not a crash', async () => {
+    const fetchFn = vi.fn(async () => { throw new TypeError('fetch failed') })
+    const app = buildApp({ authed: true, fetchFn })
+    const res = await app.request('https://rallycircle.example/api/courts/nearby?lat=40.44&lng=-79.95', {}, {})
+    expect(res.status).toBe(502)
+  })
+
+  it('turns a geocode 429 into a 502 that tells the client to wait', async () => {
+    const fetchFn = vi.fn(async () => new Response('rate limited', { status: 429 }))
+    const app = buildApp({ authed: true, fetchFn })
+    const res = await app.request('https://rallycircle.example/api/geocode?q=Boston', {}, {})
+    expect(res.status).toBe(502)
+    expect(((await res.json()) as { error: string }).error).toMatch(/wait/)
+  })
+
+  it('turns a malformed geocode payload into a 502, not a crash', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ not: 'places' }))
+    const app = buildApp({ authed: true, fetchFn })
+    const res = await app.request('https://rallycircle.example/api/geocode?q=Boston', {}, {})
+    expect(res.status).toBe(502)
+  })
+
+  it('turns a geocode network failure into a 502', async () => {
+    const fetchFn = vi.fn(async () => { throw new TypeError('fetch failed') })
+    const app = buildApp({ authed: true, fetchFn })
+    const res = await app.request('https://rallycircle.example/api/geocode?q=Boston', {}, {})
+    expect(res.status).toBe(502)
+  })
+})
