@@ -34,9 +34,10 @@ export function canDownloadCalendar(
 }
 
 export function buildCalendarEvent(
-  session: Pick<RallySession, 'status' | 'startsAt' | 'durationMinutes' | 'title' | 'court' | 'location'> & Partial<Pick<RallySession, 'format' | 'level'>>,
+  session: Pick<RallySession, 'status' | 'startsAt' | 'durationMinutes' | 'title' | 'court' | 'location'> & Partial<Pick<RallySession, 'format' | 'level' | 'scheduleRevision'>>,
   invitation: string,
   now = new Date(),
+  options: { sequence?: number; method?: 'PUBLISH' | 'CANCEL' } = {},
 ): string | null {
   const url = URL.parse(invitation)
   if (!url || !['https:', 'http:'].includes(url.protocol) || url.username || url.password || /[\r\n]/.test(invitation)) return null
@@ -47,18 +48,24 @@ export function buildCalendarEvent(
   ].filter(Boolean).join('\n')
   const start = new Date(session.startsAt)
   const end = new Date(start.getTime() + session.durationMinutes * 60_000)
-  if (!Number.isFinite(now.getTime()) || session.status !== 'open' || !Number.isFinite(start.getTime()) ||
+  const cancellation = options.method === 'CANCEL'
+  if (session.status !== (cancellation ? 'cancelled' : 'open')) return null
+  const sequence = options.sequence ?? session.scheduleRevision ?? 0
+  if (!Number.isSafeInteger(sequence) || sequence < 0 || !Number.isFinite(now.getTime()) || !Number.isFinite(start.getTime()) ||
       !Number.isFinite(end.getTime()) || end <= start) return null
 
   return [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
     'PRODID:-//RallyCircle//Tennis Sessions//EN',
+    ...(cancellation ? ['METHOD:CANCEL'] : []),
     'BEGIN:VEVENT',
     `UID:${text(invitation)}`,
     `DTSTAMP:${timestamp(now)}`,
     `DTSTART:${timestamp(start)}`,
     `DTEND:${timestamp(end)}`,
+    ...(sequence > 0 ? [`SEQUENCE:${sequence}`] : []),
+    ...(cancellation ? ['STATUS:CANCELLED'] : []),
     `SUMMARY:${text(session.title)}`,
     `LOCATION:${text(`${session.court}, ${session.location}`)}`,
     `DESCRIPTION:${text(description)}`,
