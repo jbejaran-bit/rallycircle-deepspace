@@ -330,6 +330,7 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
       {!cancelled&&session.hostId===userId&&<button type="button" disabled={busy} onClick={()=>void cancelSession()} className="text-xs text-rose-300/75 underline underline-offset-4 hover:text-rose-200">Cancel my session</button>}
       <ErrorMessage message={error}/>
       <RallyScoreboard
+        userId={userId}
         session={session}
         sessionId={sessionId}
         isHost={session.hostId === userId}

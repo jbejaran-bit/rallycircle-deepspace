@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { awardPoint, createMatchScore, displayPoints, isTiebreak, readMatchScore, type ScoreSide } from './rally-score'
+import { awardPoint, createMatchScore, displayPoints, isTiebreak, readMatchScore, resultStatus, reviewResult, type ScoreSide } from './rally-score'
 
 const start = () => createMatchScore([['alice'], ['bob']])
 const points = (score: ReturnType<typeof start>, team: ScoreSide, count: number) => {
@@ -30,4 +30,18 @@ it('completes at two sets won and round-trips the stored scoreboard', () => {
   expect(awardPoint(completed, 1)).toBe(completed)
   expect(readMatchScore(JSON.stringify(completed))).toEqual(completed)
   expect(readMatchScore('{')).toBeNull()
+})
+
+it('requires approval from every participant and locks disputed results', () => {
+  const won = points(createMatchScore([['a', 'b'], ['c', 'd']]), 0, 48)
+  expect(resultStatus(won)).toBe('proposed')
+  expect(reviewResult(won, 'outsider', 'approve')).toBeNull()
+  const oneApproval = reviewResult(won, 'a', 'approve')!
+  expect(resultStatus(oneApproval)).toBe('confirmed')
+  expect(reviewResult(oneApproval, 'a', 'approve')).toBeNull()
+  const dispute = reviewResult(oneApproval, 'c', 'dispute')!
+  expect(resultStatus(dispute)).toBe('disputed')
+  expect(reviewResult(dispute, 'b', 'approve')).toBeNull()
+  const final = ['b', 'c', 'd'].reduce((score, player) => reviewResult(score, player, 'approve')!, oneApproval)
+  expect(resultStatus(final)).toBe('final')
 })

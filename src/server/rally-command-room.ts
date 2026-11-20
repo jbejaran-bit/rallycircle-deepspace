@@ -1,6 +1,6 @@
 import type { ActionHandler, ActionResult, GetActionData, MutateActionData, QueryActionData } from 'deepspace/worker'
 import { validCapacity, type RallyRSVP, type RallySession, type RSVPStatus } from '../lib/rally.js'
-import { awardPoint, createMatchScore, readMatchScore, scoreEditSchema } from '../lib/rally-score.js'
+import { awardPoint, createMatchScore, readMatchScore, reviewResult, scoreEditSchema } from '../lib/rally-score.js'
 import type { z } from 'zod'
 import type { Env } from '../../worker.js'
 
@@ -62,7 +62,7 @@ async function applyCommand(command: RallyCommand, tool: RecordTool): Promise<Ra
       : failure('The session could not be cancelled.')
   }
 
-  if (command.operation === 'startMatch' || command.operation === 'scorePoint') {
+  if (command.operation === 'startMatch' || command.operation === 'scorePoint' || command.operation === 'reviewResult') {
     return applyScoreEdit(command, session, tool)
   }
 
@@ -110,7 +110,7 @@ async function applyCommand(command: RallyCommand, tool: RecordTool): Promise<Ra
 }
 
 async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: RecordTool): Promise<RallyCommandResult> {
-  if (session.hostId !== command.userId) return failure('Only the session host can edit the score.')
+  if (command.operation !== 'reviewResult' && session.hostId !== command.userId) return failure('Only the session host can edit the score.')
   if (session.status !== 'open') return failure('This session is closed.')
 
   const current = readMatchScore(session.matchScore)
@@ -133,6 +133,9 @@ async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: R
       }
     }
     next = createMatchScore(command.teams)
+  } else if (command.operation === 'reviewResult') {
+    next = current && reviewResult(current, command.userId, command.decision)
+    if (!next) return failure('This result is closed or unavailable for your review.')
   } else {
     if (!current || current.winner !== null) return failure('There is no active scoreboard.')
     if (current.revision !== command.revision) return failure('The score changed. Check the latest score before trying again.')
@@ -215,6 +218,7 @@ export const rallyCommandAction: ActionHandler<Env> = async ({ userId, params, t
     teams: params.teams,
     side: params.side,
     revision: params.revision,
+    decision: params.decision,
     userId,
   })
   if (!command) return failure('Invalid rally command.')

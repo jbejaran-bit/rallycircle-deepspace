@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { rsvpsSchema, sessionsSchema } from '../schemas/rally-schema.js'
 import type { RallyRSVP, RallySession, RSVPStatus } from '../lib/rally.js'
 import type { Env } from '../../worker.js'
-import { readMatchScore } from '../lib/rally-score.js'
+import { awardPoint, createMatchScore, readMatchScore, resultStatus } from '../lib/rally-score.js'
 import { rallyCommandAction, RallyCommandRoom } from './rally-command-room.js'
 
 function createHarness() {
@@ -297,6 +297,22 @@ describe('RallyCircle server-side session and RSVP rules', () => {
     expect(readMatchScore(session.matchScore)).toMatchObject({ revision: 1, points: [1, 0] })
     await expect(harness.command('host', { operation: 'cancel', sessionId })).resolves.toMatchObject({ success: true })
     await expect(harness.command('host', { ...point, revision: 1 })).resolves.toMatchObject({ success: false })
+  })
+
+  it('finalizes a completed result only after each verified participant approves', async () => {
+    const harness = createHarness()
+    const sessionId = 'played'
+    harness.addSession(sessionId, 'organizer')
+    const session = harness.sessions.get(sessionId)!.data
+    let score = createMatchScore([['alice'], ['bob']])
+    for (let point = 0; point < 48; point++) score = awardPoint(score, 0)
+    session.matchScore = JSON.stringify(score)
+    const vote = { operation: 'reviewResult', sessionId, decision: 'approve', userId: 'alice' }
+    await expect(harness.command('organizer', vote)).resolves.toMatchObject({ success: false })
+    const approvals = await Promise.all(['alice', 'bob'].map(user => harness.command(user, vote)))
+    expect(approvals.map(result => result.success)).toEqual([true, true])
+    expect(resultStatus(readMatchScore(session.matchScore)!)).toBe('final')
+    await expect(harness.command('alice', { ...vote, decision: 'dispute' })).resolves.toMatchObject({ success: false })
   })
 
   it('serializes confirmations for the last spot and permits a join after withdrawal', async () => {

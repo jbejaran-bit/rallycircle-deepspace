@@ -10,6 +10,8 @@ const scoreSchema = z.object({
   games: pair,
   sets: z.array(pair).max(3),
   winner: side.nullable(),
+  approvals: z.array(z.string()).max(4).default([]),
+  disputed: z.boolean().default(false),
 })
 
 export type MatchScore = z.infer<typeof scoreSchema>
@@ -19,6 +21,7 @@ export type ScoreSide = z.infer<typeof side>
 export const scoreEditSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('startMatch'), teams }),
   z.object({ operation: z.literal('scorePoint'), side, revision: z.number().int().min(0) }),
+  z.object({ operation: z.literal('reviewResult'), decision: z.enum(['approve', 'dispute']) }),
 ])
 
 export function readMatchScore(raw: string | undefined): MatchScore | null {
@@ -32,7 +35,7 @@ export function readMatchScore(raw: string | undefined): MatchScore | null {
 }
 
 export function createMatchScore(players: MatchTeams): MatchScore {
-  return { revision: 0, teams: players, points: [0, 0], games: [0, 0], sets: [], winner: null }
+  return { revision: 0, teams: players, points: [0, 0], games: [0, 0], sets: [], winner: null, approvals: [], disputed: false }
 }
 
 export function isTiebreak(score: MatchScore) {
@@ -65,4 +68,20 @@ export function displayPoints(score: MatchScore, team: ScoreSide): string {
   if (isTiebreak(score)) return String(own)
   if (own >= 3 && other >= 3) return own > other ? 'Ad' : '40'
   return ['0', '15', '30', '40'][own] ?? '40'
+}
+
+export function resultStatus(score: MatchScore): 'in-progress' | 'proposed' | 'confirmed' | 'disputed' | 'final' {
+  if (score.winner === null) return 'in-progress'
+  if (score.disputed) return 'disputed'
+  if (score.teams.flat().every(player => score.approvals.includes(player))) return 'final'
+  return score.approvals.length > 0 ? 'confirmed' : 'proposed'
+}
+
+export function reviewResult(score: MatchScore, userId: string, decision: 'approve' | 'dispute'): MatchScore | null {
+  const status = resultStatus(score)
+  if (status !== 'proposed' && status !== 'confirmed') return null
+  if (!score.teams.flat().includes(userId) || score.approvals.includes(userId)) return null
+  return decision === 'dispute'
+    ? { ...score, disputed: true }
+    : { ...score, approvals: [...score.approvals, userId] }
 }

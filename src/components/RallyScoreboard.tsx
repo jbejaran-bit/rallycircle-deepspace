@@ -1,24 +1,37 @@
 import { useState } from 'react'
 import type { RallySession } from '@/lib/rally'
 import { runRallyCommand } from '@/lib/rally-actions'
-import { displayPoints, isTiebreak, readMatchScore, type ScoreSide } from '@/lib/rally-score'
+import { displayPoints, isTiebreak, readMatchScore, resultStatus, type ScoreSide } from '@/lib/rally-score'
 
 interface Props {
   session: RallySession
   sessionId: string
+  userId: string
   isHost: boolean
   players: { id: string; name: string }[]
   nameOf: (id: string) => string
 }
 
+const resultLabels = {
+  'in-progress': 'In progress',
+  proposed: 'Proposed result',
+  confirmed: 'Partially confirmed result',
+  disputed: 'Disputed result',
+  final: 'Final result',
+}
+
 const sides = [0, 1] as const
 const button = 'min-h-11 rounded-lg border border-white/25 px-3 text-sm font-semibold focus-visible:outline-2 disabled:opacity-50'
 
-export default function RallyScoreboard({ session, sessionId, isHost, players, nameOf }: Props) {
+export default function RallyScoreboard({ session, sessionId, userId, isHost, players, nameOf }: Props) {
   const [selected, setSelected] = useState<Record<string, string>>({})
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const score = readMatchScore(session.matchScore)
+  const result = score && resultStatus(score)
+  const canReview = session.status === 'open' && score &&
+    (result === 'proposed' || result === 'confirmed') &&
+    score.teams.flat().includes(userId) && !score.approvals.includes(userId)
   const editable = isHost && session.status === 'open'
   const teamSize = session.format === 'Singles' ? 1 : session.format === 'Doubles' ? 2 : 0
 
@@ -49,7 +62,7 @@ export default function RallyScoreboard({ session, sessionId, isHost, players, n
       {score ? (
         <>
           <p role="status" className="text-sm text-white/80">
-            {score.winner !== null ? `Side ${score.winner + 1} won the match.`
+            {score.winner !== null ? `${resultLabels[resultStatus(score)]} · Side ${score.winner + 1} won the match.`
               : session.status !== 'open' ? 'Scoring closed.'
               : isTiebreak(score) ? 'Tiebreak · first to seven, win by two' : 'In progress'}
           </p>
@@ -67,6 +80,12 @@ export default function RallyScoreboard({ session, sessionId, isHost, players, n
               </tbody>
             </table>
           </div>
+          {canReview && (
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className={button} disabled={pending} onClick={() => void edit({ operation: 'reviewResult', sessionId, decision: 'approve' })}>Confirm result</button>
+              <button type="button" className={button} disabled={pending} onClick={() => void edit({ operation: 'reviewResult', sessionId, decision: 'dispute' })}>Dispute result</button>
+            </div>
+          )}
           {editable && score.winner === null && (
             <div className="flex flex-wrap gap-2">
               {sides.map(side => <button key={side} className={button} type="button" disabled={pending} onClick={() => point(side)}>Point to side {side + 1}</button>)}
