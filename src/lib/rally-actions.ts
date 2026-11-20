@@ -1,9 +1,12 @@
 import { getAuthToken } from 'deepspace'
+import type { MatchTeams, ScoreSide } from './rally-score'
 import type { RSVPStatus } from './rally'
 
 type RallyCommand =
   | { operation: 'rsvp'; sessionId: string; status: RSVPStatus }
   | { operation: 'cancel'; sessionId: string }
+  | { operation: 'startMatch'; sessionId: string; teams: MatchTeams }
+  | { operation: 'scorePoint'; sessionId: string; side: ScoreSide; revision: number }
 
 interface RallyCommandResponse {
   success: boolean

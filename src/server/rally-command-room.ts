@@ -1,8 +1,13 @@
 import type { ActionHandler, ActionResult, GetActionData, MutateActionData, QueryActionData } from 'deepspace/worker'
 import type { RallyRSVP, RallySession, RSVPStatus } from '../lib/rally.js'
+import { awardPoint, createMatchScore, readMatchScore, scoreEditSchema } from '../lib/rally-score.js'
+import type { z } from 'zod'
 import type { Env } from '../../worker.js'
 
+type ScoreEdit = z.infer<typeof scoreEditSchema> & { sessionId: string; userId: string }
+
 type RallyCommand =
+  | ScoreEdit
   | { operation: 'rsvp'; sessionId: string; status: RSVPStatus; userId: string }
   | { operation: 'cancel'; sessionId: string; userId: string }
 
@@ -25,7 +30,8 @@ function parseCommand(value: unknown): RallyCommand | null {
   if (value.operation === 'rsvp' && (value.status === 'going' || value.status === 'maybe')) {
     return { operation: value.operation, sessionId: value.sessionId, status: value.status, userId: value.userId }
   }
-  return null
+  const scoreEdit = scoreEditSchema.safeParse(value)
+  return scoreEdit.success ? { ...scoreEdit.data, sessionId: value.sessionId, userId: value.userId } : null
 }
 
 function failure(error: string): RallyCommandResult {
@@ -54,6 +60,10 @@ async function applyCommand(command: RallyCommand, tool: RecordTool): Promise<Ra
     return result.success
       ? { success: true, data: { recordId: command.sessionId } }
       : failure('The session could not be cancelled.')
+  }
+
+  if (command.operation === 'startMatch' || command.operation === 'scorePoint') {
+    return applyScoreEdit(command, session, tool)
   }
 
   if (session.status !== 'open') return failure('This session is not open for responses.')
@@ -85,6 +95,46 @@ async function applyCommand(command: RallyCommand, tool: RecordTool): Promise<Ra
   return result.success
     ? { success: true, data: { recordId: result.data.recordId } }
     : failure('Your RSVP could not be saved.')
+}
+
+async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: RecordTool): Promise<RallyCommandResult> {
+  if (session.hostId !== command.userId) return failure('Only the session host can edit the score.')
+  if (session.status !== 'open') return failure('This session is closed.')
+
+  const current = readMatchScore(session.matchScore)
+  let next
+  if (command.operation === 'startMatch') {
+    if (session.matchScore) return failure('This session already has a scoreboard.')
+    const teamSize = session.format === 'Singles' ? 1 : session.format === 'Doubles' ? 2 : 0
+    const players = command.teams.flat()
+    if (!teamSize || command.teams.some(team => team.length !== teamSize) || new Set(players).size !== players.length) {
+      return failure('Choose distinct players for each side in the session format.')
+    }
+    for (const userId of players) {
+      const result = await tool<QueryActionData<RallyRSVP>>('records.query', {
+        collection: 'rsvps',
+        where: { sessionId: command.sessionId, userId },
+        limit: 1,
+      }, command.userId)
+      if (!result.success || result.data.records[0]?.data.status !== 'going') {
+        return failure('Every player must have a confirmed RSVP for this session.')
+      }
+    }
+    next = createMatchScore(command.teams)
+  } else {
+    if (!current || current.winner !== null) return failure('There is no active scoreboard.')
+    if (current.revision !== command.revision) return failure('The score changed. Check the latest score before trying again.')
+    next = awardPoint(current, command.side)
+  }
+
+  const result = await tool<MutateActionData>('records.update', {
+    collection: 'sessions',
+    recordId: command.sessionId,
+    data: { matchScore: JSON.stringify(next) },
+  }, command.userId)
+  return result.success
+    ? { success: true, data: { recordId: command.sessionId } }
+    : failure('The score could not be saved.')
 }
 
 export class RallyCommandRoom {
@@ -150,6 +200,9 @@ export const rallyCommandAction: ActionHandler<Env> = async ({ userId, params, t
     operation: params.operation,
     sessionId: params.sessionId,
     status: params.status,
+    teams: params.teams,
+    side: params.side,
+    revision: params.revision,
     userId,
   })
   if (!command) return failure('Invalid rally command.')

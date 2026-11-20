@@ -6,6 +6,7 @@ export type RSVPStatus = 'going' | 'maybe'
 
 export interface RallySession {
   format?: SessionFormat
+  matchScore?: string
   title: string
   court: string
   location: string

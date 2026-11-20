@@ -5,7 +5,9 @@ import { useAuth, useMessages, useMutations, usePresenceRoom, useQuery, useUserL
 import { CalendarDays, Check, ChevronRight, Clock3, Copy, MapPin, MessageCircle, Plus, Radio, Send, Share2, ShieldCheck, Sparkles, Users, X } from 'lucide-react'
 import { buildSessionUrl, formatSessionTime, groupSessionRsvps, SESSION_FORMATS, summarizeAttendance, summarizeReadiness, validateSession, type Level, type RallyRSVP, type RallySession, type RSVPStatus, type SessionFormat } from '@/lib/rally'
 import { runRallyCommand } from '@/lib/rally-actions'
+import { readMatchScore } from '@/lib/rally-score'
 import { buildCalendarEvent } from '@/lib/rally-calendar'
+import RallyScoreboard from '@/components/RallyScoreboard'
 import LiveCourtboard from '@/components/LiveCourtboard'
 
 const surface = 'rounded-3xl border border-white/10 bg-[#141b1a] shadow-[0_18px_60px_rgba(0,0,0,0.17)]'
@@ -316,6 +318,16 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
       </div>}
       {!cancelled&&session.hostId===userId&&<button type="button" disabled={busy} onClick={()=>void cancelSession()} className="text-xs text-rose-300/75 underline underline-offset-4 hover:text-rose-200">Cancel my session</button>}
       <ErrorMessage message={error}/>
+      <RallyScoreboard
+        session={session}
+        sessionId={sessionId}
+        isHost={session.hostId === userId}
+        players={people.filter(record => record.data.status === 'going').map(record => ({
+          id: record.data.userId,
+          name: getName(record.data.userId) ?? 'Player',
+        }))}
+        nameOf={id => getName(id) ?? 'Player'}
+      />
       <LiveCourtboard
         sessionId={sessionId}
         userId={userId}
@@ -349,13 +361,17 @@ export default function RalliesPage() {
       return next
     }, { replace: true })
   }
-  const [view, setView] = useState<'upcoming'|'all'|'mine'>('upcoming')
+  const [view, setView] = useState<'upcoming'|'all'|'mine'|'playing'>('upcoming')
   const now = Date.now()
   const rsvpsBySession = useMemo(() => groupSessionRsvps(rsvps), [rsvps])
   const upcoming = sessions.filter(s => Date.parse(s.data.startsAt) > now && s.data.status === 'open')
-  const listings = view === 'upcoming' ? upcoming : view === 'all' ? sessions : sessions.filter(s =>
-    s.data.hostId === userId || rsvpsBySession.get(s.recordId)?.some(rsvp => rsvp.data.userId === userId),
-  )
+  const listings = view === 'upcoming' ? upcoming : sessions.filter(({ recordId, data }) => {
+    if (view === 'all') return true
+    if (view === 'playing') {
+      return data.status === 'open' && readMatchScore(data.matchScore)?.winner === null
+    }
+    return data.hostId === userId || rsvpsBySession.get(recordId)?.some(rsvp => rsvp.data.userId === userId)
+  })
   const selected = activeId ? sessions.find(s => s.recordId === activeId) : listings[0]
   const signedInId = userId ?? ''
 
@@ -377,8 +393,8 @@ export default function RalliesPage() {
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(300px,.85fr)_minmax(440px,1.15fr)]">
         <section aria-labelledby="sessions-heading" className={`${surface} p-5 sm:p-6 ${activeId ? "order-2 lg:order-first" : ""}`}>
           <div className="mb-5 flex items-center justify-between gap-2"><h2 id="sessions-heading" className="text-lg font-bold">Find a rally</h2><span className="text-xs text-white/40">Choose a session</span></div>
-          <div className="mb-5 flex gap-2">{(['upcoming','all','mine'] as const).map(tab=><button key={tab} type="button" onClick={()=>{setView(tab);chooseSession(null)}} className={`rounded-full px-3.5 py-2 text-xs font-bold capitalize transition ${view===tab?'bg-[#d7fc83] text-[#0e180f]':'bg-white/5 text-white/55 hover:bg-white/10'}`}>{tab === 'mine' ? 'My sessions' : tab}</button>)}</div>
-          {sessionStatus==='loading'||rsvpStatus==='loading'?<div role="status" className="space-y-3"><span className="sr-only">Loading sessions and responses…</span>{[1,2,3].map(n=><div key={n} className="h-32 motion-safe:animate-pulse rounded-2xl bg-white/5"/>)}</div>:sessionStatus==='error'||rsvpStatus==='error'?<ErrorMessage message={sessionStatus==='error'?(sessionsError??'Sessions could not load.'): (rsvpError??'Player confirmations could not load. Refresh to try again.')}/>:listings.length===0?<div className="rounded-2xl border border-dashed border-white/20 p-10 text-center"><Sparkles size={28} className="mx-auto mb-3 text-[#d7fc83]"/><p className="text-sm font-bold">No sessions here yet</p><p className="mt-2 text-xs leading-relaxed text-white/50">Create a session and invite your hitting partners to join.</p></div>:<div className="space-y-3">{listings.map(s=>{
+          <div className="mb-5 flex flex-wrap gap-2">{(['upcoming','all','mine','playing'] as const).map(tab=><button key={tab} type="button" aria-pressed={view === tab} onClick={()=>{setView(tab);chooseSession(null)}} className={`rounded-full px-3.5 py-2 text-xs font-bold capitalize transition ${view===tab?'bg-[#d7fc83] text-[#0e180f]':'bg-white/5 text-white/55 hover:bg-white/10'}`}>{tab === 'mine' ? 'My sessions' : tab === 'playing' ? 'Playing now' : tab}</button>)}</div>
+          {sessionStatus==='loading'||rsvpStatus==='loading'?<div role="status" className="space-y-3"><span className="sr-only">Loading sessions and responses…</span>{[1,2,3].map(n=><div key={n} className="h-32 motion-safe:animate-pulse rounded-2xl bg-white/5"/>)}</div>:sessionStatus==='error'||rsvpStatus==='error'?<ErrorMessage message={sessionStatus==='error'?(sessionsError??'Sessions could not load.'): (rsvpError??'Player confirmations could not load. Refresh to try again.')}/>:listings.length===0?<div className="rounded-2xl border border-dashed border-white/20 p-10 text-center"><Sparkles size={28} className="mx-auto mb-3 text-[#d7fc83]"/><p className="text-sm font-bold">{view === 'playing' ? 'No matches in progress' : 'No sessions here yet'}</p><p className="mt-2 text-xs leading-relaxed text-white/50">{view === 'playing' ? 'Matches appear here when a host starts scoring.' : 'Create a session and invite your hitting partners to join.'}</p></div>:<div className="space-y-3">{listings.map(s=>{
             const going = rsvpsBySession.get(s.recordId)?.filter(rsvp => rsvp.data.status === 'going').length ?? 0
             const chosen=selected?.recordId===s.recordId
             return <button type="button" key={s.recordId} onClick={()=>chooseSession(s.recordId)} aria-pressed={chosen} className={`w-full rounded-2xl border p-4 text-left transition ${chosen?'border-[#d7fc83]/70 bg-[#d7fc83]/10':'border-white/10 bg-white/3 hover:border-white/25 hover:bg-white/7'}`}>

@@ -35,6 +35,7 @@ test('shared link and live readiness update across two accounts', async ({ users
     await alice.page.getByPlaceholder('Sunday doubles & rallies').fill(title)
     await alice.page.getByPlaceholder('Schenley Park').fill('Test court')
     await alice.page.getByPlaceholder('Pittsburgh, PA').fill('Test location')
+    await alice.page.getByLabel('Format', { exact: true }).selectOption('Singles')
     await alice.page.getByLabel('Target players').selectOption('3')
     // datetime-local expects wall-clock time, not UTC, so avoid toISOString().
     const d = new Date(Date.now() + 5 * 86400_000)
@@ -88,6 +89,23 @@ test('shared link and live readiness update across two accounts', async ({ users
     await draft.fill('Bring extra balls')
     await alice.page.getByRole('button', { name: 'Send message' }).click()
     await expect(bob.page.getByText('Bring extra balls')).toBeVisible({ timeout: 30_000 })
+
+    await expect(bob.page.getByRole('link', { name: 'Add to calendar' })).toHaveAttribute('download', 'rallycircle-session.ics')
+    const hostScoreboard = alice.page.getByRole('region', { name: 'Match scoreboard' })
+    const team1 = hostScoreboard.getByRole('group', { name: 'Side 1', exact: true }).getByLabel('Player 1')
+    const team2 = hostScoreboard.getByRole('group', { name: 'Side 2', exact: true }).getByLabel('Player 1')
+    await expect(team1.getByRole('option')).toHaveCount(3)
+    await team1.selectOption({ index: 1 })
+    await team2.selectOption({ index: 2 })
+    await hostScoreboard.getByRole('button', { name: 'Start match' }).click()
+    await hostScoreboard.getByRole('button', { name: 'Point to side 1' }).click()
+    const participantScoreboard = bob.page.getByRole('region', { name: 'Match scoreboard' })
+    await expect(participantScoreboard.getByRole('cell', { name: '15', exact: true })).toBeVisible()
+    await expect(participantScoreboard.getByRole('button')).toHaveCount(0)
+    await alice.page.getByRole('button', { name: 'Playing now' }).click()
+    await expect(alice.page.getByRole('button', { name: new RegExp(title) })).toBeVisible()
+    await alice.page.goto(invitation)
+    await expect(hostScoreboard.getByRole('cell', { name: '15', exact: true })).toBeVisible()
 
     const forgedIdentity = await invokeRallyCommand(bob.page, {
       operation: 'rsvp',

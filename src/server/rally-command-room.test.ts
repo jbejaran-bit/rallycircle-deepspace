@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { rsvpsSchema, sessionsSchema } from '../schemas/rally-schema.js'
 import type { RallyRSVP, RallySession } from '../lib/rally.js'
 import type { Env } from '../../worker.js'
+import { readMatchScore } from '../lib/rally-score.js'
 import { rallyCommandAction, RallyCommandRoom } from './rally-command-room.js'
 
 function createHarness() {
@@ -273,6 +274,31 @@ describe('RallyCircle server-side session and RSVP rules', () => {
     expect(Array.from(harness.rsvps.values()).find(r => r.data.sessionId === 'evening')?.data.status).toBe('going')
   })
 
+  it('authorizes score writes and ignores retries against the same revision', async () => {
+    const harness = createHarness()
+    const sessionId = 'singles'
+    harness.addSession(sessionId, 'host')
+    const session = harness.sessions.get(sessionId)!.data
+    session.format = 'Singles'
+    const start = { operation: 'startMatch', sessionId, teams: [['host'], ['player']] }
+    await expect(harness.command('player', { ...start, userId: 'host' })).resolves.toMatchObject({ success: false })
+    await expect(harness.command('host', start)).resolves.toMatchObject({ success: false })
+    for (const user of ['host', 'player']) {
+      await expect(harness.command(user, { operation: 'rsvp', sessionId, status: 'going' }))
+        .resolves.toMatchObject({ success: true })
+    }
+    await expect(harness.command('host', { ...start, teams: [['host'], ['host']] }))
+      .resolves.toMatchObject({ success: false })
+    await expect(harness.command('host', start)).resolves.toMatchObject({ success: true })
+    const point = { operation: 'scorePoint', sessionId, side: 0, revision: 0 }
+    await expect(harness.command('player', point)).resolves.toMatchObject({ success: false })
+    const results = await Promise.all([harness.command('host', point), harness.command('host', point)])
+    expect(results.map(result => result.success)).toEqual([true, false])
+    expect(readMatchScore(session.matchScore)).toMatchObject({ revision: 1, points: [1, 0] })
+    await expect(harness.command('host', { operation: 'cancel', sessionId })).resolves.toMatchObject({ success: true })
+    await expect(harness.command('host', { ...point, revision: 1 })).resolves.toMatchObject({ success: false })
+  })
+
   it('keeps direct writes closed while preserving own-RSVP withdrawal', () => {
     const rsvp = {
       data: { sessionId: 'session', userId: 'player', status: 'going' },
@@ -287,6 +313,8 @@ describe('RallyCircle server-side session and RSVP rules', () => {
     expect(canDelete(rsvpsSchema, 'anonymous', rsvp, 'player')).toBe(false)
     expect(checkFieldPermissions(sessionsSchema, 'member', { status: 'cancelled' })).toContain('status')
     expect(checkFieldPermissions(sessionsSchema, 'member', { status: 'open' })).toContain('status')
+    expect(checkFieldPermissions(sessionsSchema, 'member', { matchScore: '{}' })).toContain('matchScore')
+    expect(checkFieldPermissions(sessionsSchema, 'admin', { matchScore: '{}' })).toContain('matchScore')
     expect(canUpdate(sessionsSchema, 'member', {
       data: { hostId: 'host' },
       createdBy: 'host',

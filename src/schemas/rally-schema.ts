@@ -18,6 +18,7 @@ const sessionMemberWritableFields = [
 export const sessionsSchema: CollectionSchema = {
   name: 'sessions',
   columns: [
+    { name: 'matchScore', storage: 'text', interpretation: 'plain' },
     { name: 'format', storage: 'text', interpretation: { kind: 'select', options: [...SESSION_FORMATS] } },
     { name: 'title', storage: 'text', interpretation: 'plain', required: true },
     { name: 'court', storage: 'text', interpretation: 'plain', required: true },
