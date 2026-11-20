@@ -151,3 +151,21 @@ describe('GET /api/geocode', () => {
     expect(fetchFn).toHaveBeenCalledTimes(1)
   })
 })
+
+it('uses the shared geocoder room for production requests and preserves throttling', async () => {
+  const app = new Hono<AppContext>()
+  registerCourtDiscoveryRoutes(app, async () => ({ userId: 'player' }) as never)
+  const fetch = vi.fn(async (_request: Request) => Response.json({ error: 'Busy' }, {
+    status: 429,
+    headers: { 'Retry-After': '2' },
+  }))
+  const idFromName = vi.fn((name: string) => name)
+  const response = await app.request('https://rallycircle.example/api/geocode?q=Denver', {}, {
+    RALLY_COMMAND_ROOMS: { idFromName, get: () => ({ fetch }) },
+  })
+  expect(idFromName).toHaveBeenCalledWith('court-discovery:nominatim')
+  expect(new URL(fetch.mock.calls[0][0].url).pathname).toBe('/geocode')
+  expect(await fetch.mock.calls[0][0].text()).toBe('Denver')
+  expect(response.status).toBe(429)
+  expect(response.headers.get('Retry-After')).toBe('2')
+})

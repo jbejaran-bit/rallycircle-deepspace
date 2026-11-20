@@ -58,7 +58,10 @@ test('sign-in actions meet normal-text contrast in both themes', async ({ page }
   for (const theme of ['slate', 'paper']) {
     await page.locator('html').evaluate((html, value) => html.setAttribute('data-theme', value), theme)
     for (const button of await signInButtons.all()) {
-      const colors = await button.evaluate(element => {
+      const colors = await button.evaluate(async element => {
+        // Flush the theme update before waiting for its CSS transition.
+        element.getBoundingClientRect()
+        await Promise.allSettled(element.getAnimations().map(animation => animation.finished))
         const { color, backgroundColor } = getComputedStyle(element)
         return { color, backgroundColor }
       })

@@ -426,6 +426,7 @@ describe('RallyCircle server-side session and RSVP rules', () => {
     expect(canUpdate(rsvpsSchema, 'member', rsvp, 'player')).toBe(false)
     expect(canDelete(rsvpsSchema, 'member', rsvp, 'player')).toBe(false)
     expect(canCreate(waitlistsSchema, 'member')).toBe(false)
+    expect(canDelete(rsvpsSchema, 'admin', rsvp, 'player')).toBe(false)
     expect(canDelete(rsvpsSchema, 'member', rsvp, 'other-player')).toBe(false)
     expect(canDelete(rsvpsSchema, 'anonymous', rsvp, 'player')).toBe(false)
     expect(checkFieldPermissions(sessionsSchema, 'member', { status: 'cancelled' })).toContain('status')

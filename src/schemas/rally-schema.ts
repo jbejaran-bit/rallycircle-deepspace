@@ -56,7 +56,7 @@ export const rsvpsSchema: CollectionSchema = {
   permissions: {
     '*': { read: false, create: false, update: false, delete: false },
     member: { read: true, create: false, update: false, delete: false },
-    admin: { read: true, create: false, update: false, delete: true },
+    admin: { read: true, create: false, update: false, delete: false },
   },
 }
 
