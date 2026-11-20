@@ -77,6 +77,17 @@ export function resultStatus(score: MatchScore): 'in-progress' | 'proposed' | 'c
   return score.approvals.length > 0 ? 'confirmed' : 'proposed'
 }
 
+/**
+ * Only a finalized result may feed match statistics or a rating (Tracks C/D).
+ * Proposed, partially confirmed, in-progress and disputed results are never
+ * eligible — a dispute locks the result out of statistics until resolved.
+ * There is currently no statistics consumer; this predicate is the single
+ * gate every future consumer must use.
+ */
+export function isEligibleForStats(score: MatchScore): boolean {
+  return resultStatus(score) === 'final'
+}
+
 export function reviewResult(score: MatchScore, userId: string, decision: 'approve' | 'dispute'): MatchScore | null {
   const status = resultStatus(score)
   if (status !== 'proposed' && status !== 'confirmed') return null

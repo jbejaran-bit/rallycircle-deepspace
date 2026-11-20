@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { awardPoint, createMatchScore, displayPoints, isTiebreak, readMatchScore, resultStatus, reviewResult, type ScoreSide } from './rally-score'
+import { awardPoint, createMatchScore, displayPoints, isEligibleForStats, isTiebreak, readMatchScore, resultStatus, reviewResult, type ScoreSide } from './rally-score'
 
 const start = () => createMatchScore([['alice'], ['bob']])
 const points = (score: ReturnType<typeof start>, team: ScoreSide, count: number) => {
@@ -44,4 +44,19 @@ it('requires approval from every participant and locks disputed results', () => 
   expect(reviewResult(dispute, 'b', 'approve')).toBeNull()
   const final = ['b', 'c', 'd'].reduce((score, player) => reviewResult(score, player, 'approve')!, oneApproval)
   expect(resultStatus(final)).toBe('final')
+})
+
+it('A12: only a finalized result is eligible for statistics or ratings', () => {
+  const inProgress = points(start(), 0, 10)
+  expect(resultStatus(inProgress)).toBe('in-progress')
+  expect(isEligibleForStats(inProgress)).toBe(false)
+  const won = points(start(), 0, 48)
+  expect(isEligibleForStats(won)).toBe(false)
+  const oneApproval = reviewResult(won, 'alice', 'approve')!
+  expect(isEligibleForStats(oneApproval)).toBe(false)
+  const disputed = reviewResult(oneApproval, 'bob', 'dispute')!
+  expect(isEligibleForStats(disputed)).toBe(false)
+  const final = reviewResult(oneApproval, 'bob', 'approve')!
+  expect(resultStatus(final)).toBe('final')
+  expect(isEligibleForStats(final)).toBe(true)
 })
