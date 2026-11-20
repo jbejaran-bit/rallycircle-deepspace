@@ -62,9 +62,12 @@ export function registerActionRoutes(app: Hono<AppContext>, resolveAuth: Resolve
     // returns the handler argument, env secrets included, as the response.
     const action = lookupOwn(actions, name)
     if (!action) return c.json({ error: 'Action not found' }, 404)
-    const params = await c.req.json<Record<string, unknown>>()
+    const params: unknown = await c.req.json().catch(() => null)
+    if (typeof params !== 'object' || params === null || Array.isArray(params)) {
+      return c.json({ success: false, error: 'Action parameters must be a JSON object.' }, 400)
+    }
     const tools = createActionTools(c.env, auth.userId, callerJwt)
-    const result = await action({ userId: auth.userId, params, tools, env: c.env, callerJwt })
+    const result = await action({ userId: auth.userId, params: params as Record<string, unknown>, tools, env: c.env, callerJwt })
     return c.json(result as unknown as Record<string, unknown>)
   })
 }
