@@ -16,14 +16,14 @@ const sessionMemberWritableFields = [
 export const sessionsSchema: CollectionSchema = {
   name: 'sessions',
   columns: [
-    { name: 'title', storage: 'text', interpretation: 'plain', required: true },
-    { name: 'court', storage: 'text', interpretation: 'plain', required: true },
-    { name: 'location', storage: 'text', interpretation: 'plain', required: true },
+    { name: 'title', storage: 'text', interpretation: 'plain', required: true, maxLength: 72 },
+    { name: 'court', storage: 'text', interpretation: 'plain', required: true, maxLength: 100 },
+    { name: 'location', storage: 'text', interpretation: 'plain', required: true, maxLength: 100 },
     { name: 'startsAt', storage: 'text', interpretation: { kind: 'datetime' }, required: true },
     { name: 'durationMinutes', storage: 'number', interpretation: 'plain', required: true },
     { name: 'targetPlayers', storage: 'number', interpretation: 'plain', required: true },
     { name: 'level', storage: 'text', interpretation: { kind: 'select', options: ['All levels', 'Beginner', 'Intermediate', 'Advanced'] }, required: true },
-    { name: 'notes', storage: 'text', interpretation: 'plain', default: '' },
+    { name: 'notes', storage: 'text', interpretation: 'plain', default: '', maxLength: 400 },
     { name: 'hostId', storage: 'text', interpretation: 'plain', userBound: true, immutable: true },
     { name: 'chatChannelId', storage: 'text', interpretation: 'plain', default: '' },
     { name: 'status', storage: 'text', interpretation: { kind: 'select', options: ['open', 'cancelled'] }, default: 'open' },
