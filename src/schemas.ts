@@ -9,6 +9,7 @@ import {
 import { usersSchema } from './schemas/users-schema'
 import { settingsSchema } from './schemas/admin-schema'
 import { sessionsSchema, rsvpsSchema, waitlistsSchema } from './schemas/rally-schema'
+import { trackBcSchemas } from './schemas/profiles-schema'
 
 export const schemas: CollectionSchema[] = [
   usersSchema,
@@ -16,6 +17,7 @@ export const schemas: CollectionSchema[] = [
   sessionsSchema,
   rsvpsSchema,
   waitlistsSchema,
+  ...trackBcSchemas,
   CHANNELS_SCHEMA,
   MESSAGES_SCHEMA,
   REACTIONS_SCHEMA,
