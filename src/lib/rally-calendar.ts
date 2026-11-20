@@ -3,7 +3,7 @@ import type { RallySession } from './rally'
 const encoder = new TextEncoder()
 
 function text(value: string) {
-  return value.replace(/\\/g, '\\\\').replace(/\r\n|\r|\n/g, '\\n').replace(/[,;]/g, '\\$&')
+  return value.replace(/[\uD800-\uDFFF]/gu, '\uFFFD').replace(/\\/g, '\\\\').replace(/\r\n|\r|\n/g, '\\n').replace(/[,;]/g, '\\$&')
 }
 
 function timestamp(date: Date) {

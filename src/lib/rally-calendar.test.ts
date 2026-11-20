@@ -29,3 +29,9 @@ it('omits events for cancelled sessions and unusable times', () => {
   expect(buildCalendarEvent({ ...session, startsAt: 'invalid' }, invite)).toBeNull()
   expect(buildCalendarEvent({ ...session, durationMinutes: -1 }, invite)).toBeNull()
 })
+
+it('can be encoded as a download when a title contains an unpaired surrogate', () => {
+  const data = buildCalendarEvent({ ...session, title: 'Practice \uD800' }, invite, now)!
+  expect(() => encodeURIComponent(data)).not.toThrow()
+  expect(data).toContain('SUMMARY:Practice \uFFFD')
+})
