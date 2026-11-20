@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom'
 import { useAuth, useMessages, useMutations, usePresenceRoom, useQuery, useUserLookup, type Channel, type Message } from 'deepspace'
 import { CalendarDays, Check, ChevronRight, Clock3, Copy, MapPin, MessageCircle, Plus, Radio, Send, Share2, ShieldCheck, Sparkles, Users, X } from 'lucide-react'
 import { buildSessionUrl, formatSessionTime, summarizeAttendance, summarizeReadiness, validateSession, type Level, type RallyRSVP, type RallySession, type RSVPStatus } from '@/lib/rally'
+import { runRallyCommand } from '@/lib/rally-actions'
 
 const surface = 'rounded-3xl border border-white/10 bg-[#141b1a] shadow-[0_18px_60px_rgba(0,0,0,0.17)]'
 const field = 'w-full rounded-xl border border-white/15 bg-[#0e1513] px-3.5 py-3 text-sm text-white outline-none transition focus:border-[#d7fc83] focus:ring-1 focus:ring-[#d7fc83]'
@@ -69,12 +70,12 @@ function ReadinessPanel({ confirmed, target, status, error, cancelled }: {
 }
 
 function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; onCreated: (id: string) => void; selectedCourt?: Court }) {
-  const { createConfirmed, putConfirmed, ready } = useMutations<RallySession>('sessions')
+  const { createConfirmed, putConfirmed, ready } = useMutations<Omit<RallySession, 'hostId' | 'status'>>('sessions')
   const { createConfirmed: createChannel } = useMutations<Channel>('channels')
-  const { createConfirmed: createRSVP, ready: rsvpReady } = useMutations<RallyRSVP>('rsvps')
   const [open, setOpen] = useState(Boolean(selectedCourt))
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [hostRsvpError, setHostRsvpError] = useState<string | null>(null)
   const [title, setTitle] = useState('')
   const [court, setCourt] = useState(selectedCourt?.name ?? '')
   const [location, setLocation] = useState(selectedCourt?.area ?? '')
@@ -99,7 +100,7 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (pending || !ready || !rsvpReady || !userId) return
+    if (pending || !ready || !userId) return
     const timestamp = Date.parse(startsAt)
     const candidate = {
       title: title.trim(), court: court.trim(), location: location.trim(),
@@ -110,14 +111,16 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
     if (problem) { setError(problem); return }
     setPending(true)
     setError(null)
+    setHostRsvpError(null)
     try {
       // Persist the most important product path first. Chat setup is secondary.
-      const id = await createConfirmed({ ...candidate, hostId: userId, chatChannelId: '', status: 'open' })
+      const id = await createConfirmed({ ...candidate, chatChannelId: '' })
       onCreated(id)
       try {
-        await createRSVP({ sessionId: id, userId, status: 'going' })
-      } catch (e) {
-        console.warn('Session created but host RSVP did not persist', e)
+        await runRallyCommand({ operation: 'rsvp', sessionId: id, status: 'going' })
+      } catch (cause) {
+        const detail = cause instanceof Error ? ` ${cause.message}` : ''
+        setHostRsvpError(`Session created, but your RSVP could not be saved.${detail}`)
       }
       try {
         const channelId = await createChannel({
@@ -146,6 +149,7 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
       <button type="button" className={`${accent} inline-flex items-center gap-2`} onClick={() => setOpen(true)}>
         <Plus size={17} strokeWidth={2.6} /> New session
       </button>
+      {hostRsvpError && <ErrorMessage message={hostRsvpError}/>}
       {open && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) setOpen(false) }}>
         <section role="dialog" aria-modal="true" aria-labelledby="new-session-title" className="w-full max-w-xl overflow-y-auto rounded-3xl border border-white/15 bg-[#17201c] p-6 text-white shadow-2xl max-h-[90vh] sm:p-8">
           <div className="mb-6 flex items-start justify-between gap-4">
@@ -168,7 +172,7 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
             <label className="block text-xs font-medium text-white/75">Notes (optional)<textarea maxLength={400} rows={3} className={`${field} mt-1.5 resize-none`} placeholder="Bring fresh balls. We'll warm up for 15 minutes." value={notes} onChange={e=>setNotes(e.target.value)}/></label>
             <div className="rounded-xl bg-white/5 px-3 py-2 text-xs text-white/60">Target players is a planning goal, not a hard attendance cap. Session details and chat are visible to signed-in members.</div>
             <ErrorMessage message={error}/>
-            <button type="submit" disabled={pending || !ready || !rsvpReady} className={`${accent} w-full`}>{pending ? 'Creating…' : 'Publish session'}</button>
+            <button type="submit" disabled={pending || !ready} className={`${accent} w-full`}>{pending ? 'Creating…' : 'Publish session'}</button>
           </form>
         </section>
       </div>}
@@ -230,8 +234,7 @@ function SessionDetail({ session, sessionId, userId, allRsvps, rsvpStatus, rsvpE
   rsvpError?: string
 }) {
   const { getName } = useUserLookup()
-  const rsvpMutations = useMutations<RallyRSVP>('rsvps')
-  const sessionMutations = useMutations<RallySession>('sessions')
+  const { removeConfirmed, ready: rsvpReady } = useMutations<RallyRSVP>('rsvps')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
@@ -239,7 +242,7 @@ function SessionDetail({ session, sessionId, userId, allRsvps, rsvpStatus, rsvpE
   const myRSVP = people.find(r => r.data.userId === userId)
   const {going, maybe} = summarizeAttendance(people.map(r=>r.data), sessionId)
   const cancelled = session.status === 'cancelled'
-  const canChangeRsvp = rsvpStatus === 'ready' && rsvpMutations.ready && !busy && !cancelled
+  const canChangeRsvp = rsvpStatus === 'ready' && rsvpReady && !busy && !cancelled
 
   async function shareSession() {
     try {
@@ -254,16 +257,15 @@ function SessionDetail({ session, sessionId, userId, allRsvps, rsvpStatus, rsvpE
     if (!canChangeRsvp) return
     setBusy(true); setError(null)
     try {
-      if (!status && myRSVP) await rsvpMutations.removeConfirmed(myRSVP.recordId)
-      else if (status && myRSVP) await rsvpMutations.putConfirmed(myRSVP.recordId,{status})
-      else if (status) await rsvpMutations.createConfirmed({sessionId, userId, status})
+      if (!status && myRSVP) await removeConfirmed(myRSVP.recordId)
+      else if (status) await runRallyCommand({ operation: 'rsvp', sessionId, status })
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'RSVP did not save.') }
     finally { setBusy(false) }
   }
   async function cancelSession() {
-    if (!sessionMutations.ready || busy || !window.confirm('Cancel this session for everyone?')) return
+    if (busy || !window.confirm('Cancel this session for everyone?')) return
     setBusy(true); setError(null)
-    try { await sessionMutations.putConfirmed(sessionId,{status:'cancelled'}) }
+    try { await runRallyCommand({ operation: 'cancel', sessionId }) }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not cancel.') }
     finally { setBusy(false) }
   }
@@ -297,7 +299,7 @@ function SessionDetail({ session, sessionId, userId, allRsvps, rsvpStatus, rsvpE
         <button type="button" disabled={!canChangeRsvp} onClick={()=>void respond('maybe')} className="rounded-xl border border-white/15 px-4 py-3 text-sm font-semibold text-white/85 hover:bg-white/10 disabled:opacity-50">{myRSVP?.data.status==='maybe'?'Maybe ✓':'Maybe'}</button>
         {myRSVP&&<button type="button" disabled={!canChangeRsvp} onClick={()=>void respond(null)} className="rounded-xl px-3 py-3 text-sm text-white/50 hover:bg-white/10 hover:text-white">Withdraw</button>}
       </div>}
-      {!cancelled&&session.hostId===userId&&<button type="button" disabled={!sessionMutations.ready||busy} onClick={()=>void cancelSession()} className="text-xs text-rose-300/75 underline underline-offset-4 hover:text-rose-200">Cancel my session</button>}
+      {!cancelled&&session.hostId===userId&&<button type="button" disabled={busy} onClick={()=>void cancelSession()} className="text-xs text-rose-300/75 underline underline-offset-4 hover:text-rose-200">Cancel my session</button>}
       <ErrorMessage message={error}/>
       <div className="h-px bg-white/10"/>
       {session.chatChannelId ? <ChatPanel channelId={session.chatChannelId} sessionId={sessionId} userId={userId}/> : <div className="rounded-2xl bg-white/5 p-5 text-sm text-white/60"><MessageCircle className="mb-2" size={20}/>Chat is not available for this session. RSVPs still work.</div>}
