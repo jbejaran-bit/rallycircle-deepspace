@@ -21,7 +21,7 @@ npx playwright install chromium
 npm run test:public
 ```
 
-The public config starts its own Vite server and binds to loopback. It does not require a DeepSpace login or wait on the auth worker. It checks public landing behavior, signed-out route protection, and mobile navigation. It starts with fresh browser contexts and writes failure traces to `test-results/public`. In cloud environments with system Chromium and a restricted home directory, use the cloud setup below instead of installing a second browser.
+The public config starts its own Vite server and binds to loopback. It does not require a DeepSpace login or wait on the auth worker. It checks public landing behavior, signed-out route protection, and mobile navigation. It starts with fresh browser contexts and writes failure traces to `test-results-public`. In cloud environments with system Chromium and a restricted home directory, use the cloud setup below instead of installing a second browser.
 
 ```sh
 export XDG_CONFIG_HOME=/workspace/.rallycircle-config
