@@ -8,7 +8,7 @@
  * email is the credential the session was opened with.
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { AuthOverlay, useAuthProfileReady, signOut } from 'deepspace'
 import { ChevronDown, LogOut, Menu, X } from 'lucide-react'
@@ -32,6 +32,7 @@ export default function Navigation() {
   const { isLoaded, isSignedIn, user, userLoading } = useAuthProfileReady({ requireUser: true })
   const location = useLocation()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const menuButton = useRef<HTMLButtonElement>(null)
   const [showAuthModal, setShowAuthModal] = useState(false)
 
   const profileReady = !isSignedIn || (!userLoading && !!user)
@@ -51,15 +52,15 @@ export default function Navigation() {
   })
 
   const navLink = (item: (typeof nav)[number]) => {
-    const active = location.pathname.startsWith(item.path)
+    const active = location.pathname === item.path
     return (
       <Link
         key={item.path}
         to={item.path}
         aria-current={active ? 'page' : undefined}
         className={cn(
-          'px-3 py-1.5 text-sm',
-          active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+          'inline-flex min-h-11 items-center rounded-md px-3 py-1.5 text-sm focus-visible:outline-2',
+          active ? 'bg-muted font-semibold text-foreground' : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
         )}
       >
         {item.label}
@@ -69,13 +70,18 @@ export default function Navigation() {
 
   return (
     <>
-      <nav data-testid="app-navigation" className="border-b border-border bg-background">
-        <div className="mx-auto flex h-12 max-w-7xl items-center gap-4 px-4">
-          <Link to="/home" className="text-sm font-semibold text-foreground">
+      <nav aria-label="Application navigation" data-testid="app-navigation" className="border-b border-border bg-background" onKeyDown={event => {
+        if (event.key === 'Escape' && mobileMenuOpen) {
+          setMobileMenuOpen(false)
+          menuButton.current?.focus()
+        }
+      }}>
+        <div className="mx-auto flex min-h-14 max-w-7xl items-center gap-2 px-4 sm:gap-4">
+          <Link to={isSignedIn ? "/dashboard" : "/"} className="shrink-0 text-base font-extrabold tracking-tight text-foreground">
             {APP_NAME}
           </Link>
 
-          <div className="hidden items-center md:flex">{visibleNav.map(navLink)}</div>
+          <div className="hidden items-center lg:flex">{visibleNav.map(navLink)}</div>
 
           <div className="flex-1" />
 
@@ -136,27 +142,27 @@ export default function Navigation() {
             <button
               data-testid="nav-sign-in-button"
               onClick={() => setShowAuthModal(true)}
-              className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90"
+              className="min-h-11 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90"
             >
               Sign in
             </button>
           )}
 
           <button
-            className="inline-flex h-8 w-8 items-center justify-center text-muted-foreground hover:text-foreground md:hidden"
+            ref={menuButton}
+            className="inline-flex h-11 w-11 shrink-0 rounded-md focus-visible:outline-2 items-center justify-center text-muted-foreground hover:text-foreground lg:hidden"
             onClick={() => setMobileMenuOpen((prev) => !prev)}
             aria-label="Toggle menu"
             aria-expanded={mobileMenuOpen}
+            aria-controls="mobile-app-links"
           >
             {mobileMenuOpen ? <X className="h-4 w-4" aria-hidden /> : <Menu className="h-4 w-4" aria-hidden />}
           </button>
         </div>
 
-        {mobileMenuOpen && (
-          <div className="flex flex-col border-t border-border px-2 py-2 md:hidden">
-            {visibleNav.map(navLink)}
-          </div>
-        )}
+        <div id="mobile-app-links" hidden={!mobileMenuOpen} className="border-t border-border px-2 py-2 lg:hidden">
+          <div className="flex flex-col">{visibleNav.map(navLink)}</div>
+        </div>
       </nav>
 
       {showAuthModal && <AuthOverlay onClose={() => setShowAuthModal(false)} />}

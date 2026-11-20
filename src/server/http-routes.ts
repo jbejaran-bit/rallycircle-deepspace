@@ -67,6 +67,22 @@ function reassertAppIdentity(headers: Headers, env: Env): void {
 }
 
 const INVITE_COOKIE = 'rallycircle_invite'
+const RETURN_COOKIE = 'rallycircle_return'
+const returnPaths = new Set(['/games', '/courts', '/dashboard', '/settings'])
+
+function safeReturnPath(url: URL | null, origin: string): string | null {
+  if (url?.origin !== origin) return null
+  if (returnPaths.has(url.pathname)) return url.pathname
+  if (url.pathname !== '/rallies') return null
+  const params = new URLSearchParams()
+  if (url.searchParams.get('create') === '1') params.set('create', '1')
+  for (const key of ['court', 'courtName', 'courtArea']) {
+    const value = url.searchParams.get(key)?.trim()
+    if (value && value.length <= 100) params.set(key, value)
+  }
+  return params.size ? `/rallies?${params}` : null
+}
+
 const inviteCookieOptions = {
   path: '/api/auth/oauth-complete',
   httpOnly: true,
@@ -112,6 +128,13 @@ export function registerAuthAndIntegrationRoutes(app: Hono<AppContext>): void {
       deleteCookie(c, INVITE_COOKIE, inviteCookieOptions)
     }
 
+    const destination = safeReturnPath(referer, appOrigin)
+    if (destination) {
+      setCookie(c, RETURN_COOKIE, destination, { ...inviteCookieOptions, maxAge: 600 })
+    } else {
+      deleteCookie(c, RETURN_COOKIE, inviteCookieOptions)
+    }
+
     return c.redirect(
       `${authOrigin}/login/social?provider=${encodeURIComponent(provider)}&returnTo=${encodeURIComponent(appOrigin)}`,
     )
@@ -125,9 +148,13 @@ export function registerAuthAndIntegrationRoutes(app: Hono<AppContext>): void {
     const appOrigin = new URL(c.req.url).origin
     const sessionId = getCookie(c, INVITE_COOKIE)
     deleteCookie(c, INVITE_COOKIE, inviteCookieOptions)
+    const returnPath = getCookie(c, RETURN_COOKIE)
+    deleteCookie(c, RETURN_COOKIE, inviteCookieOptions)
+    const destination = returnPath && returnPath.length <= 1500
+      ? safeReturnPath(URL.parse(returnPath, appOrigin), appOrigin) : null
     const appHome = sessionId && sessionId.length <= 128
       ? buildSessionUrl(appOrigin, sessionId)
-      : `${appOrigin}/rallies`
+      : `${appOrigin}${destination ?? '/rallies'}`
 
     if (!code) return c.redirect(appHome)
 
