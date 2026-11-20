@@ -5,6 +5,7 @@ import type { Env } from '../../worker.js'
 type RallyCommand =
   | { operation: 'rsvp'; sessionId: string; status: RSVPStatus; userId: string }
   | { operation: 'cancel'; sessionId: string; userId: string }
+  | { operation: 'withdraw'; sessionId: string; userId: string }
 
 type RallyCommandResult = ActionResult<{ recordId: string }>
 type RecordTool = <T>(tool: string, params: Record<string, unknown>, userId: string) => Promise<ActionResult<T>>
@@ -19,7 +20,7 @@ function parseCommand(value: unknown): RallyCommand | null {
     return null
   }
 
-  if (value.operation === 'cancel') {
+  if (value.operation === 'cancel' || value.operation === 'withdraw') {
     return { operation: value.operation, sessionId: value.sessionId, userId: value.userId }
   }
   if (value.operation === 'rsvp' && (value.status === 'going' || value.status === 'maybe')) {
@@ -41,6 +42,37 @@ async function applyCommand(command: RallyCommand, tool: RecordTool): Promise<Ra
   if (!sessionResult.success) return failure('This session is unavailable.')
 
   const session = sessionResult.data.record.data
+  if (command.operation === 'withdraw') {
+    // Withdrawing is harmless cleanup, so it is allowed on a cancelled
+    // session too. It is scoped to the caller's own RSVP row only: the
+    // query filters on sessionId + userId and only that recordId is
+    // deleted — never a deleteWhere. Withdrawing twice is a success, not
+    // an error, so a retried or double-clicked withdraw cannot surface a
+    // spurious "Record not found".
+    const existingResult = await tool<QueryActionData<RallyRSVP>>(
+      'records.query',
+      {
+        collection: 'rsvps',
+        where: { sessionId: command.sessionId, userId: command.userId },
+        limit: 1,
+      },
+      command.userId,
+    )
+    if (!existingResult.success) return failure('Your RSVP could not be checked.')
+
+    const existing = existingResult.data.records[0]
+    if (!existing) return { success: true, data: { recordId: command.sessionId } }
+
+    const result = await tool<MutateActionData>(
+      'records.delete',
+      { collection: 'rsvps', recordId: existing.recordId },
+      command.userId,
+    )
+    return result.success
+      ? { success: true, data: { recordId: existing.recordId } }
+      : failure('Your RSVP could not be withdrawn.')
+  }
+
   if (command.operation === 'cancel') {
     if (session.hostId !== command.userId) return failure('Only the session host can cancel it.')
     if (session.status === 'cancelled') return { success: true, data: { recordId: command.sessionId } }
@@ -87,6 +119,11 @@ async function applyCommand(command: RallyCommand, tool: RecordTool): Promise<Ra
     : failure('Your RSVP could not be saved.')
 }
 
+// SECURITY: this room trusts the userId in the request body. It must only
+// ever be called by rallyCommandAction, which rebuilds the command from the
+// verified Bearer identity and ignores any userId in the request params.
+// Do not expose this Durable Object on a public route: a direct caller
+// could cancel or withdraw as any user. (Review finding N-03.)
 export class RallyCommandRoom {
   private queue: Promise<void> = Promise.resolve()
 
@@ -160,14 +197,24 @@ export const rallyCommandAction: ActionHandler<Env> = async ({ userId, params, t
   const room = env.RALLY_COMMAND_ROOMS.get(
     env.RALLY_COMMAND_ROOMS.idFromName(`rally:${env.DEEPSPACE_APP_ID}:${command.sessionId}`),
   )
-  const response = await room.fetch(
-    new Request('https://internal/rally-command', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(command),
-    }),
-  )
-  const result: unknown = await response.json()
+  let response: Response
+  try {
+    response = await room.fetch(
+      new Request('https://internal/rally-command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(command),
+      }),
+    )
+  } catch {
+    return failure('The session update could not reach the server. Try again.')
+  }
+  let result: unknown
+  try {
+    result = await response.json()
+  } catch {
+    return failure('The session update returned an unreadable response. Try again.')
+  }
   if (
     isRecord(result) &&
     ((result.success === true && isRecord(result.data) && typeof result.data.recordId === 'string') ||

@@ -4,6 +4,7 @@ import type { RSVPStatus } from './rally'
 type RallyCommand =
   | { operation: 'rsvp'; sessionId: string; status: RSVPStatus }
   | { operation: 'cancel'; sessionId: string }
+  | { operation: 'withdraw'; sessionId: string }
 
 interface RallyCommandResponse {
   success: boolean
