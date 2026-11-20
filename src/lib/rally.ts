@@ -19,6 +19,8 @@ export interface RallySession {
   hostId: string
   chatChannelId: string
   status: 'open' | 'cancelled'
+  /** '' for public sessions; the group id for a member-only group session. */
+  groupId?: string
 }
 
 export interface RallyWaitlist {

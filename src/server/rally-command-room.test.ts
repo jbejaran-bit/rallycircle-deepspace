@@ -11,6 +11,7 @@ function createHarness() {
   const sessions = new Map<string, { recordId: string; createdBy: string; data: RallySession }>()
   const rsvps = new Map<string, { recordId: string; createdBy: string; data: RallyRSVP }>()
   const waitlists = new Map<string, { recordId: string; data: RallyWaitlist }>()
+  const groupMembers = new Map<string, { recordId: string; data: { groupId: string; userId: string; role: string } }>()
   let nextRecordId = 0
   let failNextQueueDelete = false
 
@@ -34,6 +35,14 @@ function createHarness() {
         const records = Array.from(rsvps.values()).filter(record =>
           Object.entries(where).every(([key, value]) => record.data[key as keyof RallyRSVP] === value),
         )
+        return Response.json({ success: true, data: { records, count: records.length } })
+      }
+
+      if (tool === 'records.query' && params.collection === 'groupMembers') {
+        const where = params.where as { groupId: string; userId: string }
+        const records = [...groupMembers.values()].filter(record =>
+          record.data.groupId === where.groupId && record.data.userId === where.userId,
+        ).slice(0, Number(params.limit ?? 1))
         return Response.json({ success: true, data: { records, count: records.length } })
       }
 
@@ -113,7 +122,7 @@ function createHarness() {
   }
   const actionEnv = { ...env, RALLY_COMMAND_ROOMS: commandNamespace } as unknown as Env
 
-  function addSession(recordId: string, hostId: string, status: RallySession['status'] = 'open') {
+  function addSession(recordId: string, hostId: string, status: RallySession['status'] = 'open', groupId = '') {
     sessions.set(recordId, {
       recordId,
       createdBy: hostId,
@@ -129,8 +138,15 @@ function createHarness() {
         hostId,
         chatChannelId: '',
         status,
+        groupId,
       },
     })
+  }
+
+  function addGroupMember(groupId: string, userId: string, role = 'member') {
+    const recordId = `member-${++nextRecordId}`
+    groupMembers.set(recordId, { recordId, data: { groupId, userId, role } })
+    return recordId
   }
 
   async function command(userId: string, params: Record<string, unknown>) {
@@ -154,7 +170,7 @@ function createHarness() {
   }
 
   return {
-    addSession, command, rsvps, sessions, waitlists,
+    addSession, addGroupMember, command, rsvps, sessions, waitlists, groupMembers,
     interruptQueueCleanup: () => { failNextQueueDelete = true },
   }
 }
@@ -415,6 +431,29 @@ describe('RallyCircle server-side session and RSVP rules', () => {
     expect(harness.waitlists.size).toBe(0)
   })
 
+  it('restricts group sessions to members while letting a removed member withdraw', async () => {
+    const harness = createHarness()
+    const sessionId = 'group-session'
+    harness.addSession(sessionId, 'host', 'open', 'group-1')
+    const memberId = harness.addGroupMember('group-1', 'member')
+
+    await expect(harness.command('stranger', { operation: 'rsvp', sessionId, status: 'going' }))
+      .resolves.toMatchObject({ success: false, error: 'Only group members can respond to this session.' })
+    await expect(harness.command('stranger', { operation: 'joinWaitlist', sessionId }))
+      .resolves.toMatchObject({ success: false, error: 'Only group members can respond to this session.' })
+    await expect(harness.command('member', { operation: 'rsvp', sessionId, status: 'going' }))
+      .resolves.toMatchObject({ success: true })
+    await expect(harness.command('host', { operation: 'rsvp', sessionId, status: 'going' }))
+      .resolves.toMatchObject({ success: true })
+
+    // Membership revoked: the member can still withdraw, but cannot rejoin.
+    harness.groupMembers.delete(memberId)
+    await expect(harness.command('member', { operation: 'withdraw', sessionId }))
+      .resolves.toMatchObject({ success: true })
+    await expect(harness.command('member', { operation: 'rsvp', sessionId, status: 'going' }))
+      .resolves.toMatchObject({ success: false, error: 'Only group members can respond to this session.' })
+  })
+
   it('requires the serialized command path for RSVP withdrawal', () => {
     const rsvp = {
       data: { sessionId: 'session', userId: 'player', status: 'going' },
@@ -433,6 +472,11 @@ describe('RallyCircle server-side session and RSVP rules', () => {
     expect(checkFieldPermissions(sessionsSchema, 'member', { status: 'open' })).toContain('status')
     expect(checkFieldPermissions(sessionsSchema, 'member', { matchScore: '{}' })).toContain('matchScore')
     expect(checkFieldPermissions(sessionsSchema, 'admin', { matchScore: '{}' })).toContain('matchScore')
+    // groupId is never client-writable: only the `groups` action may scope
+    // a session to a group, so a client cannot claim a session is a group
+    // session (or un-scope a real one).
+    expect(checkFieldPermissions(sessionsSchema, 'member', { groupId: 'group-1' })).toContain('groupId')
+    expect(checkFieldPermissions(sessionsSchema, 'admin', { groupId: 'group-1' })).toContain('groupId')
     expect(canUpdate(sessionsSchema, 'member', {
       data: { hostId: 'host' },
       createdBy: 'host',

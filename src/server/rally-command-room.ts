@@ -1,5 +1,6 @@
 import type { ActionHandler, ActionResult, GetActionData, MutateActionData, QueryActionData } from 'deepspace/worker'
 import { validCapacity, type RallyRSVP, type RallySession, type RallyWaitlist, type RSVPStatus } from '../lib/rally.js'
+import type { GroupMember } from '../lib/groups.js'
 import { awardPoint, createMatchScore, readMatchScore, reviewResult, scoreEditSchema } from '../lib/rally-score.js'
 import type { z } from 'zod'
 import { fetchGeocodedPlaces, GEOCODER_MIN_GAP_MS } from './court-discovery.js'
@@ -78,6 +79,21 @@ async function applyAttendance(command: AttendanceCommand, session: RallySession
   const { sessionId, userId, operation } = command
   if (session.status !== 'open' && operation !== 'leaveWaitlist' && operation !== 'withdraw') {
     return failure('This session is not open for responses.')
+  }
+  // Group sessions are member-only. The host counts as a member; everyone
+  // else must hold a groupMembers row. `leaveWaitlist`/`withdraw` stay
+  // open so a removed member can always clean up their own attendance.
+  if (session.groupId && operation !== 'leaveWaitlist' && operation !== 'withdraw') {
+    if (session.hostId !== userId) {
+      const member = await tool<QueryActionData<GroupMember>>('records.query', {
+        collection: 'groupMembers',
+        where: { groupId: session.groupId, userId },
+        limit: 1,
+      }, userId)
+      if (!member.success || member.data.records.length === 0) {
+        return failure('Only group members can respond to this session.')
+      }
+    }
   }
   const owns = { sessionId, userId }
   const capacity = session.capacity

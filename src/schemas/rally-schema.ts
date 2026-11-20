@@ -32,6 +32,11 @@ export const sessionsSchema: CollectionSchema = {
     { name: 'notes', storage: 'text', interpretation: 'plain', default: '', maxLength: 400 },
     { name: 'hostId', storage: 'text', interpretation: 'plain', userBound: true, immutable: true },
     { name: 'chatChannelId', storage: 'text', interpretation: 'plain', default: '' },
+    // Set only by the `groups` server action when a member creates a group
+    // session. Deliberately NOT in `sessionMemberWritableFields`: a client
+    // must not be able to claim an arbitrary session belongs to a group.
+    // The command room refuses RSVPs to a group session from non-members.
+    { name: 'groupId', storage: 'text', interpretation: 'plain', default: '' },
     { name: 'status', storage: 'text', interpretation: { kind: 'select', options: ['open', 'cancelled'] }, default: 'open' },
   ],
   ownerField: 'hostId',
