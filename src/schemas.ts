@@ -8,7 +8,16 @@ import {
 } from 'deepspace/schema'
 import { usersSchema } from './schemas/users-schema'
 import { settingsSchema } from './schemas/admin-schema'
-import { sessionsSchema, rsvpsSchema, waitlistsSchema } from './schemas/rally-schema'
+import {
+  sessionsSchema,
+  rsvpsSchema,
+  waitlistsSchema,
+  pollsSchema,
+  pollVotesSchema,
+  notificationsSchema,
+  notificationPreferencesSchema,
+  recurringSeriesSchema,
+} from './schemas/rally-schema'
 
 export const schemas: CollectionSchema[] = [
   usersSchema,
@@ -16,6 +25,11 @@ export const schemas: CollectionSchema[] = [
   sessionsSchema,
   rsvpsSchema,
   waitlistsSchema,
+  pollsSchema,
+  pollVotesSchema,
+  notificationsSchema,
+  notificationPreferencesSchema,
+  recurringSeriesSchema,
   CHANNELS_SCHEMA,
   MESSAGES_SCHEMA,
   REACTIONS_SCHEMA,
