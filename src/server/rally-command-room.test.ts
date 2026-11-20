@@ -11,8 +11,11 @@ function createHarness() {
   const sessions = new Map<string, { recordId: string; createdBy: string; data: RallySession }>()
   const rsvps = new Map<string, { recordId: string; createdBy: string; data: RallyRSVP }>()
   const waitlists = new Map<string, { recordId: string; data: RallyWaitlist }>()
+  const playerRatings = new Map<string, { recordId: string; data: Record<string, unknown> }>()
+  const ratingChanges = new Map<string, { recordId: string; data: Record<string, unknown> }>()
   let nextRecordId = 0
   let failNextQueueDelete = false
+  let failRatingWrites = false
 
   const recordRoom = {
     async fetch(request: Request) {
@@ -77,10 +80,33 @@ function createHarness() {
         return Response.json({ success: true, data: { recordId } })
       }
 
+      if (tool === 'records.query' && (params.collection === 'playerRatings' || params.collection === 'ratingChanges')) {
+        const rows = params.collection === 'playerRatings' ? playerRatings : ratingChanges
+        const where = params.where as Record<string, unknown>
+        const records = Array.from(rows.values()).filter(record =>
+          Object.entries(where).every(([key, value]) => record.data[key] === value),
+        ).slice(0, Number(params.limit ?? 100))
+        return Response.json({ success: true, data: { records, count: records.length } })
+      }
+
+      if (tool === 'records.create' && (params.collection === 'playerRatings' || params.collection === 'ratingChanges')) {
+        if (failRatingWrites) return Response.json({ success: false, error: 'Rating storage unavailable' })
+        const rows = params.collection === 'playerRatings' ? playerRatings : ratingChanges
+        const recordId = `rating-${++nextRecordId}`
+        rows.set(recordId, { recordId, data: params.data as Record<string, unknown> })
+        return Response.json({ success: true, data: { recordId } })
+      }
+
       if (tool === 'records.update') {
         const collection = params.collection
         const recordId = String(params.recordId)
         const patch = params.data as Record<string, unknown>
+        if (collection === 'playerRatings') {
+          const record = playerRatings.get(recordId)
+          if (!record) return Response.json({ success: false, error: 'Record not found' })
+          Object.assign(record.data, patch)
+          return Response.json({ success: true, data: { recordId } })
+        }
         if (collection === 'sessions') {
           const record = sessions.get(recordId)
           if (!record) return Response.json({ success: false, error: 'Record not found' })
@@ -154,8 +180,9 @@ function createHarness() {
   }
 
   return {
-    addSession, command, rsvps, sessions, waitlists,
+    addSession, command, rsvps, sessions, waitlists, playerRatings, ratingChanges,
     interruptQueueCleanup: () => { failNextQueueDelete = true },
+    failRatingWrites: () => { failRatingWrites = true },
   }
 }
 
@@ -346,6 +373,53 @@ describe('RallyCircle server-side session and RSVP rules', () => {
     expect(approvals.map(result => result.success)).toEqual([true, true])
     expect(resultStatus(readMatchScore(session.matchScore)!)).toBe('final')
     await expect(harness.command('alice', { ...vote, decision: 'dispute' })).resolves.toMatchObject({ success: false })
+  })
+
+  it('applies ratings exactly once when a result is finalized', async () => {
+    const harness = createHarness()
+    const sessionId = 'rated'
+    harness.addSession(sessionId, 'organizer')
+    const session = harness.sessions.get(sessionId)!.data
+    session.format = 'Singles'
+    let score = createMatchScore([['alice'], ['bob']])
+    for (let point = 0; point < 48; point++) score = awardPoint(score, 0)
+    session.matchScore = JSON.stringify(score)
+    const vote = { operation: 'reviewResult', sessionId, decision: 'approve', userId: 'alice' }
+    const approvals = await Promise.all(['alice', 'bob'].map(user => harness.command(user, vote)))
+    expect(approvals.map(result => result.success)).toEqual([true, true])
+    expect(resultStatus(readMatchScore(session.matchScore)!)).toBe('final')
+    const changes = [...harness.ratingChanges.values()]
+      .map(row => [row.data.playerId, row.data.before, row.data.after, row.data.delta])
+      .sort()
+    expect(changes).toEqual([
+      ['alice', 1200, 1220, 20],
+      ['bob', 1200, 1180, -20],
+    ])
+    const ratings = [...harness.playerRatings.values()]
+      .map(row => [row.data.playerId, row.data.rating, row.data.provisional, row.data.status])
+      .sort()
+    expect(ratings).toEqual([
+      ['alice', 1220, 1, 'experimental'],
+      ['bob', 1180, 1, 'experimental'],
+    ])
+  })
+
+  it('a rating write failure never fails the finalizing review', async () => {
+    const harness = createHarness()
+    const sessionId = 'rating-down'
+    harness.addSession(sessionId, 'organizer')
+    const session = harness.sessions.get(sessionId)!.data
+    session.format = 'Singles'
+    let score = createMatchScore([['alice'], ['bob']])
+    for (let point = 0; point < 48; point++) score = awardPoint(score, 0)
+    session.matchScore = JSON.stringify(score)
+    harness.failRatingWrites()
+    const vote = { operation: 'reviewResult', sessionId, decision: 'approve', userId: 'alice' }
+    const approvals = await Promise.all(['alice', 'bob'].map(user => harness.command(user, vote)))
+    expect(approvals.map(result => result.success)).toEqual([true, true])
+    expect(resultStatus(readMatchScore(session.matchScore)!)).toBe('final')
+    expect(harness.ratingChanges.size).toBe(0)
+    expect(harness.playerRatings.size).toBe(0)
   })
 
   it('serializes confirmations for the last spot and permits a join after withdrawal', async () => {

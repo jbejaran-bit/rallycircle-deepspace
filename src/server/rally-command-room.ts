@@ -1,6 +1,7 @@
 import type { ActionHandler, ActionResult, GetActionData, MutateActionData, QueryActionData } from 'deepspace/worker'
 import { validCapacity, type RallyRSVP, type RallySession, type RallyWaitlist, type RSVPStatus } from '../lib/rally.js'
-import { awardPoint, createMatchScore, readMatchScore, reviewResult, scoreEditSchema } from '../lib/rally-score.js'
+import { awardPoint, createMatchScore, readMatchScore, resultStatus, reviewResult, scoreEditSchema, type MatchScore } from '../lib/rally-score.js'
+import { applyFinalizedResultToStore, finalizedResultsFromSessions } from './rating-records.js'
 import type { z } from 'zod'
 import { fetchGeocodedPlaces, GEOCODER_MIN_GAP_MS } from './court-discovery.js'
 import type { Env } from '../../worker.js'
@@ -170,6 +171,33 @@ async function applyAttendance(command: AttendanceCommand, session: RallySession
   return success(result.data.recordId)
 }
 
+/**
+ * Best-effort rating update for a newly finalized result. Ratings are
+ * derived state; the finalized result is the source of truth, so a rating
+ * failure must never fail the review itself. Runs inside the same
+ * serialized command-room invocation, so two concurrent finalizing reviews
+ * cannot double-apply (the idempotency check in the applier is the
+ * backstop). A failed apply is retried by re-applying the same resultId.
+ * Ratings are experimental (docs/RATING_SPEC.md) and never authoritative.
+ */
+async function applyRatingsForFinalResult(
+  command: ScoreEdit,
+  session: RallySession,
+  next: MatchScore,
+  tool: RecordTool,
+): Promise<void> {
+  try {
+    const [finalized] = finalizedResultsFromSessions([
+      { recordId: command.sessionId, data: { ...session, matchScore: JSON.stringify(next) } },
+    ])
+    if (!finalized) return
+    const outcome = await applyFinalizedResultToStore(finalized, tool, command.userId)
+    if (outcome.error) console.error('Rating update failed', finalized.resultId, outcome.error)
+  } catch (error) {
+    console.error('Rating update failed', command.sessionId, error)
+  }
+}
+
 async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: RecordTool): Promise<RallyCommandResult> {
   if (command.operation !== 'reviewResult' && session.hostId !== command.userId) return failure('Only the session host can edit the score.')
   if (session.status !== 'open') return failure('This session is closed.')
@@ -208,9 +236,11 @@ async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: R
     recordId: command.sessionId,
     data: { matchScore: JSON.stringify(next) },
   }, command.userId)
-  return result.success
-    ? { success: true, data: { recordId: command.sessionId } }
-    : failure('The score could not be saved.')
+  if (!result.success) return failure('The score could not be saved.')
+  if (command.operation === 'reviewResult' && next && resultStatus(next) === 'final') {
+    await applyRatingsForFinalResult(command, session, next, tool)
+  }
+  return { success: true, data: { recordId: command.sessionId } }
 }
 
 export class RallyCommandRoom {
