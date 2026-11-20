@@ -6,6 +6,13 @@ test.describe('API tests', () => {
     expect(res.ok()).toBeTruthy()
   })
 
+  test('rally command requires an authenticated caller', async ({ request }) => {
+    const res = await request.post('/api/actions/rallyCommand', {
+      data: { operation: 'cancel', sessionId: 'session' },
+    })
+    expect(res.status()).toBe(401)
+  })
+
   test('OAuth callback keeps a same-origin invite destination', async ({ request, baseURL }) => {
     const invitation = new URL('/rallies?session=shared-test-id', baseURL)
     const first = await request.get('/api/auth/social-redirect?provider=github', {

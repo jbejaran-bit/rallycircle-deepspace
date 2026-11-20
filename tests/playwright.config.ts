@@ -21,6 +21,7 @@ const BASE_URL = deployedUrl ?? `http://127.0.0.1:${PORT}`
 export default defineConfig({
   testDir: '.',
   testMatch: '**/*.spec.ts',
+  testIgnore: 'public-navigation.spec.ts',
   timeout: 30_000,
   retries: 0,
   use: {

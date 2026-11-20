@@ -22,3 +22,7 @@ jobs:
         run: npm run lint
       - name: RallyCircle business logic
         run: node --experimental-strip-types --test tests/rally.test.mjs
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Public browser regressions
+        run: npm run test:public

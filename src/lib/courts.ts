@@ -30,3 +30,8 @@ export function distanceMiles(from: { lat: number; lng: number }, to: Court) {
     Math.cos(from.lat * radians) * Math.cos(to.lat * radians) * Math.sin(longitude / 2) ** 2
   return 3958.8 * 2 * Math.asin(Math.sqrt(Math.min(a, 1)))
 }
+
+export function matchesCourt(court: Court, query: string): boolean {
+  const searchable = `${court.name} ${court.area}`.toLocaleLowerCase('en-US')
+  return query.trim().toLocaleLowerCase('en-US').split(/\s+/u).every(term => searchable.includes(term))
+}
