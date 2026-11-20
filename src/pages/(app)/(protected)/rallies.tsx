@@ -5,6 +5,7 @@ import { useAuth, useMessages, useMutations, usePresenceRoom, useQuery, useUserL
 import { CalendarDays, Check, ChevronRight, Clock3, Copy, MapPin, MessageCircle, Plus, Radio, Send, Share2, ShieldCheck, Sparkles, Users, X } from 'lucide-react'
 import { buildSessionUrl, formatSessionTime, summarizeAttendance, summarizeReadiness, validateSession, type Level, type RallyRSVP, type RallySession, type RSVPStatus } from '@/lib/rally'
 import { runRallyCommand } from '@/lib/rally-actions'
+import MatchScoreboard from '@/components/MatchScoreboard'
 
 const surface = 'rounded-3xl border border-white/10 bg-[#141b1a] shadow-[0_18px_60px_rgba(0,0,0,0.17)]'
 const field = 'w-full rounded-xl border border-white/15 bg-[#0e1513] px-3.5 py-3 text-sm text-white outline-none transition focus:border-[#d7fc83] focus:ring-1 focus:ring-[#d7fc83]'
@@ -294,6 +295,7 @@ function SessionDetail({ session, sessionId, userId, allRsvps, rsvpStatus, rsvpE
         <p className="mt-3 text-xs text-white/50">Hosted by {getName(session.hostId) ?? 'a community player'}. Extra players can still join after the target is reached.</p>
         {session.notes && <p className="mt-4 rounded-xl bg-white/5 p-4 text-sm leading-relaxed text-white/70">{session.notes}</p>}
       </section>
+      <MatchScoreboard sessionId={sessionId} isHost={session.hostId === userId} cancelled={cancelled} />
       {cancelled ? <p className="rounded-xl bg-rose-500/10 p-4 text-sm font-medium text-rose-300">This session was cancelled by its organizer.</p> : <div className="flex flex-wrap gap-2">
         <button type="button" disabled={!canChangeRsvp} onClick={()=>void respond('going')} className={`${myRSVP?.data.status==='going'?accent:'rounded-xl border border-[#d7fc83]/50 px-4 py-3 text-sm font-bold text-[#d7fc83] hover:bg-[#d7fc83]/10'} inline-flex items-center gap-2 disabled:opacity-50`}><Check size={16}/>{busy ? 'Saving…' : myRSVP?.data.status==='going'?'Going ✓':'I’m in'}</button>
         <button type="button" disabled={!canChangeRsvp} onClick={()=>void respond('maybe')} className="rounded-xl border border-white/15 px-4 py-3 text-sm font-semibold text-white/85 hover:bg-white/10 disabled:opacity-50">{myRSVP?.data.status==='maybe'?'Maybe ✓':'Maybe'}</button>
