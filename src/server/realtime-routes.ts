@@ -11,6 +11,8 @@ import type { Context, Hono } from 'hono'
 import { authenticatedRoomRequest, resolveAppRole, verifyJwt } from 'deepspace/worker'
 import type { JwtVerifierConfig, VerifyResult } from 'deepspace/worker'
 import type { AppContext, Env } from '../../worker.js'
+import { courtboardSessionId } from '../lib/courtboard.js'
+import { getRallyCanvasAccess } from './courtboard-access.js'
 
 function jwtConfig(env: Env): JwtVerifierConfig {
   return { publicKey: env.AUTH_JWT_PUBLIC_KEY, issuer: env.AUTH_JWT_ISSUER }
@@ -19,6 +21,11 @@ function jwtConfig(env: Env): JwtVerifierConfig {
 function wsRoute(
   doNamespace: (env: Env) => DurableObjectNamespace,
   extraIdentity?: (auth: VerifyResult, env: Env) => { role?: string } | Promise<{ role?: string }>,
+  authorize?: (
+    auth: VerifyResult,
+    env: Env,
+    id: string,
+  ) => Promise<{ role?: string } | Response>,
 ) {
   return async (c: Context<AppContext>) => {
     const id = c.req.param('roomId') ?? c.req.param('docId') ?? c.req.param('scopeId')
@@ -31,11 +38,16 @@ function wsRoute(
       auth = (await verifyJwt(jwtConfig(c.env), token)).result
       if (!auth) return new Response('Unauthorized', { status: 401 })
     }
-    const roomRequest = authenticatedRoomRequest(
-      c.req.raw,
-      auth,
-      auth ? await extraIdentity?.(auth, c.env) : undefined,
-    )
+    let identity: { role?: string } | undefined
+    if (authorize) {
+      if (!auth) return new Response('Unauthorized', { status: 401 })
+      const access = await authorize(auth, c.env, id)
+      if (access instanceof Response) return access
+      identity = access
+    } else {
+      identity = auth ? await extraIdentity?.(auth, c.env) : undefined
+    }
+    const roomRequest = authenticatedRoomRequest(c.req.raw, auth, identity)
 
     const namespace = doNamespace(c.env)
     const stub = namespace.get(namespace.idFromName(id))
@@ -146,7 +158,18 @@ export function registerRealtimeRoutes(app: Hono<AppContext>): void {
     '/ws/canvas/:docId',
     wsRoute(
       (env) => env.CANVAS_ROOMS,
-      async (auth, env) => ({ role: await resolveAppRole(env, auth.userId) }),
+      undefined,
+      async (auth, env, docId) => {
+        const sessionId = courtboardSessionId(docId, env.DEEPSPACE_APP_ID)
+        if (!sessionId) return new Response('Forbidden', { status: 403 })
+
+        const access = await getRallyCanvasAccess(env, sessionId, auth.userId)
+        if (access.kind === 'denied') return new Response('Forbidden', { status: 403 })
+        if (access.kind === 'unavailable') {
+          return new Response('Authorization service unavailable', { status: 503 })
+        }
+        return { role: access.role }
+      },
     ),
   )
 
