@@ -9,6 +9,7 @@ import {
 import { usersSchema } from './schemas/users-schema'
 import { settingsSchema } from './schemas/admin-schema'
 import { sessionsSchema, rsvpsSchema, waitlistsSchema } from './schemas/rally-schema'
+import { blocksSchema, discoveryPreferencesSchema, followsSchema, reportsSchema } from './schemas/social-schema'
 
 export const schemas: CollectionSchema[] = [
   usersSchema,
@@ -16,6 +17,10 @@ export const schemas: CollectionSchema[] = [
   sessionsSchema,
   rsvpsSchema,
   waitlistsSchema,
+  followsSchema,
+  blocksSchema,
+  reportsSchema,
+  discoveryPreferencesSchema,
   CHANNELS_SCHEMA,
   MESSAGES_SCHEMA,
   REACTIONS_SCHEMA,
