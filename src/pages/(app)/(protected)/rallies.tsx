@@ -5,6 +5,7 @@ import { useAuth, useMessages, useMutations, usePresenceRoom, useQuery, useUserL
 import { CalendarDays, Check, ChevronRight, Clock3, Copy, MapPin, MessageCircle, Plus, Radio, Send, Share2, ShieldCheck, Sparkles, Users, X } from 'lucide-react'
 import { buildSessionUrl, formatSessionTime, summarizeAttendance, summarizeReadiness, validateSession, type Level, type RallyRSVP, type RallySession, type RSVPStatus } from '@/lib/rally'
 import { runRallyCommand } from '@/lib/rally-actions'
+import LiveCourtboard from '@/components/LiveCourtboard'
 
 const surface = 'rounded-3xl border border-white/10 bg-[#141b1a] shadow-[0_18px_60px_rgba(0,0,0,0.17)]'
 const field = 'w-full rounded-xl border border-white/15 bg-[#0e1513] px-3.5 py-3 text-sm text-white outline-none transition focus:border-[#d7fc83] focus:ring-1 focus:ring-[#d7fc83]'
@@ -301,6 +302,15 @@ function SessionDetail({ session, sessionId, userId, allRsvps, rsvpStatus, rsvpE
       </div>}
       {!cancelled&&session.hostId===userId&&<button type="button" disabled={busy} onClick={()=>void cancelSession()} className="text-xs text-rose-300/75 underline underline-offset-4 hover:text-rose-200">Cancel my session</button>}
       <ErrorMessage message={error}/>
+      <LiveCourtboard
+        sessionId={sessionId}
+        userId={userId}
+        hostId={session.hostId}
+        sessionStatus={session.status}
+        rsvps={people}
+        rsvpStatus={rsvpStatus}
+        rsvpError={rsvpError}
+      />
       <div className="h-px bg-white/10"/>
       {session.chatChannelId ? <ChatPanel channelId={session.chatChannelId} sessionId={sessionId} userId={userId}/> : <div className="rounded-2xl bg-white/5 p-5 text-sm text-white/60"><MessageCircle className="mb-2" size={20}/>Chat is not available for this session. RSVPs still work.</div>}
     </div>

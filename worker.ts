@@ -12,20 +12,30 @@ import {
   CanvasRoom,
   CronRoom,
   JobRoom,
+  MSG,
   PresenceRoom,
   RecordRoom,
   resolveAppRole,
   workerErrorHandler,
   YjsRoom,
 } from 'deepspace/worker'
-import type { DOBindings, DOManifest, Job, JobContext } from 'deepspace/worker'
+import type { DOBindings, DOManifest, Job, JobContext, UserAttachment } from 'deepspace/worker'
 import { AI_CHATS_SCHEMA } from 'deepspace/schema'
 import { registerAgent } from './src/ai/agent.js'
 import { buildTools } from './src/ai/tools.js'
 import { tasks as cronTasks, runTask as runCronTask } from './src/cron.js'
 import { runJob } from './src/jobs.js'
+import {
+  clampCourtboardPosition,
+  courtboardMarkerId,
+  courtboardMarkerLabelFromId,
+  courtboardSessionId,
+  COURTBOARD_MARKER_SIZE,
+  isCourtboardMarkerLabel,
+} from './src/lib/courtboard.js'
 import { schemas } from './src/schemas.js'
 import { registerActionRoutes } from './src/server/action-routes.js'
+import { getRallyCanvasAccess } from './src/server/courtboard-access.js'
 import { RallyCommandRoom } from './src/server/rally-command-room.js'
 import {
   registerAuthAndIntegrationRoutes,
@@ -53,7 +63,119 @@ export class AppRecordRoom extends RecordRoom<Env> {
 }
 
 export class AppYjsRoom extends YjsRoom<Env> {}
-export class AppCanvasRoom extends CanvasRoom<Env> {}
+const canvasWriteTypes = new Set<string>([
+  MSG.CANVAS_ADD,
+  MSG.CANVAS_MOVE,
+  MSG.CANVAS_RESIZE,
+  MSG.CANVAS_DELETE,
+  MSG.CANVAS_UPDATE,
+  MSG.CANVAS_UNDO,
+  MSG.CANVAS_REDO,
+])
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function normalizeCourtboardMutation(
+  message: { type: string; [key: string]: unknown },
+): { type: string; [key: string]: unknown } | null {
+  const payload = message.payload
+  if (!isRecord(payload)) return null
+
+  if (message.type === MSG.CANVAS_ADD) {
+    if (!isRecord(payload.props)) return null
+    const label = payload.props.label
+    if (!isCourtboardMarkerLabel(label)) return null
+    if (typeof payload.x !== 'number' || typeof payload.y !== 'number') return null
+    const position = clampCourtboardPosition({ x: payload.x, y: payload.y })
+    if (!position) return null
+    return {
+      ...message,
+      payload: {
+        ...payload,
+        id: courtboardMarkerId(label),
+        type: 'rally-player',
+        ...position,
+        width: COURTBOARD_MARKER_SIZE,
+        height: COURTBOARD_MARKER_SIZE,
+        props: { label },
+      },
+    }
+  }
+
+  if (message.type === MSG.CANVAS_MOVE) {
+    const label = courtboardMarkerLabelFromId(payload.shapeId)
+    if (!label || typeof payload.x !== 'number' || typeof payload.y !== 'number') return null
+    const position = clampCourtboardPosition({ x: payload.x, y: payload.y })
+    if (!position) return null
+    return {
+      ...message,
+      payload: { ...payload, shapeId: courtboardMarkerId(label), ...position },
+    }
+  }
+
+  if (message.type === MSG.CANVAS_DELETE) {
+    return courtboardMarkerLabelFromId(payload.shapeId) ? message : null
+  }
+
+  if (message.type === MSG.CANVAS_RESIZE || message.type === MSG.CANVAS_UPDATE) return null
+  return message
+}
+
+export class AppCanvasRoom extends CanvasRoom<Env> {
+  private sessionId: string | null = null
+
+  override fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url)
+    if (url.pathname.startsWith('/ws/canvas/')) {
+      const encodedRoomId = url.pathname.split('/').pop() ?? ''
+      const roomId = decodeURIComponent(encodedRoomId)
+      this.sessionId = courtboardSessionId(roomId, this.env.DEEPSPACE_APP_ID)
+    }
+    return super.fetch(request)
+  }
+
+  protected override async onMessage(
+    socket: WebSocket,
+    user: UserAttachment,
+    message: { type: string; [key: string]: unknown },
+  ): Promise<void> {
+    if (!canvasWriteTypes.has(message.type)) {
+      await super.onMessage(socket, user, message)
+      return
+    }
+
+    // CanvasRoom snapshots write permission at connect time, so re-check the live RSVP before each mutation.
+    if (!this.sessionId) {
+      socket.close(1008, 'Invalid courtboard session')
+      return
+    }
+
+    const access = await getRallyCanvasAccess(this.env, this.sessionId, user.userId)
+    if (access.kind === 'unavailable') {
+      socket.close(1011, 'Session authorization unavailable')
+      return
+    }
+    if (access.kind === 'denied') {
+      socket.close(1008, 'Session access revoked')
+      return
+    }
+
+    const authorizedUser = { ...user, canWrite: access.role === 'member' }
+    if (!authorizedUser.canWrite) {
+      await super.onMessage(socket, authorizedUser, message)
+      return
+    }
+
+    const normalized = normalizeCourtboardMutation(message)
+    if (!normalized) {
+      socket.close(1008, 'Invalid courtboard mutation')
+      return
+    }
+    await super.onMessage(socket, authorizedUser, normalized)
+  }
+}
 export class AppPresenceRoom extends PresenceRoom<Env> {}
 export { RallyCommandRoom }
 
