@@ -251,6 +251,28 @@ describe('RallyCircle server-side session and RSVP rules', () => {
     expect(cancelFirst.rsvps.size).toBe(0)
   })
 
+  it('keeps one account’s responses in different sessions independent', async () => {
+    const harness = createHarness()
+    harness.addSession('morning', 'host')
+    harness.addSession('evening', 'host')
+    const rsvp = (sessionId: string, status: 'going' | 'maybe') =>
+      harness.command('player', { operation: 'rsvp', sessionId, status })
+
+    await expect(rsvp('morning', 'going')).resolves.toMatchObject({ success: true })
+    await expect(rsvp('evening', 'maybe')).resolves.toMatchObject({ success: true })
+    await expect(rsvp('morning', 'maybe')).resolves.toMatchObject({ success: true })
+
+    expect(Array.from(harness.rsvps.values()).map(record => record.data)).toEqual([
+      { sessionId: 'morning', userId: 'player', status: 'maybe' },
+      { sessionId: 'evening', userId: 'player', status: 'maybe' },
+    ])
+    await expect(harness.command('host', { operation: 'cancel', sessionId: 'morning' }))
+      .resolves.toMatchObject({ success: true })
+    await expect(rsvp('evening', 'going')).resolves.toMatchObject({ success: true })
+    expect(harness.sessions.get('evening')?.data.status).toBe('open')
+    expect(Array.from(harness.rsvps.values()).find(r => r.data.sessionId === 'evening')?.data.status).toBe('going')
+  })
+
   it('keeps direct writes closed while preserving own-RSVP withdrawal', () => {
     const rsvp = {
       data: { sessionId: 'session', userId: 'player', status: 'going' },
@@ -261,6 +283,8 @@ describe('RallyCircle server-side session and RSVP rules', () => {
     expect(canCreate(rsvpsSchema, 'member')).toBe(false)
     expect(canUpdate(rsvpsSchema, 'member', rsvp, 'player')).toBe(false)
     expect(canDelete(rsvpsSchema, 'member', rsvp, 'player')).toBe(true)
+    expect(canDelete(rsvpsSchema, 'member', rsvp, 'other-player')).toBe(false)
+    expect(canDelete(rsvpsSchema, 'anonymous', rsvp, 'player')).toBe(false)
     expect(checkFieldPermissions(sessionsSchema, 'member', { status: 'cancelled' })).toContain('status')
     expect(checkFieldPermissions(sessionsSchema, 'member', { status: 'open' })).toContain('status')
     expect(canUpdate(sessionsSchema, 'member', {
