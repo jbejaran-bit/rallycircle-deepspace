@@ -37,3 +37,34 @@ test.describe('signed-out navigation on mobile', () => {
     await expect(menu).toHaveAttribute('aria-expanded', 'false')
   })
 })
+
+function luminance(rgb: string) {
+  const components = rgb.match(/[\d.]+/g)?.slice(0, 3).map(value => {
+    const srgb = Number(value) / 255
+    return srgb <= 0.04045 ? srgb / 12.92 : ((srgb + 0.055) / 1.055) ** 2.4
+  })
+  if (!components || components.length !== 3) throw new Error(`Expected an RGB color, got ${rgb}`)
+  const [red, green, blue] = components
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+}
+
+test('sign-in actions meet normal-text contrast in both themes', async ({ page }) => {
+  await page.goto('/rallies')
+  await expect(page.getByRole('heading', { name: 'Sign in to continue' })).toBeVisible()
+
+  const signInButtons = page.getByRole('button', { name: 'Sign in', exact: true })
+  await expect(signInButtons).toHaveCount(2)
+  for (const theme of ['slate', 'paper']) {
+    await page.locator('html').evaluate((html, value) => html.setAttribute('data-theme', value), theme)
+    for (const button of await signInButtons.all()) {
+      const colors = await button.evaluate(element => {
+        const { color, backgroundColor } = getComputedStyle(element)
+        return { color, backgroundColor }
+      })
+      const fg = luminance(colors.color)
+      const bg = luminance(colors.backgroundColor)
+      const ratio = (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05)
+      expect(ratio, `${theme} sign-in contrast`).toBeGreaterThanOrEqual(4.5)
+    }
+  }
+})
