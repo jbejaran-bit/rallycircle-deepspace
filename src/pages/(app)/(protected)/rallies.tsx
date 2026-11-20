@@ -3,8 +3,9 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth, useMessages, useMutations, usePresenceRoom, useQuery, useUserLookup, type Channel, type Message } from 'deepspace'
 import { CalendarDays, Check, ChevronRight, Clock3, Copy, MapPin, MessageCircle, Plus, Radio, Send, Share2, ShieldCheck, Sparkles, Users, X } from 'lucide-react'
-import { buildSessionUrl, formatSessionTime, summarizeAttendance, summarizeReadiness, validateSession, type Level, type RallyRSVP, type RallySession, type RSVPStatus } from '@/lib/rally'
-import { runRallyCommand } from '@/lib/rally-actions'
+import { buildSessionUrl, formatSessionTime, resolveCapacity, summarizeAttendance, summarizeReadiness, validateSession, type CapacityMode, type Level, type RallyRSVP, type RallySession, type RallyWaitlist, type RSVPStatus } from '@/lib/rally'
+import { commandErrorMessage, isSessionFullError, runRallyCommand } from '@/lib/rally-actions'
+import { CapacityPanel } from '@/components/capacity-panel'
 
 const surface = 'rounded-3xl border border-white/10 bg-[#141b1a] shadow-[0_18px_60px_rgba(0,0,0,0.17)]'
 const field = 'w-full rounded-xl border border-white/15 bg-[#0e1513] px-3.5 py-3 text-sm text-white outline-none transition focus:border-[#d7fc83] focus:ring-1 focus:ring-[#d7fc83]'
@@ -82,6 +83,8 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
   const [startsAt, setStartsAt] = useState('')
   const [durationMinutes, setDurationMinutes] = useState(90)
   const [targetPlayers, setTargetPlayers] = useState(4)
+  const [capacityMode, setCapacityMode] = useState<CapacityMode>('open')
+  const [maxPlayers, setMaxPlayers] = useState(4)
   const [level, setLevel] = useState<Level>('All levels')
   const [notes, setNotes] = useState('')
 
@@ -94,6 +97,8 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
     setStartsAt(`${sampleTime.getFullYear()}-${pad(sampleTime.getMonth() + 1)}-${pad(sampleTime.getDate())}T${pad(sampleTime.getHours())}:${pad(sampleTime.getMinutes())}`)
     setDurationMinutes(90)
     setTargetPlayers(4)
+    setCapacityMode('open')
+    setMaxPlayers(4)
     setLevel('Intermediate')
     setNotes('Bring tennis balls. We’ll warm up and play doubles.')
   }
@@ -106,6 +111,7 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
       title: title.trim(), court: court.trim(), location: location.trim(),
       startsAt: Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : startsAt,
       durationMinutes, targetPlayers, level, notes: notes.trim(),
+      capacityMode, maxPlayers: capacityMode === 'limited' ? maxPlayers : 0,
     }
     const problem = validateSession(candidate)
     if (problem) { setError(problem); return }
@@ -136,6 +142,7 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
         console.warn('Session created without a chat channel', e)
       }
       setTitle(''); setCourt(''); setLocation(''); setStartsAt(''); setNotes('')
+      setCapacityMode('open'); setMaxPlayers(4)
       setOpen(false)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not create session. Try again.')
@@ -170,7 +177,15 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
               <label className="block text-xs font-medium text-white/75">Level<select className={`${field} mt-1.5`} value={level} onChange={e=>setLevel(e.target.value as Level)}>{(['All levels','Beginner','Intermediate','Advanced'] as Level[]).map(n=><option key={n}>{n}</option>)}</select></label>
             </div>
             <label className="block text-xs font-medium text-white/75">Notes (optional)<textarea maxLength={400} rows={3} className={`${field} mt-1.5 resize-none`} placeholder="Bring fresh balls. We'll warm up for 15 minutes." value={notes} onChange={e=>setNotes(e.target.value)}/></label>
-            <div className="rounded-xl bg-white/5 px-3 py-2 text-xs text-white/60">Target players is a planning goal, not a hard attendance cap. Session details and chat are visible to signed-in members.</div>
+            <fieldset>
+              <legend className="text-xs font-medium text-white/75">Participation</legend>
+              <div className="mt-1.5 grid grid-cols-2 gap-2">
+                <button type="button" aria-pressed={capacityMode==='open'} onClick={()=>setCapacityMode('open')} className={`rounded-xl border px-3 py-2.5 text-left text-sm font-semibold ${capacityMode==='open'?'border-[#d7fc83]/70 bg-[#d7fc83]/10 text-white':'border-white/15 text-white/60 hover:bg-white/5'}`}>Open<span className="mt-0.5 block text-[11px] font-normal text-white/50">Anyone can join</span></button>
+                <button type="button" aria-pressed={capacityMode==='limited'} onClick={()=>setCapacityMode('limited')} className={`rounded-xl border px-3 py-2.5 text-left text-sm font-semibold ${capacityMode==='limited'?'border-[#d7fc83]/70 bg-[#d7fc83]/10 text-white':'border-white/15 text-white/60 hover:bg-white/5'}`}>Limited<span className="mt-0.5 block text-[11px] font-normal text-white/50">Capped, with waitlist</span></button>
+              </div>
+              {capacityMode==='limited' && <label className="mt-3 block text-xs font-medium text-white/75">Maximum confirmed players<select className={`${field} mt-1.5`} value={maxPlayers} onChange={e=>setMaxPlayers(Number(e.target.value))}>{Array.from({length:11},(_,i)=>i+2).map(n=><option key={n} value={n}>{n} players</option>)}</select></label>}
+            </fieldset>
+            <div className="rounded-xl bg-white/5 px-3 py-2 text-xs text-white/60">{capacityMode==='limited' ? `Limited to ${maxPlayers} confirmed players. When full, players join a waitlist and are promoted automatically if a spot opens.` : 'Target players is a planning goal, not a hard attendance cap. Session details and chat are visible to signed-in members.'}</div>
             <ErrorMessage message={error}/>
             <button type="submit" disabled={pending || !ready} className={`${accent} w-full`}>{pending ? 'Creating…' : 'Publish session'}</button>
           </form>
@@ -225,11 +240,12 @@ function ChatPanel({ channelId, sessionId, userId }: { channelId: string; sessio
   )
 }
 
-function SessionDetail({ session, sessionId, userId, allRsvps, rsvpStatus, rsvpError }: {
+function SessionDetail({ session, sessionId, userId, allRsvps, allWaitlists, rsvpStatus, rsvpError }: {
   session: RallySession
   sessionId: string
   userId: string
   allRsvps: {recordId: string; data: RallyRSVP}[]
+  allWaitlists: {recordId: string; createdAt: string; data: RallyWaitlist}[]
   rsvpStatus: 'loading' | 'ready' | 'error'
   rsvpError?: string
 }) {
@@ -237,11 +253,14 @@ function SessionDetail({ session, sessionId, userId, allRsvps, rsvpStatus, rsvpE
   const { ready: rsvpReady } = useMutations<RallyRSVP>('rsvps')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [rsvpFull, setRsvpFull] = useState(false)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
   const people = allRsvps.filter(r => r.data.sessionId === sessionId)
   const myRSVP = people.find(r => r.data.userId === userId)
   const {going, maybe} = summarizeAttendance(people.map(r=>r.data), sessionId)
   const cancelled = session.status === 'cancelled'
+  const capacity = resolveCapacity(session)
+  const isFull = capacity.limited && going >= capacity.maxPlayers
   const canChangeRsvp = rsvpStatus === 'ready' && rsvpReady && !busy && !cancelled
 
   async function shareSession() {
@@ -255,11 +274,14 @@ function SessionDetail({ session, sessionId, userId, allRsvps, rsvpStatus, rsvpE
 
   async function respond(status: RSVPStatus | null) {
     if (!canChangeRsvp) return
-    setBusy(true); setError(null)
+    setBusy(true); setError(null); setRsvpFull(false)
     try {
       if (!status && myRSVP) await runRallyCommand({ operation: 'withdraw', sessionId })
       else if (status) await runRallyCommand({ operation: 'rsvp', sessionId, status })
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'RSVP did not save.') }
+    } catch (cause) {
+      if (cause instanceof Error && isSessionFullError(cause)) setRsvpFull(true)
+      setError(commandErrorMessage(cause))
+    }
     finally { setBusy(false) }
   }
   async function cancelSession() {
@@ -288,10 +310,11 @@ function SessionDetail({ session, sessionId, userId, allRsvps, rsvpStatus, rsvpE
     </div>
     <div className="space-y-6 p-6 sm:p-8">
       <ReadinessPanel confirmed={going} target={session.targetPlayers} status={rsvpStatus} error={rsvpError} cancelled={cancelled} />
+      <CapacityPanel session={session} sessionId={sessionId} userId={userId} going={going} waitlists={allWaitlists} myStatus={myRSVP?.data.status ?? null} cancelled={cancelled} highlightWaitlist={rsvpFull} />
       <section>
         <div className="mb-3 flex items-center justify-between"><h3 className="text-sm font-bold text-white">Who's playing</h3><span className="text-xs text-white/45">{going} confirmed · {maybe} maybe</span></div>
         <div className="flex flex-wrap gap-2">{people.filter(p=>p.data.status==='going').map(r=><span key={r.recordId} className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/80"><span className="mr-1.5 text-[#d7fc83]">●</span>{getName(r.data.userId) ?? 'Player'}</span>)}{going===0&&<p className="text-sm text-white/50">No confirmations yet. Be the first!</p>}</div>
-        <p className="mt-3 text-xs text-white/50">Hosted by {getName(session.hostId) ?? 'a community player'}. Extra players can still join after the target is reached.</p>
+        <p className="mt-3 text-xs text-white/50">Hosted by {getName(session.hostId) ?? 'a community player'}. {capacity.limited ? (isFull ? `Limited to ${capacity.maxPlayers} confirmed players — join the waitlist above if it is full.` : `Limited to ${capacity.maxPlayers} confirmed players.`) : 'Extra players can still join after the target is reached.'}</p>
         {session.notes && <p className="mt-4 rounded-xl bg-white/5 p-4 text-sm leading-relaxed text-white/70">{session.notes}</p>}
       </section>
       {cancelled ? <p className="rounded-xl bg-rose-500/10 p-4 text-sm font-medium text-rose-300">This session was cancelled by its organizer.</p> : <div className="flex flex-wrap gap-2">
@@ -311,6 +334,7 @@ export default function RalliesPage() {
   const { userId } = useAuth()
   const { records: sessions, status: sessionStatus, error: sessionsError } = useQuery<RallySession>('sessions', {orderBy:'startsAt',orderDir:'asc'})
   const { records: rsvps, status: rsvpStatus, error: rsvpError } = useQuery<RallyRSVP>('rsvps')
+  const { records: waitlists } = useQuery<RallyWaitlist>('waitlists')
   const [searchParams, setSearchParams] = useSearchParams()
   const activeId = searchParams.get('session')
   const selectedCourt = findCourt(searchParams.get('court'))
@@ -353,17 +377,20 @@ export default function RalliesPage() {
           <div className="mb-5 flex gap-2">{(['upcoming','all','mine'] as const).map(tab=><button key={tab} type="button" onClick={()=>{setView(tab);chooseSession(null)}} className={`rounded-full px-3.5 py-2 text-xs font-bold capitalize transition ${view===tab?'bg-[#d7fc83] text-[#0e180f]':'bg-white/5 text-white/55 hover:bg-white/10'}`}>{tab === 'mine' ? 'My sessions' : tab}</button>)}</div>
           {sessionStatus==='loading'||rsvpStatus==='loading'?<div role="status" aria-busy="true" className="space-y-3">{[1,2,3].map(n=><div key={n} className="h-32 animate-pulse rounded-2xl bg-white/5"/>)}</div>:sessionStatus==='error'||rsvpStatus==='error'?<ErrorMessage message={sessionStatus==='error'?(sessionsError??'Sessions could not load.'): (rsvpError??'Player confirmations could not load. Refresh to try again.')}/>:listings.length===0?<div className="rounded-2xl border border-dashed border-white/20 p-10 text-center"><Sparkles size={28} className="mx-auto mb-3 text-[#d7fc83]"/><p className="text-sm font-bold">No sessions here yet</p><p className="mt-2 text-xs leading-relaxed text-white/50">Create a session and invite your hitting partners to join.</p></div>:<div className="space-y-3">{listings.map(s=>{
             const counts=summarizeAttendance(rsvps.map(r=>r.data),s.recordId)
+            const cap=resolveCapacity(s.data)
+            const waiting=cap.limited ? waitlists.filter(w=>w.data.sessionId===s.recordId).length : 0
+            const full=cap.limited && counts.going>=cap.maxPlayers
             const chosen=selected?.recordId===s.recordId
             return <button type="button" key={s.recordId} onClick={()=>chooseSession(s.recordId)} aria-pressed={chosen} className={`w-full rounded-2xl border p-4 text-left transition ${chosen?'border-[#d7fc83]/70 bg-[#d7fc83]/10':'border-white/10 bg-white/3 hover:border-white/25 hover:bg-white/7'}`}>
               <div className="mb-3 flex items-center justify-between"><span className="rounded-lg bg-white/10 px-2.5 py-1 text-[11px] font-bold text-white/85">{s.data.level}</span><ChevronRight size={17} className={chosen?'text-[#d7fc83]':'text-white/30'}/></div>
               <h3 className="text-lg font-extrabold tracking-tight text-white">{s.data.title}</h3>
               <p className="mt-2 flex items-center gap-2 text-xs text-white/60"><CalendarDays size={13}/>{formatSessionTime(s.data.startsAt)}</p>
               <p className="mt-2 flex items-center gap-2 text-xs text-white/60"><MapPin size={13}/>{s.data.court}, {s.data.location}</p>
-              <div className="mt-4 flex items-center justify-between border-t border-white/10 pt-3"><span className="flex items-center gap-1.5 text-xs font-semibold text-white/75"><Users size={14} className="text-[#d7fc83]"/>{counts.going} going / target {s.data.targetPlayers}</span><span className={`text-[11px] font-bold ${s.data.status==='cancelled'?'text-rose-300':'text-[#d7fc83]'}`}>{s.data.status==='cancelled'?'Cancelled':counts.going>=s.data.targetPlayers?'Target reached':'Open to join'}</span></div>
+              <div className="mt-4 flex items-center justify-between border-t border-white/10 pt-3"><span className="flex items-center gap-1.5 text-xs font-semibold text-white/75"><Users size={14} className="text-[#d7fc83]"/>{counts.going} going / target {s.data.targetPlayers}</span><span className={`text-[11px] font-bold ${s.data.status==='cancelled'?'text-rose-300':full?'text-amber-300':'text-[#d7fc83]'}`}>{s.data.status==='cancelled'?'Cancelled':full?`Full · ${waiting} waiting`:counts.going>=s.data.targetPlayers?'Target reached':'Open to join'}</span></div>
             </button>
           })}</div>}
         </section>
-        {activeId && !selected && sessionStatus === "ready" ? <section className={`${surface} p-6`}><h2 className="text-xl font-bold">Session unavailable</h2><p className="mt-2 text-sm text-white/65">Check the shared link or choose another session.</p></section> : selected ? <SessionDetail key={selected.recordId} sessionId={selected.recordId} session={selected.data} userId={signedInId} allRsvps={rsvps} rsvpStatus={rsvpStatus} rsvpError={rsvpError}/>:<section className={`${surface} flex min-h-96 flex-col items-center justify-center p-10 text-center`}><div className="mb-5 grid h-20 w-20 place-items-center rounded-full border border-[#d7fc83]/35 bg-[#d7fc83]/10"><Users size={35} className="text-[#d7fc83]"/></div><h2 className="text-2xl font-black">The next match starts here.</h2><p className="mt-3 max-w-sm text-sm leading-relaxed text-white/50">Select an upcoming session or create your own. Every RSVP syncs to the group automatically.</p></section>}
+        {activeId && !selected && sessionStatus === "ready" ? <section className={`${surface} p-6`}><h2 className="text-xl font-bold">Session unavailable</h2><p className="mt-2 text-sm text-white/65">Check the shared link or choose another session.</p></section> : selected ? <SessionDetail key={selected.recordId} sessionId={selected.recordId} session={selected.data} userId={signedInId} allRsvps={rsvps} allWaitlists={waitlists} rsvpStatus={rsvpStatus} rsvpError={rsvpError}/>:<section className={`${surface} flex min-h-96 flex-col items-center justify-center p-10 text-center`}><div className="mb-5 grid h-20 w-20 place-items-center rounded-full border border-[#d7fc83]/35 bg-[#d7fc83]/10"><Users size={35} className="text-[#d7fc83]"/></div><h2 className="text-2xl font-black">The next match starts here.</h2><p className="mt-3 max-w-sm text-sm leading-relaxed text-white/50">Select an upcoming session or create your own. Every RSVP syncs to the group automatically.</p></section>}
       </div>
       <footer className="mt-12 flex flex-col justify-between gap-3 border-t border-white/10 pt-5 text-xs text-white/40 sm:flex-row"><span>RallyCircle / Made for hitting partners, not bookings</span><span className="flex items-center gap-2"><Radio size={13}/> Powered by DeepSpace auth, records, messaging and presence</span></footer>
     </div>
