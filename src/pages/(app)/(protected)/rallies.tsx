@@ -234,7 +234,7 @@ function SessionDetail({ session, sessionId, userId, allRsvps, rsvpStatus, rsvpE
   rsvpError?: string
 }) {
   const { getName } = useUserLookup()
-  const { removeConfirmed, ready: rsvpReady } = useMutations<RallyRSVP>('rsvps')
+  const { ready: rsvpReady } = useMutations<RallyRSVP>('rsvps')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
@@ -257,7 +257,7 @@ function SessionDetail({ session, sessionId, userId, allRsvps, rsvpStatus, rsvpE
     if (!canChangeRsvp) return
     setBusy(true); setError(null)
     try {
-      if (!status && myRSVP) await removeConfirmed(myRSVP.recordId)
+      if (!status && myRSVP) await runRallyCommand({ operation: 'withdraw', sessionId })
       else if (status) await runRallyCommand({ operation: 'rsvp', sessionId, status })
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'RSVP did not save.') }
     finally { setBusy(false) }

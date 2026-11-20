@@ -5,6 +5,7 @@ import type { Env } from '../../worker.js'
 type RallyCommand =
   | { operation: 'rsvp'; sessionId: string; status: RSVPStatus; userId: string }
   | { operation: 'cancel'; sessionId: string; userId: string }
+  | { operation: 'withdraw'; sessionId: string; userId: string }
 
 type RallyCommandResult = ActionResult<{ recordId: string }>
 type RecordTool = <T>(tool: string, params: Record<string, unknown>, userId: string) => Promise<ActionResult<T>>
@@ -19,7 +20,7 @@ function parseCommand(value: unknown): RallyCommand | null {
     return null
   }
 
-  if (value.operation === 'cancel') {
+  if (value.operation === 'cancel' || value.operation === 'withdraw') {
     return { operation: value.operation, sessionId: value.sessionId, userId: value.userId }
   }
   if (value.operation === 'rsvp' && (value.status === 'going' || value.status === 'maybe')) {
@@ -54,6 +55,35 @@ async function applyCommand(command: RallyCommand, tool: RecordTool): Promise<Ra
     return result.success
       ? { success: true, data: { recordId: command.sessionId } }
       : failure('The session could not be cancelled.')
+  }
+
+  if (command.operation === 'withdraw') {
+    // Withdrawing only removes the caller's own RSVP, so it is safe on a
+    // cancelled session too — this matches the old direct-delete behaviour.
+    // Serialising it here (instead of a direct removeConfirmed) keeps it
+    // from racing an in-flight RSVP update inside the same queue turn.
+    const existingResult = await tool<QueryActionData<RallyRSVP>>(
+      'records.query',
+      {
+        collection: 'rsvps',
+        where: { sessionId: command.sessionId, userId: command.userId },
+        limit: 1,
+      },
+      command.userId,
+    )
+    if (!existingResult.success) return failure('Your existing RSVP could not be checked.')
+
+    const existing = existingResult.data.records[0]
+    if (!existing) return { success: true, data: { recordId: command.sessionId } }
+
+    const result = await tool<MutateActionData>(
+      'records.delete',
+      { collection: 'rsvps', recordId: existing.recordId },
+      command.userId,
+    )
+    return result.success
+      ? { success: true, data: { recordId: existing.recordId } }
+      : failure('Your RSVP could not be withdrawn.')
   }
 
   if (session.status !== 'open') return failure('This session is not open for responses.')

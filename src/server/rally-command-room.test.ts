@@ -46,6 +46,13 @@ function createHarness() {
         return Response.json({ success: true, data: { recordId } })
       }
 
+      if (tool === 'records.delete' && params.collection === 'rsvps') {
+        const recordId = String(params.recordId)
+        if (!rsvps.has(recordId)) return Response.json({ success: false, error: 'Record not found' })
+        rsvps.delete(recordId)
+        return Response.json({ success: true, data: { recordId } })
+      }
+
       if (tool === 'records.update') {
         const collection = params.collection
         const recordId = String(params.recordId)
@@ -185,6 +192,57 @@ describe('RallyCircle server-side session and RSVP rules', () => {
       userId: 'player',
       status: 'maybe',
     })
+  })
+
+  it('withdraws through the command room, idempotently', async () => {
+    const harness = createHarness()
+    harness.addSession('open-session', 'host')
+    await harness.command('player', {
+      operation: 'rsvp',
+      sessionId: 'open-session',
+      status: 'going',
+    })
+    expect(harness.rsvps.size).toBe(1)
+
+    await expect(harness.command('player', {
+      operation: 'withdraw',
+      sessionId: 'open-session',
+    })).resolves.toMatchObject({ success: true })
+    expect(harness.rsvps.size).toBe(0)
+
+    // A second withdraw is a no-op success, not an error.
+    await expect(harness.command('player', {
+      operation: 'withdraw',
+      sessionId: 'open-session',
+    })).resolves.toMatchObject({ success: true })
+    expect(harness.rsvps.size).toBe(0)
+
+    await expect(harness.command('player', {
+      operation: 'withdraw',
+      sessionId: 'missing-session',
+    })).resolves.toMatchObject({ success: false })
+  })
+
+  it('serializes a withdraw racing an RSVP update without duplicating the RSVP', async () => {
+    const harness = createHarness()
+    harness.addSession('open-session', 'host')
+    await harness.command('player', {
+      operation: 'rsvp',
+      sessionId: 'open-session',
+      status: 'going',
+    })
+
+    const [withdrawResult, updateResult] = await Promise.all([
+      harness.command('player', { operation: 'withdraw', sessionId: 'open-session' }),
+      harness.command('player', {
+        operation: 'rsvp',
+        sessionId: 'open-session',
+        status: 'maybe',
+      }),
+    ])
+    expect(withdrawResult.success).toBe(true)
+    expect(updateResult.success).toBe(true)
+    expect(harness.rsvps.size).toBeLessThanOrEqual(1)
   })
 
   it('allows only the host to cancel and does not permit reopening', async () => {
