@@ -12,12 +12,24 @@ test('shared link and live readiness update across two accounts', async ({ users
   let created = false
   let bobReady = false
   let sessionId = ''
+  // Simulate the browser permission denial without requesting real coordinates.
+  await alice.page.addInitScript(() => {
+    Object.defineProperty(navigator.geolocation, 'getCurrentPosition', {
+      value: (_resolve: PositionCallback, reject: PositionErrorCallback) => {
+        queueMicrotask(() => reject({ code: 1, message: 'Denied' } as GeolocationPositionError))
+      },
+    })
+  })
   await alice.page.goto('/courts')
   await bob.page.setViewportSize({ width: 390, height: 844 })
   try {
+    await expect(alice.page.getByRole('main')).toHaveCount(1)
+    await alice.page.getByRole('button', { name: 'Use my location' }).click()
+    await expect(alice.page.getByRole('status')).toContainText('You can still browse the Pittsburgh courts.')
     await alice.page.getByRole('button', { name: /Highland Park Tennis Courts/ }).click()
     await expect(alice.page.getByRole('link', { name: 'Open court calendar' })).toHaveAttribute('href', /pittsburgh\.recdesk\.com/)
     await alice.page.getByRole('link', { name: 'Plan a Rally here' }).click()
+    await expect(alice.page.getByRole('main')).toHaveCount(1)
     await expect(alice.page.getByPlaceholder('Schenley Park')).toHaveValue('Highland Park Tennis Courts')
     await expect(alice.page.getByPlaceholder('Pittsburgh, PA')).toHaveValue('Stanton Avenue, Pittsburgh')
     await alice.page.getByPlaceholder('Sunday doubles & rallies').fill(title)
@@ -67,7 +79,13 @@ test('shared link and live readiness update across two accounts', async ({ users
     await bob.page.getByTestId('readiness-panel').screenshot({ path: 'test-results/ready-to-play-mobile.png' })
     await expect(alice.page.getByRole('heading', { name: 'Session chat' })).toBeVisible({ timeout: 30_000 })
     await expect(alice.page.getByText('2 here now')).toBeVisible({ timeout: 30_000 })
-    await alice.page.getByRole('textbox', { name: 'Your message' }).fill('Bring extra balls')
+    const draft = alice.page.getByRole('textbox', { name: 'Your message' })
+    const send = alice.page.getByRole('button', { name: 'Send message' })
+    await expect(send).toBeDisabled()
+    await draft.fill('   ')
+    await expect(send).toBeDisabled()
+    await expect(draft).toHaveAttribute('maxlength', '500')
+    await draft.fill('Bring extra balls')
     await alice.page.getByRole('button', { name: 'Send message' }).click()
     await expect(bob.page.getByText('Bring extra balls')).toBeVisible({ timeout: 30_000 })
 
