@@ -87,6 +87,8 @@ test.describe('court discovery', () => {
     await page.getByRole('tab', { name: 'Courts near me' }).click()
     await page.getByRole('button', { name: /find courts near me/i }).click()
     await expect(page.getByText(/Court search failed|unavailable/i)).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Retry court search' })).toBeVisible()
+    await expect(page.getByRole('region', { name: /nearby tennis courts map/i })).toHaveCount(0)
     await page.getByRole('tab', { name: /Pittsburgh courts/i }).click()
     await expect(page.getByText('Schenley Oval Tennis Courts')).toBeVisible()
   })

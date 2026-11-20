@@ -103,12 +103,26 @@ function NearbyCourts() {
   const [status, setStatus] = useState<'idle' | 'locating' | 'searching' | 'ready' | 'error'>('idle')
   const [message, setMessage] = useState('Search by place or share an approximate location with OpenStreetMap services to find mapped courts.')
   const [searchCount, setSearchCount] = useState(0)
+  const activeRequest = useRef<AbortController | null>(null)
+  useEffect(() => () => activeRequest.current?.abort(), [])
 
-  const searchNearby = useCallback(async (center: LatLng, radius: number) => {
+  const startRequest = useCallback(() => {
+    activeRequest.current?.abort()
+    setSearchingPlaces(false)
+    const controller = new AbortController()
+    activeRequest.current = controller
+    return controller.signal
+  }, [])
+  const busy = searchingPlaces || status === 'locating' || status === 'searching'
+
+  const searchNearby = useCallback(async (center: LatLng, radius: number, signal = startRequest()) => {
+    setFound([])
+    setSelected(null)
     setStatus('searching')
     setMessage('Searching nearby courts…')
     try {
-      const result = await fetchNearbyCourts(center, radius)
+      const result = await fetchNearbyCourts(center, radius, signal)
+      if (signal.aborted) return
       const sorted = [...result.courts].sort((a, b) => haversineMiles(center, a) - haversineMiles(center, b))
       setFound(sorted)
       stashDiscoveredCourts(sorted)
@@ -121,20 +135,27 @@ function NearbyCourts() {
           : `${sorted.length} court${sorted.length === 1 ? '' : 's'} found within ${radius} km (straight-line distance).`,
       )
     } catch (cause) {
+      if (signal.aborted) return
       setStatus('error')
       setMessage(cause instanceof Error ? cause.message : 'Court search failed. You can still browse the Pittsburgh courts.')
     }
-  }, [])
+  }, [startRequest])
 
   async function locate() {
+    const signal = startRequest()
+    setFound([])
+    setSelected(null)
+    setLocation(null)
     setStatus('locating')
     setMessage('Finding your location…')
     try {
       const point = await requestOneShotLocation()
+      if (signal.aborted) return
       setLocation(point)
       setLocationLabel('Your current location')
-      await searchNearby(point, radiusKm)
+      await searchNearby(point, radiusKm, signal)
     } catch (cause) {
+      if (signal.aborted) return
       setStatus('error')
       setMessage(cause instanceof Error ? cause.message : 'Could not get your location. Search by place name instead.')
     }
@@ -147,10 +168,13 @@ function NearbyCourts() {
       setMessage('Enter at least 2 characters for a place name.')
       return
     }
+    const signal = startRequest()
+    setPlaces([])
     setSearchingPlaces(true)
     setMessage('Searching for that place…')
     try {
-      const result = await searchPlaces(query)
+      const result = await searchPlaces(query, signal)
+      if (signal.aborted) return
       setPlaces(result.results)
       if (result.results.length === 0) {
         setMessage('No place matched that name. Try a city or neighbourhood.')
@@ -158,9 +182,9 @@ function NearbyCourts() {
         setMessage(`${result.results.length} place${result.results.length === 1 ? '' : 's'} found — pick one to search for courts nearby.`)
       }
     } catch (cause) {
-      setMessage(cause instanceof Error ? cause.message : 'Place search failed. Try again in a moment.')
+      if (!signal.aborted) setMessage(cause instanceof Error ? cause.message : 'Place search failed. Try again in a moment.')
     } finally {
-      setSearchingPlaces(false)
+      if (!signal.aborted) setSearchingPlaces(false)
     }
   }
 
@@ -183,12 +207,12 @@ function NearbyCourts() {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-3">
-        <button type="button" disabled={status === 'locating' || status === 'searching'} onClick={() => void locate()} className="inline-flex items-center gap-2 rounded-xl bg-[#d7fc83] px-4 py-3 text-sm font-bold text-[#101a13] disabled:opacity-50">
+        <button type="button" disabled={busy} onClick={() => void locate()} className="inline-flex items-center gap-2 rounded-xl bg-[#d7fc83] px-4 py-3 text-sm font-bold text-[#101a13] disabled:opacity-50">
           <LocateFixed size={18} /> {status === 'locating' ? 'Finding location…' : 'Find courts near me'}
         </button>
         <label className="flex items-center gap-2 text-sm text-white/75">
           Radius
-          <select value={radiusKm} disabled={status === 'searching'} onChange={e => changeRadius(Number(e.target.value))} className="rounded-xl border border-white/15 bg-[#0e1513] px-3 py-2.5 text-sm text-white outline-none">
+          <select value={radiusKm} disabled={busy} onChange={e => changeRadius(Number(e.target.value))} className="rounded-xl border border-white/15 bg-[#0e1513] px-3 py-2.5 text-sm text-white outline-none">
             {RADIUS_OPTIONS_KM.map(km => <option key={km} value={km}>{km} km</option>)}
           </select>
         </label>
@@ -206,7 +230,7 @@ function NearbyCourts() {
             className="w-full rounded-xl border border-white/15 bg-[#0e1513] px-3.5 py-3 text-sm text-white outline-none placeholder:text-white/35 focus:border-[#d7fc83]"
           />
         </label>
-        <button type="submit" disabled={searchingPlaces} className="inline-flex items-center gap-2 rounded-xl border border-white/20 px-4 py-3 text-sm font-semibold disabled:opacity-50">
+        <button type="submit" disabled={busy} className="inline-flex items-center gap-2 rounded-xl border border-white/20 px-4 py-3 text-sm font-semibold disabled:opacity-50">
           <Search size={16} /> {searchingPlaces ? 'Searching…' : 'Search place'}
         </button>
       </form>
@@ -214,7 +238,7 @@ function NearbyCourts() {
         <ul className="space-y-2" aria-label="Matching places">
           {places.map(place => (
             <li key={`${place.lat},${place.lng}:${place.displayName}`}>
-              <button type="button" onClick={() => void choosePlace(place)} className="flex w-full items-center gap-3 rounded-xl border border-white/15 px-3 py-3 text-left text-sm hover:border-[#d7fc83]/60">
+              <button type="button" disabled={busy} onClick={() => void choosePlace(place)} className="flex w-full items-center gap-3 rounded-xl border border-white/15 px-3 py-3 text-left text-sm hover:border-[#d7fc83]/60">
                 <MapPin size={16} className="shrink-0 text-[#d7fc83]" />
                 <span className="flex-1">{place.displayName}</span>
               </button>
@@ -223,11 +247,14 @@ function NearbyCourts() {
         </ul>
       )}
 
-      <p role="status" className="text-sm text-white/65">{message}</p>
+      <p role="status" className="text-sm text-white/75">{message}</p>
+      {status === 'error' && location && (
+        <button type="button" className="min-h-11 rounded-lg border border-white/25 px-3 text-sm font-semibold focus-visible:outline-2" disabled={busy} onClick={() => void searchNearby(location, radiusKm)}>Retry court search</button>
+      )}
 
       {status === 'searching' || status === 'locating' ? (
         <div role="status" aria-busy="true" className="space-y-3">
-          {[1, 2, 3].map(n => <div key={n} className="h-20 animate-pulse rounded-2xl bg-white/5" />)}
+          {[1, 2, 3].map(n => <div key={n} className="h-20 motion-safe:animate-pulse rounded-2xl bg-white/5" />)}
         </div>
       ) : found.length > 0 ? (
         <div className="grid gap-5 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
@@ -299,17 +326,25 @@ export default function CourtsPage() {
           <h1 className="text-4xl font-black tracking-tight">Find a court</h1>
           <p className="mt-2 text-white/70">Discover tennis courts near you through OpenStreetMap, or browse the Pittsburgh courts with official booking links.</p>
         </header>
-        <div className="flex gap-2" role="tablist" aria-label="Court sources">
+        <div className="flex flex-wrap gap-2" role="tablist" aria-label="Court sources" onKeyDown={event => {
+          if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+          event.preventDefault()
+          const next = event.key === 'Home' ? 'nearby' : event.key === 'End' ? 'pittsburgh' : tab === 'nearby' ? 'pittsburgh' : 'nearby'
+          setTab(next)
+          event.currentTarget.querySelector<HTMLButtonElement>(`#court-tab-${next}`)?.focus()
+        }}>
           {([
             { id: 'nearby', label: 'Courts near me' },
             { id: 'pittsburgh', label: 'Pittsburgh courts' },
           ] as const).map(({ id, label }) => (
-            <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)} className={`rounded-full px-4 py-2 text-xs font-bold ${tab === id ? 'bg-[#d7fc83] text-[#0e180f]' : 'bg-white/5 text-white/55 hover:bg-white/10'}`}>
+            <button key={id} type="button" role="tab" id={`court-tab-${id}`} aria-controls="court-source-panel" tabIndex={tab === id ? 0 : -1} aria-selected={tab === id} onClick={() => setTab(id)} className={`min-h-11 rounded-full px-4 py-2 focus-visible:outline-2 text-xs font-bold ${tab === id ? 'bg-[#d7fc83] text-[#0e180f]' : 'bg-white/5 text-white/55 hover:bg-white/10'}`}>
               {label}
             </button>
           ))}
         </div>
-        {tab === 'nearby' ? <NearbyCourts /> : <PittsburghCourts />}
+        <div role="tabpanel" id="court-source-panel" aria-labelledby={`court-tab-${tab}`}>
+          {tab === 'nearby' ? <NearbyCourts /> : <PittsburghCourts />}
+        </div>
       </div>
     </div>
   )

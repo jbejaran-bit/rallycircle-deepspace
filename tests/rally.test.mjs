@@ -97,3 +97,16 @@ test('local session times round-trip without silently changing impossible dates'
   assert.equal(parseLocalSessionStart('2026-11-20T24:00'), null)
   assert.equal(parseLocalSessionStart('2026-11-20T17:30Z'), null)
 })
+
+test('New York local input rejects the skipped hour at the spring DST change', () => {
+  const previousZone = process.env.TZ
+  try {
+    process.env.TZ = 'America/New_York'
+    assert.equal(parseLocalSessionStart('2027-03-14T02:30'), null)
+    assert.equal(parseLocalSessionStart('2027-03-14T01:30')?.toISOString(), '2027-03-14T06:30:00.000Z')
+    assert.equal(parseLocalSessionStart('2027-03-14T03:30')?.toISOString(), '2027-03-14T07:30:00.000Z')
+  } finally {
+    if (previousZone === undefined) delete process.env.TZ
+    else process.env.TZ = previousZone
+  }
+})
