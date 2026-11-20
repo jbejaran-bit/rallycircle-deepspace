@@ -303,13 +303,14 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
   const full = session.capacity != null && going >= session.capacity
   const canChangeRsvp = rsvpStatus === 'ready' && !busy && !cancelled
 
+  const inviteUrl = buildSessionUrl(window.location.origin, sessionId)
   const calendarEvent = !cancelled && (session.hostId === userId || myRSVP?.data.status === 'going')
-    ? buildCalendarEvent(session, buildSessionUrl(window.location.origin, sessionId))
+    ? buildCalendarEvent(session, inviteUrl)
     : null
 
   async function shareSession() {
     try {
-      await navigator.clipboard.writeText(buildSessionUrl(window.location.origin, sessionId))
+      await navigator.clipboard.writeText(inviteUrl)
       setCopyState('copied')
     } catch {
       setCopyState('error')
@@ -344,7 +345,13 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
             <CalendarDays size={14} aria-hidden /> Add to calendar
           </a>
         )}
-        {copyState === 'error'  && <p role="alert" className="mb-3 text-xs text-rose-200">Copy failed. You can copy this page’s URL instead.</p>}
+        {copyState === 'copied' && <span role="status" className="sr-only">Session invitation copied.</span>}
+        {copyState === 'error' && (
+          <div className="mb-3 space-y-1">
+            <p role="alert" className="text-xs text-rose-200">Automatic copying failed. Select and copy the invitation link below.</p>
+            <input aria-label="Session invitation link" value={inviteUrl} readOnly className={field} onFocus={event => event.currentTarget.select()} />
+          </div>
+        )}
         <h2 className="max-w-lg text-3xl font-black tracking-tight text-white sm:text-4xl">{session.title}</h2>
         <div className="mt-5 grid gap-3 text-sm text-white/80 sm:grid-cols-2">
           <div className="flex items-center gap-2"><CalendarDays size={16} className="text-[#d7fc83]"/>{formatSessionTime(session.startsAt)}</div>

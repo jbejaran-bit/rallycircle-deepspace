@@ -144,3 +144,11 @@ describe('filterGames ownership', () => {
     expect(games.find(g => g.recordId === 's6')?.isMine).toBe(true)
   })
 })
+
+it('filters availability using capacity instead of the planning target', () => {
+  const capped = session({ recordId: 's6', capacity: 2, targetPlayers: 2 })
+  const open = session({ recordId: 'open', targetPlayers: 2 })
+  const cancelled = session({ recordId: 'cancelled', status: 'cancelled', capacity: 2 })
+  expect(filterGames([capped, open, cancelled], rsvps, { availability: 'waitlist', showCancelled: true }, baseOpts).map(game => game.recordId)).toEqual(['s6'])
+  expect(filterGames([capped, open, cancelled], rsvps, { availability: 'spots', showCancelled: true }, baseOpts).map(game => game.recordId)).toEqual(['open'])
+})

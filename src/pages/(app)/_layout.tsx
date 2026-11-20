@@ -62,7 +62,7 @@ function AuthBoot({ children }: { children: ReactNode }) {
   const { error, warning } = useToast()
 
   if (!isLoaded) {
-    return <div aria-busy="true" className="fixed inset-0 bg-background" />
+    return <div role="status" aria-busy="true" className="fixed inset-0 bg-background"><span className="sr-only">Checking sign-in status</span></div>
   }
 
   return (

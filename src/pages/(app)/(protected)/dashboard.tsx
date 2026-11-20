@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useAuth, useQuery, useUser } from 'deepspace'
+import { useAuth, useQuery, useUser, useUserLookup } from 'deepspace'
 import { Link } from 'react-router-dom'
 import { ArrowRight, CalendarDays, ChevronLeft, ChevronRight, MapPin, Plus } from 'lucide-react'
 import { agendaWeek, buildDashboard, filterAgenda, type DashboardFilter } from '@/lib/rally-dashboard'
@@ -24,6 +24,7 @@ const outline = `${button} border border-white/25 text-white hover:bg-white/10`
 export default function DashboardPage() {
   const { userId } = useAuth()
   const { user } = useUser()
+  const { getName } = useUserLookup()
   const sessions = useQuery<RallySession>('sessions')
   const rsvps = useQuery<RallyRSVP>('rsvps', { where: { userId } })
   const waitlist = useQuery<RallyWaitlist>('waitlists', { where: { userId } })
@@ -132,11 +133,13 @@ export default function DashboardPage() {
               {dashboard.finalized > 0 && <p className="mt-2 text-sm text-white/75">{dashboard.wins} won · {dashboard.finalized} finalized</p>}
               {dashboard.matches.length === 0 ? <p className="mt-3 text-sm text-white/75">Matches appear here when a host adds you to a scoreboard.</p> : (
                 <ul className="mt-3 divide-y divide-white/15">
-                  {dashboard.matches.map(({ recordId, data, score, side }) => score && (
+                  {dashboard.matches.map(({ recordId, data, score, side }) => score && (side === 0 || side === 1) && (
                     <li key={recordId}>
                       <Link to={`/rallies?session=${encodeURIComponent(recordId)}`} className="block rounded-lg py-3 focus-visible:outline-2">
                         <h3 className="break-words font-semibold">{data.title}</h3>
                         <p className="text-sm text-white/75">{matchLabels[resultStatus(score)]}{resultStatus(score) === 'final' && (score.winner === side ? ' · Won' : ' · Lost')}</p>
+                        <p className="mt-1 text-sm text-white/75">{score.teams[side === 0 ? 1 : 0].map(id => getName(id) ?? 'Player').join(' / ')}</p>
+                        {score.sets.length > 0 && <p className="text-sm tabular-nums text-white/75" aria-label="Completed sets">{score.sets.map(set => `${set[side]}–${set[side === 0 ? 1 : 0]}`).join(', ')}</p>}
                       </Link>
                     </li>
                   ))}
