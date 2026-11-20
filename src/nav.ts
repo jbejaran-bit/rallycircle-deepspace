@@ -9,6 +9,7 @@ export interface NavItem {
 
 export const nav: NavItem[] = [
   { path: '/courts', label: 'Courts' },
+  { path: '/games', label: 'Find Games' },
   { path: '/rallies', label: 'Rallies' },
   { path: '/settings', label: 'Account' },
 ]
