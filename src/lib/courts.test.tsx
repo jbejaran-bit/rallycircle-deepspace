@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
 import CourtsPage from '../pages/(app)/(protected)/courts'
-import { distanceMiles, findCourt } from './courts'
+import { distanceMiles, findCourt, matchesCourt } from './courts'
 
 describe('court discovery', () => {
   it('keeps one main landmark and renders the court list without map tiles', () => {
@@ -33,4 +33,11 @@ describe('court discovery', () => {
     expect(distanceMiles(origin, other)).toBeGreaterThan(0)
     expect(distanceMiles(origin, other)).toBeCloseTo(distanceMiles(other, origin))
   })
+})
+
+it('finds courts by case-insensitive name and area terms', () => {
+  const venue = findCourt('frick')!
+  expect(matchesCourt(venue, '  CLAY   Regent ')).toBe(true)
+  expect(matchesCourt(venue, 'Downtown')).toBe(false)
+  expect(matchesCourt(venue, '')).toBe(true)
 })
