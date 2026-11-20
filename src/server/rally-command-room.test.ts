@@ -1,14 +1,17 @@
-import { canCreate, canDelete, canUpdate, checkFieldPermissions } from 'deepspace/worker'
+import { canCreate, canDelete, canRead, canUpdate, checkFieldPermissions } from 'deepspace/worker'
 import type { ActionTools } from 'deepspace/worker'
 import { describe, expect, it } from 'vitest'
 import { rsvpsSchema, sessionsSchema } from '../schemas/rally-schema.js'
+import { matchScoresSchema } from '../schemas/scoreboard-schema.js'
 import type { RallyRSVP, RallySession } from '../lib/rally.js'
+import type { MatchScoreboard } from '../lib/scoreboard.js'
 import type { Env } from '../../worker.js'
 import { rallyCommandAction, RallyCommandRoom } from './rally-command-room.js'
 
 function createHarness() {
   const sessions = new Map<string, { recordId: string; createdBy: string; data: RallySession }>()
   const rsvps = new Map<string, { recordId: string; createdBy: string; data: RallyRSVP }>()
+  const scores = new Map<string, { recordId: string; createdBy: string; data: MatchScoreboard }>()
   let nextRecordId = 0
 
   const recordRoom = {
@@ -34,6 +37,14 @@ function createHarness() {
         return Response.json({ success: true, data: { records, count: records.length } })
       }
 
+      if (tool === 'records.query' && params.collection === 'matchScores') {
+        const where = params.where as Partial<MatchScoreboard>
+        const records = Array.from(scores.values()).filter(record =>
+          Object.entries(where).every(([key, value]) => record.data[key as keyof MatchScoreboard] === value),
+        )
+        return Response.json({ success: true, data: { records, count: records.length } })
+      }
+
       if (tool === 'records.create' && params.collection === 'rsvps') {
         const data = params.data as Omit<RallyRSVP, 'userId'>
         const userId = request.headers.get('X-User-Id') ?? ''
@@ -46,10 +57,28 @@ function createHarness() {
         return Response.json({ success: true, data: { recordId } })
       }
 
+      if (tool === 'records.create' && params.collection === 'matchScores') {
+        const data = params.data as Omit<MatchScoreboard, 'sessionId'> & { sessionId: string }
+        const userId = request.headers.get('X-User-Id') ?? ''
+        const duplicate = Array.from(scores.values()).some(record =>
+          record.data.sessionId === data.sessionId,
+        )
+        if (duplicate) return Response.json({ success: false, error: 'Duplicate scoreboard' })
+        const recordId = `score-${++nextRecordId}`
+        scores.set(recordId, { recordId, createdBy: userId, data: { ...data } })
+        return Response.json({ success: true, data: { recordId } })
+      }
+
       if (tool === 'records.update') {
         const collection = params.collection
         const recordId = String(params.recordId)
         const patch = params.data as Record<string, unknown>
+        if (collection === 'matchScores') {
+          const record = scores.get(recordId)
+          if (!record) return Response.json({ success: false, error: 'Record not found' })
+          Object.assign(record.data, patch)
+          return Response.json({ success: true, data: { recordId } })
+        }
         if (collection === 'sessions') {
           const record = sessions.get(recordId)
           if (!record) return Response.json({ success: false, error: 'Record not found' })
@@ -122,7 +151,7 @@ function createHarness() {
     })
   }
 
-  return { addSession, command, rsvps, sessions }
+  return { addSession, command, rsvps, scores, sessions }
 }
 
 describe('RallyCircle server-side session and RSVP rules', () => {
@@ -268,5 +297,195 @@ describe('RallyCircle server-side session and RSVP rules', () => {
       createdBy: 'host',
       recordId: 'session',
     }, 'player')).toBe(false)
+  })
+})
+
+describe('match scoreboard server rules', () => {
+  const finalScore = {
+    operation: 'scoreboard',
+    teamAName: 'Alice / Bob',
+    teamBName: 'Carol / Dan',
+    status: 'final',
+    sets: [{ a: 6, b: 4 }, { a: 6, b: 3 }],
+    matchTiebreak: null,
+    expectedVersion: 0,
+    correction: false,
+  }
+
+  it('lets the host create a score and stamps version and author', async () => {
+    const harness = createHarness()
+    harness.addSession('open-session', 'host')
+
+    await expect(harness.command('host', {
+      ...finalScore,
+      sessionId: 'open-session',
+    })).resolves.toMatchObject({ success: true })
+    expect(harness.scores.size).toBe(1)
+    const saved = Array.from(harness.scores.values())[0].data
+    expect(saved).toMatchObject({ sessionId: 'open-session', version: 1, updatedBy: 'host', status: 'final' })
+    expect(saved.sets).toEqual([{ a: 6, b: 4 }, { a: 6, b: 3 }])
+  })
+
+  it('rejects non-host writes and writes into another session', async () => {
+    const harness = createHarness()
+    harness.addSession('session-a', 'host-a')
+    harness.addSession('session-b', 'host-b')
+
+    // A participant who is not the host cannot write the score.
+    await expect(harness.command('player', {
+      ...finalScore,
+      sessionId: 'session-a',
+    })).resolves.toMatchObject({ success: false, error: 'Only the session host can update the scoreboard.' })
+
+    // The host of session A cannot write session B's scoreboard.
+    await expect(harness.command('host-a', {
+      ...finalScore,
+      sessionId: 'session-b',
+    })).resolves.toMatchObject({ success: false, error: 'Only the session host can update the scoreboard.' })
+    expect(harness.scores.size).toBe(0)
+
+    // The host of session B can.
+    await expect(harness.command('host-b', {
+      ...finalScore,
+      sessionId: 'session-b',
+    })).resolves.toMatchObject({ success: true })
+    expect(harness.scores.size).toBe(1)
+  })
+
+  it('rejects invalid scores, missing sessions, and cancelled sessions', async () => {
+    const harness = createHarness()
+    harness.addSession('open-session', 'host')
+    harness.addSession('cancelled-session', 'host', 'cancelled')
+
+    await expect(harness.command('host', {
+      ...finalScore,
+      sessionId: 'missing-session',
+    })).resolves.toMatchObject({ success: false, error: 'This session is unavailable.' })
+
+    await expect(harness.command('host', {
+      ...finalScore,
+      sessionId: 'open-session',
+      sets: [{ a: 6, b: 6 }],
+    })).resolves.toMatchObject({ success: false, error: expect.stringContaining('valid completed score') })
+
+    await expect(harness.command('host', {
+      ...finalScore,
+      sessionId: 'open-session',
+      sets: [{ a: 8, b: 0 }],
+    })).resolves.toMatchObject({ success: false })
+
+    await expect(harness.command('host', {
+      ...finalScore,
+      sessionId: 'open-session',
+      matchTiebreak: { a: 10, b: 7 },
+    })).resolves.toMatchObject({ success: false, error: expect.stringContaining('split 1–1') })
+
+    await expect(harness.command('host', {
+      ...finalScore,
+      sessionId: 'open-session',
+      sets: [{ a: 6, b: 4 }],
+    })).resolves.toMatchObject({ success: false, error: expect.stringContaining('needs a winner') })
+
+    await expect(harness.command('host', {
+      ...finalScore,
+      sessionId: 'cancelled-session',
+    })).resolves.toMatchObject({ success: false, error: expect.stringContaining('cancelled') })
+
+    expect(harness.scores.size).toBe(0)
+  })
+
+  it('turns a stale concurrent edit into a conflict, never a silent overwrite', async () => {
+    const harness = createHarness()
+    harness.addSession('open-session', 'host')
+    await harness.command('host', { ...finalScore, sessionId: 'open-session' })
+
+    // Two edits based on version 1 race through the serialised queue.
+    // (The score is final, so both carry the correction flag.)
+    const [first, second] = await Promise.all([
+      harness.command('host', {
+        ...finalScore,
+        sessionId: 'open-session',
+        sets: [{ a: 6, b: 4 }, { a: 7, b: 5 }],
+        expectedVersion: 1,
+        correction: true,
+      }),
+      harness.command('host', {
+        ...finalScore,
+        sessionId: 'open-session',
+        sets: [{ a: 6, b: 2 }, { a: 6, b: 2 }],
+        expectedVersion: 1,
+        correction: true,
+      }),
+    ])
+    expect(first.success).toBe(true)
+    expect(second).toMatchObject({ success: false, error: expect.stringContaining('Conflict:') })
+    const saved = Array.from(harness.scores.values())[0].data
+    expect(saved.version).toBe(2)
+    expect(saved.sets).toEqual([{ a: 6, b: 4 }, { a: 7, b: 5 }])
+
+    // Retrying with the fresh version succeeds.
+    await expect(harness.command('host', {
+      ...finalScore,
+      sessionId: 'open-session',
+      sets: [{ a: 6, b: 2 }, { a: 6, b: 2 }],
+      expectedVersion: 2,
+      correction: true,
+    })).resolves.toMatchObject({ success: true })
+    expect(Array.from(harness.scores.values())[0].data.version).toBe(3)
+  })
+
+  it('requires an explicit correction to change a final score', async () => {
+    const harness = createHarness()
+    harness.addSession('open-session', 'host')
+    await harness.command('host', { ...finalScore, sessionId: 'open-session' })
+
+    await expect(harness.command('host', {
+      ...finalScore,
+      sessionId: 'open-session',
+      sets: [{ a: 6, b: 4 }, { a: 7, b: 5 }],
+      expectedVersion: 1,
+    })).resolves.toMatchObject({ success: false, error: expect.stringContaining('correction') })
+
+    await expect(harness.command('host', {
+      ...finalScore,
+      sessionId: 'open-session',
+      sets: [{ a: 6, b: 4 }, { a: 7, b: 5 }],
+      expectedVersion: 1,
+      correction: true,
+    })).resolves.toMatchObject({ success: true })
+    const saved = Array.from(harness.scores.values())[0].data
+    expect(saved.version).toBe(2)
+    expect(saved.sets).toEqual([{ a: 6, b: 4 }, { a: 7, b: 5 }])
+    expect(saved.updatedBy).toBe('host')
+  })
+
+  it('treats an identical re-save as an idempotent no-op', async () => {
+    const harness = createHarness()
+    harness.addSession('open-session', 'host')
+    await harness.command('host', { ...finalScore, sessionId: 'open-session' })
+    await expect(harness.command('host', {
+      ...finalScore,
+      sessionId: 'open-session',
+      expectedVersion: 1,
+    })).resolves.toMatchObject({ success: true })
+    expect(Array.from(harness.scores.values())[0].data.version).toBe(1)
+    expect(harness.scores.size).toBe(1)
+  })
+
+  it('keeps scoreboard records read-only for direct client writes', () => {
+    const record = {
+      data: {
+        sessionId: 'session', teamAName: 'A', teamBName: 'B', status: 'final' as const,
+        sets: [], matchTiebreak: null, version: 1, updatedBy: 'host',
+      },
+      createdBy: 'host',
+      recordId: 'score-1',
+    }
+    expect(canRead(matchScoresSchema, 'member', record, 'player')).toBe(true)
+    expect(canCreate(matchScoresSchema, 'member')).toBe(false)
+    expect(canCreate(matchScoresSchema, 'admin')).toBe(false)
+    expect(canUpdate(matchScoresSchema, 'member', record, 'host')).toBe(false)
+    expect(canUpdate(matchScoresSchema, 'admin', record, 'host')).toBe(false)
+    expect(canDelete(matchScoresSchema, 'member', record, 'host')).toBe(false)
   })
 })

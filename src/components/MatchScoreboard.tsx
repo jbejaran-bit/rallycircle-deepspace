@@ -5,6 +5,7 @@ import { isScoreboardConflict, runScoreboardCommand } from '@/lib/scoreboard-act
 import {
   formatMatchTiebreak,
   formatSetScores,
+  matchSetsWon,
   MAX_SETS,
   scoreboardStatusLabel,
   scoreboardWinner,
@@ -221,7 +222,7 @@ export default function MatchScoreboard({ sessionId, isHost, cancelled }: {
   if (cancelled && !score) return null
 
   const winner = score ? scoreboardWinner(score) : null
-  const won = score ? setsWon(score.sets) : { a: 0, b: 0 }
+  const won = score ? matchSetsWon(score) : { a: 0, b: 0 }
 
   return (
     <section data-testid="match-scoreboard" aria-label="Match scoreboard" className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 sm:p-5">

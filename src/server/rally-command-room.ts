@@ -73,7 +73,9 @@ function parseCommand(value: unknown): RallyCommand | null {
     return { operation: value.operation, sessionId: value.sessionId, status: value.status, userId: value.userId }
   }
   if (value.operation === 'scoreboard') {
-    const input = parseScoreboardInput(value)
+    // Accept both shapes: the flat client body, and the parsed command
+    // the action forwards (scoreboard fields nested under `input`).
+    const input = parseScoreboardInput(isRecord(value.input) ? value.input : value)
     if (!input) return null
     if (typeof value.expectedVersion !== 'number' || !Number.isInteger(value.expectedVersion) || value.expectedVersion < 0) return null
     if (typeof value.correction !== 'boolean') return null

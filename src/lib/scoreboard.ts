@@ -75,12 +75,21 @@ export function setsWon(sets: SetScore[]): { a: number; b: number } {
   return { a, b }
 }
 
-/** Match winner once somebody has won 2 sets, else null. */
+/** Match winner once somebody has won 2 sets — a deciding tiebreak win counts as the third set. */
 export function scoreboardWinner(input: Pick<ScoreboardInput, 'sets' | 'matchTiebreak'>): 'A' | 'B' | null {
-  const won = setsWon(input.sets)
+  const won = matchSetsWon(input)
   if (won.a >= 2) return 'A'
   if (won.b >= 2) return 'B'
   return null
+}
+
+/** Sets won, counting a decided match tiebreak as the deciding set (1–1 becomes 2–1). */
+export function matchSetsWon(input: Pick<ScoreboardInput, 'sets' | 'matchTiebreak'>): { a: number; b: number } {
+  const won = setsWon(input.sets)
+  const tiebreakWinner = matchTiebreakWinner(input.matchTiebreak ?? null)
+  if (won.a === 1 && won.b === 1 && tiebreakWinner === 'A') won.a = 2
+  if (won.a === 1 && won.b === 1 && tiebreakWinner === 'B') won.b = 2
+  return won
 }
 
 /** A completed set: 6–0..4, 7–5, or 7–6 (a tiebreak set). No partial sets in the MVP. */
@@ -156,6 +165,14 @@ export function validateScoreboardInput(
     return 'A deciding match tiebreak is only used when the sets are split 1–1.'
   }
 
+  // Finality dominates: once final, only a confirmed correction may change the score.
+  if (current?.status === 'final') {
+    if (input.status !== 'final') return 'A final match stays final — correct the score instead of reopening it.'
+    if (!sameScore(input, current) && !correction) {
+      return 'This match is final. Confirm this is a correction to change the score.'
+    }
+  }
+
   if (input.status === 'not_started') {
     if (input.sets.length > 0 || input.matchTiebreak !== null) {
       return 'A match that has not started cannot have set scores.'
@@ -172,19 +189,14 @@ export function validateScoreboardInput(
   }
 
   if (input.status === 'final') {
+    if (setsSplit && input.matchTiebreak !== null && matchTiebreakWinner(input.matchTiebreak) === null) {
+      return 'The deciding match tiebreak needs a winner (first to 10, win by 2).'
+    }
     const winner = scoreboardWinner(input)
     if (winner === null) return 'A final match needs a winner — someone must win 2 sets.'
     if (input.matchTiebreak !== null) {
       const tiebreakWinner = matchTiebreakWinner(input.matchTiebreak)
-      if (tiebreakWinner === null) return 'The deciding match tiebreak needs a winner (first to 10, win by 2).'
       if (tiebreakWinner !== winner) return 'The match tiebreak winner must match the match winner.'
-    }
-  }
-
-  if (current?.status === 'final') {
-    if (input.status !== 'final') return 'A final match stays final — correct the score instead of reopening it.'
-    if (!sameScore(input, current) && !correction) {
-      return 'This match is final. Confirm this is a correction to change the score.'
     }
   }
 
