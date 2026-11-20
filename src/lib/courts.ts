@@ -1,3 +1,12 @@
+/**
+ * Pittsburgh fallback courts — unchanged data from the existing finder
+ * (City of Pittsburgh "Courts and Rinks" dataset; RecDesk is the authority
+ * for booking). Kept verbatim so the existing tab keeps working exactly as
+ * before; dynamic discovery is additive, in the Nearby tab.
+ */
+
+import { haversineMiles, type LatLng } from './geo'
+
 export interface Court {
   id: string
   name: string
@@ -23,10 +32,19 @@ export function findCourt(id: string | null) {
 }
 
 export function distanceMiles(from: { lat: number; lng: number }, to: Court) {
-  const radians = Math.PI / 180
-  const latitude = (to.lat - from.lat) * radians
-  const longitude = (to.lng - from.lng) * radians
-  const a = Math.sin(latitude / 2) ** 2 +
-    Math.cos(from.lat * radians) * Math.cos(to.lat * radians) * Math.sin(longitude / 2) ** 2
-  return 3958.8 * 2 * Math.asin(Math.sqrt(Math.min(a, 1)))
+  return haversineMiles(from, to)
 }
+
+/** Match a session's court/location text against the known Pittsburgh courts. */
+export function findKnownCourtForSession(courtName: string, location: string): Court | undefined {
+  const haystack = `${courtName} ${location}`.trim().toLowerCase()
+  if (!haystack) return undefined
+  return courts.find(court => {
+    const name = court.name.toLowerCase()
+    // Match on a distinctive fragment: "Schenley", "Highland Park", "Frick Park".
+    const fragment = name.replace(' tennis courts', '').replace(' oval', '').trim()
+    return haystack.includes(fragment) || haystack.includes(name)
+  })
+}
+
+export type { LatLng }
