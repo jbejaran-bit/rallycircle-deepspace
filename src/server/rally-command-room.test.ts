@@ -6,7 +6,7 @@ import type { RallyRSVP, RallySession } from '../lib/rally.js'
 import type { Env } from '../../worker.js'
 import { rallyCommandAction, RallyCommandRoom } from './rally-command-room.js'
 
-function createHarness() {
+function createHarness(roomUnreachable = false) {
   const sessions = new Map<string, { recordId: string; createdBy: string; data: RallySession }>()
   const rsvps = new Map<string, { recordId: string; createdBy: string; data: RallyRSVP }>()
   let nextRecordId = 0
@@ -46,6 +46,13 @@ function createHarness() {
         return Response.json({ success: true, data: { recordId } })
       }
 
+      if (tool === 'records.delete' && params.collection === 'rsvps') {
+        const recordId = String(params.recordId)
+        if (!rsvps.has(recordId)) return Response.json({ success: false, error: 'Record not found' })
+        rsvps.delete(recordId)
+        return Response.json({ success: true, data: { recordId } })
+      }
+
       if (tool === 'records.update') {
         const collection = params.collection
         const recordId = String(params.recordId)
@@ -78,7 +85,11 @@ function createHarness() {
   const room = new RallyCommandRoom({} as DurableObjectState, env)
   const commandNamespace = {
     idFromName: (name: string) => name,
-    get: () => ({ fetch: (request: Request) => room.fetch(request) }),
+    get: () => ({
+      fetch: roomUnreachable
+        ? async () => { throw new Error('room down') }
+        : (request: Request) => room.fetch(request),
+    }),
   }
   const actionEnv = { ...env, RALLY_COMMAND_ROOMS: commandNamespace } as unknown as Env
 
@@ -122,7 +133,11 @@ function createHarness() {
     })
   }
 
-  return { addSession, command, rsvps, sessions }
+  function addRsvp(recordId: string, sessionId: string, userId: string, status: RallyRSVP['status'] = 'going') {
+    rsvps.set(recordId, { recordId, createdBy: userId, data: { sessionId, userId, status } })
+  }
+
+  return { addSession, addRsvp, command, rsvps, sessions }
 }
 
 describe('RallyCircle server-side session and RSVP rules', () => {
@@ -268,5 +283,79 @@ describe('RallyCircle server-side session and RSVP rules', () => {
       createdBy: 'host',
       recordId: 'session',
     }, 'player')).toBe(false)
+  })
+
+  it('schema enforces server-side text lengths on sessions', () => {
+    const columns = new Map(sessionsSchema.columns.map(c => [c.name, c]))
+    expect(columns.get('title')?.maxLength).toBe(72)
+    expect(columns.get('court')?.maxLength).toBe(100)
+    expect(columns.get('location')?.maxLength).toBe(100)
+    expect(columns.get('notes')?.maxLength).toBe(400)
+  })
+
+  it('withdraw removes only the caller’s RSVP and succeeds when absent', async () => {
+    const harness = createHarness()
+    harness.addSession('open-session', 'host')
+    harness.addRsvp('rsvp-1', 'open-session', 'player-1', 'going')
+    harness.addRsvp('rsvp-2', 'open-session', 'player-2', 'maybe')
+
+    await expect(harness.command('player-1', {
+      operation: 'withdraw',
+      sessionId: 'open-session',
+    })).resolves.toMatchObject({ success: true })
+    expect(harness.rsvps.has('rsvp-1')).toBe(false)
+    expect(harness.rsvps.has('rsvp-2')).toBe(true)
+
+    // Withdrawing twice is a success, not a "Record not found".
+    await expect(harness.command('player-1', {
+      operation: 'withdraw',
+      sessionId: 'open-session',
+    })).resolves.toMatchObject({ success: true })
+    expect(harness.rsvps.size).toBe(1)
+  })
+
+  it('withdraw is allowed on a cancelled session (harmless cleanup)', async () => {
+    const harness = createHarness()
+    harness.addSession('cancelled-session', 'host', 'cancelled')
+    harness.addRsvp('rsvp-1', 'cancelled-session', 'player-1', 'going')
+
+    await expect(harness.command('player-1', {
+      operation: 'withdraw',
+      sessionId: 'cancelled-session',
+    })).resolves.toMatchObject({ success: true })
+    expect(harness.rsvps.size).toBe(0)
+  })
+
+  it('withdraw racing an RSVP update ends in one consistent state', async () => {
+    const harness = createHarness()
+    harness.addSession('open-session', 'host')
+    harness.addRsvp('rsvp-1', 'open-session', 'player-1', 'going')
+
+    const [withdrawResult, rsvpResult] = await Promise.all([
+      harness.command('player-1', { operation: 'withdraw', sessionId: 'open-session' }),
+      harness.command('player-1', { operation: 'rsvp', sessionId: 'open-session', status: 'maybe' }),
+    ])
+    expect(withdrawResult.success).toBe(true)
+    expect(rsvpResult.success).toBe(true)
+    // Serialised by the per-session queue: either the withdraw won (0 rows)
+    // or the RSVP won (1 row, latest status) — never 2 rows, never an error.
+    expect(harness.rsvps.size).toBeLessThanOrEqual(1)
+    if (harness.rsvps.size === 1) {
+      expect(Array.from(harness.rsvps.values())[0].data.status).toBe('maybe')
+    }
+  })
+
+  it('returns a structured failure when the command room is unreachable', async () => {
+    const harness = createHarness(true)
+    harness.addSession('open-session', 'host')
+
+    await expect(harness.command('player', {
+      operation: 'rsvp',
+      sessionId: 'open-session',
+      status: 'going',
+    })).resolves.toMatchObject({
+      success: false,
+      error: 'The session update could not reach the server. Try again.',
+    })
   })
 })
