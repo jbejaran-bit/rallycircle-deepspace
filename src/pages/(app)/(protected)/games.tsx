@@ -6,7 +6,7 @@ import { courts as pittsburghCourts } from '@/lib/courts'
 import { filterGames, gameStatusLabel, DEFAULT_GAME_RADIUS_MILES, type GameFormat, type KnownCourtLocation } from '@/lib/find-games'
 import { formatDistanceMiles, type LatLng } from '@/lib/geo'
 import { requestOneShotLocation } from '@/lib/location'
-import { formatSessionTime, type Level, type RallyRSVP, type RallySession } from '@/lib/rally'
+import { formatSessionTime, type Level, type RallyRSVP, type RallySession, type RallyWaitlist } from '@/lib/rally'
 
 const LEVELS: (Level | 'Any level')[] = ['Any level', 'Beginner', 'Intermediate', 'Advanced']
 const DISTANCE_OPTIONS: (number | null)[] = [null, 2, 5, 10, 25]
@@ -30,16 +30,16 @@ function loadDiscoveredCourts(): KnownCourtLocation[] {
   }
 }
 
-const KNOWN_COURTS: KnownCourtLocation[] = [
-  ...pittsburghCourts.map(court => ({ name: court.name, lat: court.lat, lng: court.lng })),
-  ...loadDiscoveredCourts(),
-]
-
 export default function GamesPage() {
   const { userId } = useAuth()
   const { records: sessions, status: sessionStatus, error: sessionsError } = useQuery<RallySession>('sessions', { orderBy: 'startsAt', orderDir: 'asc' })
   const { records: rsvps, status: rsvpStatus, error: rsvpError } = useQuery<RallyRSVP>('rsvps')
 
+  const waitlist = useQuery<RallyWaitlist>('waitlists', { where: { userId } })
+  const myConfirmedSessions = useMemo(() => new Set(rsvps.filter(row => row.data.userId === userId && row.data.status === 'going').map(row => row.data.sessionId)), [rsvps, userId])
+  const queuedSessions = useMemo(() => new Set(waitlist.records.map(row => row.data.sessionId)), [waitlist.records])
+  const [knownCourts] = useState<KnownCourtLocation[]>(() => [...pittsburghCourts, ...loadDiscoveredCourts()])
+  const [availability, setAvailability] = useState<'any' | 'spots' | 'waitlist'>('any')
   const [area, setArea] = useState('')
   const [level, setLevel] = useState<Level | 'Any level'>('Any level')
   const [format, setFormat] = useState<GameFormat>('any')
@@ -66,10 +66,11 @@ export default function GamesPage() {
         maxDistanceMiles: maxDistance ?? undefined,
         showCancelled,
         showPast,
+        availability,
       },
-      { userId: userId ?? undefined, userLocation: location ?? undefined, knownCourts: KNOWN_COURTS },
+      { userId: userId ?? undefined, userLocation: location ?? undefined, knownCourts },
     )
-  }, [sessions, rsvps, sessionStatus, rsvpStatus, area, level, format, fromDate, toDate, maxDistance, showCancelled, showPast, userId, location])
+  }, [sessions, rsvps, sessionStatus, rsvpStatus, area, level, format, fromDate, toDate, maxDistance, showCancelled, showPast, availability, userId, location, knownCourts])
 
   async function locate() {
     setLocating(true)
@@ -87,7 +88,8 @@ export default function GamesPage() {
   }
 
   const loading = sessionStatus === 'loading' || rsvpStatus === 'loading'
-  const error = sessionStatus === 'error' ? sessionsError : rsvpStatus === 'error' ? rsvpError : null
+  const failed = sessionStatus === 'error' || rsvpStatus === 'error'
+  const error = sessionStatus === 'error' ? sessionsError : rsvpError
 
   return (
     <div className="min-h-screen bg-[#0b110f] text-white">
@@ -95,7 +97,7 @@ export default function GamesPage() {
         <header>
           <h1 className="text-4xl font-black tracking-tight">Find games near me</h1>
           <p className="mt-2 max-w-2xl text-white/70">
-            Upcoming public sessions from the community — no invitation needed. Open a session to RSVP through the usual flow.
+            Browse upcoming community sessions. Open a rally to RSVP or join its waitlist.
             Distances are straight-line and only shown where a court has known coordinates; sessions with a text-only location are never geocoded.
           </p>
         </header>
@@ -119,6 +121,14 @@ export default function GamesPage() {
                 <option value="singles">Singles</option>
                 <option value="doubles">Doubles</option>
                 <option value="practice">Practice</option>
+              </select>
+            </label>
+            <label className="block text-xs font-medium text-white/75">
+              Places
+              <select value={availability} onChange={e => setAvailability(e.target.value as typeof availability)} className="mt-1.5 min-h-11 w-full rounded-xl border border-white/15 bg-[#0e1513] px-3.5">
+                <option value="any">Any availability</option>
+                <option value="spots">Places available</option>
+                <option value="waitlist">Full with waitlist</option>
               </select>
             </label>
             <label className="block text-xs font-medium text-white/75">
@@ -161,17 +171,18 @@ export default function GamesPage() {
         </section>
 
         {loading ? (
-          <div role="status" aria-busy="true" className="space-y-3">{[1, 2, 3].map(n => <div key={n} className="h-32 animate-pulse rounded-2xl bg-white/5" />)}</div>
-        ) : error ? (
-          <p role="alert" className="rounded-xl border border-rose-400/30 bg-rose-400/10 px-3 py-2 text-sm text-rose-200">
-            Sessions could not load. {error} Refresh to try again.
-          </p>
+          <div role="status" aria-busy="true" className="space-y-3"><span className="sr-only">Loading games</span>{[1, 2, 3].map(n => <div key={n} className="h-32 motion-safe:animate-pulse rounded-2xl bg-white/5" />)}</div>
+        ) : failed ? (
+          <div role="alert" className="rounded-xl border border-rose-400/30 bg-rose-400/10 px-3 py-2 text-sm text-rose-200">
+            <p>Sessions could not load. {error}</p>
+            <button type="button" className="min-h-11 underline underline-offset-4" onClick={() => window.location.reload()}>Reload games</button>
+          </div>
         ) : games.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-white/20 p-10 text-center">
             <Sparkles size={28} className="mx-auto mb-3 text-[#d7fc83]" />
             <p className="text-sm font-bold">No games match these filters</p>
             <p className="mt-2 text-xs leading-relaxed text-white/50">Try widening the date range, clearing the area, or removing the distance limit. You can also create a session of your own.</p>
-            <Link to="/rallies" className="mt-4 inline-block rounded-xl bg-[#d7fc83] px-4 py-3 text-sm font-bold text-[#101a13]">Create a session</Link>
+            <Link to="/rallies?create=1" className="mt-4 inline-block rounded-xl bg-[#d7fc83] px-4 py-3 text-sm font-bold text-[#101a13]">Create a session</Link>
           </div>
         ) : (
           <div className="space-y-3">
@@ -195,7 +206,7 @@ export default function GamesPage() {
                 </p>
                 <div className="mt-4 flex items-center justify-between border-t border-white/10 pt-3">
                   <span className="flex items-center gap-1.5 text-xs font-semibold text-white/75"><Users size={14} className="text-[#d7fc83]" />{game.going} going / target {game.session.targetPlayers}{game.maybe > 0 ? ` · ${game.maybe} maybe` : ''}</span>
-                  <span className="text-[11px] font-bold text-[#d7fc83]">{game.isMine ? 'You’re involved' : 'Open to join'}</span>
+                  <span className="text-[11px] font-bold text-[#d7fc83]">{!game.cancelled && queuedSessions.has(game.recordId) && !myConfirmedSessions.has(game.recordId) ? 'On your waitlist' : game.cancelled ? '' : game.isMine ? 'You’re involved' : game.status === 'full' ? 'Waitlist available' : 'Open to join'}</span>
                 </div>
               </Link>
             ))}

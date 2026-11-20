@@ -1,0 +1,52 @@
+.tennis-landing {
+  --tennis-paper: #f6f4e9;
+  --tennis-ink: #17281e;
+  --tennis-muted: #435448;
+  --tennis-accent: #d8ee70;
+  --tennis-line: #b9c3ad;
+  min-height: 100vh;
+  color: var(--tennis-ink);
+  background: var(--tennis-paper);
+  font-family: 'Avenir Next', 'Segoe UI', sans-serif;
+}
+.tennis-frame { width: min(84rem, calc(100% - 3rem)); margin-inline: auto; }
+.tennis-header { min-height: 5.5rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; border-bottom: 1px solid var(--tennis-line); }
+.tennis-wordmark { display: inline-flex; align-items: center; gap: .55rem; font-weight: 800; font-size: 1.25rem; letter-spacing: -.05em; }
+.tennis-mark { display: block; width: 1.15rem; aspect-ratio: 1; border-radius: 50%; background: var(--tennis-ink); border: 3px solid var(--tennis-ink); box-shadow: inset 0 0 0 2px var(--tennis-paper); }
+.tennis-header nav, .tennis-actions, .tennis-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 1rem; }
+.tennis-account, .tennis-primary, .tennis-secondary { display: inline-flex; align-items: center; justify-content: center; gap: .6rem; min-height: 2.9rem; padding: .65rem 1rem; border: 1px solid var(--tennis-ink); border-radius: .45rem; font-weight: 700; font-size: .92rem; }
+.tennis-account { background: var(--tennis-ink); color: var(--tennis-paper); }
+.tennis-primary { background: var(--tennis-accent); }
+.tennis-account:hover, .tennis-primary:hover, .tennis-secondary:hover { text-decoration: underline; text-underline-offset: .2em; }
+.tennis-hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); align-items: center; gap: clamp(1.5rem, 5vw, 5rem); padding-block: clamp(2.5rem, 6vw, 6rem); }
+.tennis-intro h1 { font-family: Georgia, serif; font-size: clamp(3rem, 7.4vw, 7.2rem); line-height: .97; letter-spacing: -.088em; font-weight: 500; }
+.tennis-intro em { color: #3b674d; }
+.tennis-intro p { max-width: 32rem; margin: 1.5rem 0; font-size: clamp(1rem, 1.4vw, 1.2rem); line-height: 1.65; color: var(--tennis-muted); }
+.tennis-art { min-width: 0; aspect-ratio: 1.1; position: relative; overflow: hidden; border-radius: 1.1rem; background: repeating-linear-gradient(135deg, transparent 0 3px, #fff1 4px, transparent 5px), linear-gradient(140deg,#4e8060,#234331 80%); }
+.tennis-court { position: absolute; color: #e7efc7; border: 2px solid currentColor; background: #416e53; inset: 10% 23%; transform: rotate(31deg) scale(1.18); box-shadow: 0 0 0 2vw #294d39; }
+.tennis-court i { position: absolute; display: block; }
+.tennis-baseline { left: 0; right: 0; border-top: 2px solid; }
+.tennis-baseline-start { top: 28%; }
+.tennis-baseline-end { bottom: 28%; }
+.tennis-singles { inset: 0 14%; border-inline: 2px solid; }
+.tennis-service { inset: 28% 50% 28% auto; border-left: 2px solid; }
+.tennis-net { top: 50%; left: -5%; width: 110%; border-top: 3px solid; box-shadow: 0 2px 4px #17281e; }
+.tennis-ball { position: absolute; top: 44%; left: 65%; width: 10%; aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle at 33% 30%, #f0ff9c, #badb54 75%); box-shadow: .35rem .55rem .7rem #192b2088; transform: rotate(-32deg); }
+.tennis-ball::after { position: absolute; content: ''; inset: 10% 12%; border-inline: 2px solid #f1ffbc; border-radius: 50%; }
+.tennis-features { border-top: 1px solid var(--tennis-line); padding-block: 2.5rem; }
+.tennis-features h2 { font: 500 clamp(1.8rem, 4vw, 3rem)/1.15 Georgia, serif; letter-spacing: -.05em; margin-bottom: 1rem; }
+.tennis-features ul { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: .8rem; }
+.tennis-features li a { position: relative; display: block; height: 100%; border: 1px solid var(--tennis-line); border-radius: .6rem; padding: 1.15rem 2.6rem 1.15rem 1.15rem; }
+.tennis-features li a:hover { background: #e9eed8; }
+.tennis-features h3 { margin: .65rem 0 .25rem; font-weight: 800; }
+.tennis-features p { color: var(--tennis-muted); font-size: .94rem; }
+.tennis-feature-arrow { position: absolute; top: 1.2rem; right: 1rem; }
+.tennis-footer { border-top: 1px solid var(--tennis-line); min-height: 5rem; padding-block: 1rem; }
+.tennis-landing a:focus-visible { outline: 3px solid #38724c; outline-offset: 4px; }
+@media (max-width: 700px) {
+  .tennis-frame { width: calc(100% - 2rem); }
+  .tennis-hero, .tennis-features ul { grid-template-columns: 1fr; }
+  .tennis-art { aspect-ratio: 1.45; }
+  .tennis-court { inset: 7% 26%; }
+  .tennis-nav-guide { display: none; }
+}

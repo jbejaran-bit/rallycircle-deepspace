@@ -6,7 +6,7 @@ const baseURL = `http://127.0.0.1:${port}`
 
 export default defineConfig({
   testDir: '.',
-  testMatch: ['smoke.spec.ts', 'public-navigation.spec.ts'],
+  testMatch: ['smoke.spec.ts', 'public-navigation.spec.ts', 'product-public.spec.ts'],
   outputDir: '../test-results-public',
   use: {
     baseURL,

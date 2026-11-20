@@ -31,10 +31,10 @@ export default function AppLayout() {
           when <Seo> unmounts, so every route without <Seo> sets its own. */}
       <title>{APP_NAME}</title>
       <AuthBoot>
-        <div className="flex h-screen flex-col bg-background overflow-hidden">
+        <div className="flex h-dvh flex-col bg-background overflow-hidden">
           <Navigation />
           <main className="flex-1 overflow-y-auto min-h-0">
-            <Suspense fallback={<div className="flex items-center justify-center h-full text-muted-foreground">Loading...</div>}>
+            <Suspense fallback={<div role="status" className="flex items-center justify-center h-full text-muted-foreground">Loading...</div>}>
               <Outlet />
             </Suspense>
           </main>
@@ -62,7 +62,7 @@ function AuthBoot({ children }: { children: ReactNode }) {
   const { error, warning } = useToast()
 
   if (!isLoaded) {
-    return <div aria-busy="true" className="fixed inset-0 bg-background" />
+    return <div role="status" aria-busy="true" className="fixed inset-0 bg-background"><span className="sr-only">Checking sign-in status</span></div>
   }
 
   return (

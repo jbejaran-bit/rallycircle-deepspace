@@ -44,10 +44,11 @@ function isGeocodedPlace(value: unknown): value is GeocodedPlace {
   return typeof p.displayName === 'string' && typeof p.lat === 'number' && typeof p.lng === 'number'
 }
 
-async function authedJson<T>(path: string, guard: (value: unknown) => value is T): Promise<T> {
+async function authedJson<T>(path: string, guard: (value: unknown) => value is T, signal?: AbortSignal): Promise<T> {
   const token = await getAuthToken()
   if (!token) throw new Error('Sign in before searching for courts.')
-  const response = await fetch(path, { headers: { Authorization: `Bearer ${token}` } })
+  signal?.throwIfAborted()
+  const response = await fetch(path, { headers: { Authorization: `Bearer ${token}` }, signal })
   const payload: unknown = await response.json().catch(() => null)
   if (!response.ok) {
     const message =
@@ -78,16 +79,16 @@ function isGeocodeResponse(value: unknown): value is GeocodeResponse {
   return Array.isArray(r.results) && r.results.every(isGeocodedPlace) && typeof r.cached === 'boolean'
 }
 
-export async function fetchNearbyCourts(center: LatLng, radiusKm: number): Promise<NearbyCourtsResponse> {
+export async function fetchNearbyCourts(center: LatLng, radiusKm: number, signal?: AbortSignal): Promise<NearbyCourtsResponse> {
   const params = new URLSearchParams({
     lat: center.lat.toFixed(3),
     lng: center.lng.toFixed(3),
     radiusKm: String(radiusKm),
   })
-  return authedJson(`/api/courts/nearby?${params}`, isNearbyResponse)
+  return authedJson(`/api/courts/nearby?${params}`, isNearbyResponse, signal)
 }
 
-export async function searchPlaces(query: string): Promise<GeocodeResponse> {
+export async function searchPlaces(query: string, signal?: AbortSignal): Promise<GeocodeResponse> {
   const params = new URLSearchParams({ q: query })
-  return authedJson(`/api/geocode?${params}`, isGeocodeResponse)
+  return authedJson(`/api/geocode?${params}`, isGeocodeResponse, signal)
 }

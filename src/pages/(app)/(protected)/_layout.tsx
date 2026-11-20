@@ -14,7 +14,7 @@
  */
 
 import { useState } from 'react'
-import { Link, Outlet } from 'react-router-dom'
+import { Link, Outlet, useLocation } from 'react-router-dom'
 import { AuthGate, AuthOverlay } from 'deepspace'
 import { Button } from '@/components/ui'
 
@@ -27,21 +27,30 @@ export default function ProtectedLayout() {
 }
 
 function SignedOutPanel() {
+  const { pathname, search } = useLocation()
   const [showAuthModal, setShowAuthModal] = useState(false)
+
+  const params = new URLSearchParams(search)
+  const reason = pathname === '/dashboard' ? 'Sign in to see your sessions, waitlists, and match results.'
+    : pathname === '/games' ? 'Sign in to browse rallies and join a game.'
+    : pathname === '/courts' ? 'Sign in to explore courts and plan a rally.'
+    : params.has('session') ? 'Sign in to open this rally invitation.'
+    : params.get('create') === '1' ? 'Sign in to set a time, choose a court, and invite players.'
+    : 'Sign in to access your RallyCircle account.'
 
   return (
     <div className="flex min-h-[60vh] items-center justify-center px-6 py-20">
-      <div className="w-full max-w-sm rounded-lg border border-border bg-card p-8 text-center">
-        <h1 className="text-lg font-semibold text-foreground">Sign in to continue</h1>
+      <div className="w-full max-w-md rounded-2xl border border-border bg-card px-6 py-8 text-center sm:px-9">
+        <h1 className="text-2xl font-bold tracking-tight text-foreground">Sign in to continue</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          This page is only available to signed-in users.
+          {reason}
         </p>
-        <Button className="mt-6 w-full" onClick={() => setShowAuthModal(true)}>
+        <Button className="mt-6 min-h-11 w-full" onClick={() => setShowAuthModal(true)}>
           Sign in
         </Button>
         <Link
           to="/"
-          className="mt-4 inline-block text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+          className="mt-4 inline-flex min-h-11 items-center text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
         >
           Back to home
         </Link>

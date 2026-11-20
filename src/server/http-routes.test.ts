@@ -43,3 +43,23 @@ describe('shared session OAuth redirect', () => {
     expect(result.headers.get('location')).toBe(`${origin}/rallies`)
   })
 })
+
+it.each(['/dashboard', '/games', '/courts', '/rallies?create=1&court=frick'])('resumes the approved landing action %s after OAuth', async path => {
+  const start = await app.request(`${origin}/api/auth/social-redirect?provider=google`, {
+    headers: { referer: `${origin}${path}` },
+  }, env)
+  const cookie = start.headers.getSetCookie().find(value => value.startsWith('rallycircle_return='))
+  expect(cookie).toBeDefined()
+  const callback = await app.request(`${origin}/api/auth/oauth-complete?code=test`, {
+    headers: { cookie: cookie!.split(';', 1)[0] },
+  }, env)
+  expect(callback.headers.get('location')).toBe(`${origin}${path}`)
+  expect(callback.headers.getSetCookie()).toContainEqual(expect.stringContaining('rallycircle_return=; Max-Age=0'))
+})
+
+it('rejects off-origin callback destinations even if a return cookie is supplied', async () => {
+  const response = await app.request(`${origin}/api/auth/oauth-complete`, {
+    headers: { cookie: 'rallycircle_return=%2F%2Felsewhere.example%2Fgames' },
+  }, env)
+  expect(response.headers.get('location')).toBe(`${origin}/rallies`)
+})

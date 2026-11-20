@@ -38,6 +38,7 @@ export interface GameFilters {
   showCancelled?: boolean
   /** Default false: hide sessions that already started. */
   showPast?: boolean
+  availability?: 'any' | 'spots' | 'waitlist'
 }
 
 export interface KnownCourtLocation {
@@ -124,6 +125,10 @@ export function filterGames(
 
     const { going, maybe, isMine } = attendance.get(recordId) ?? { going: 0, maybe: 0, isMine: false }
 
+    const full = session.capacity != null && going >= session.capacity
+    if (filters.availability === 'spots' && (full || cancelled)) continue
+    if (filters.availability === 'waitlist' && (!full || cancelled)) continue
+
     // Distance only when the session's court matches a court with known
     // coordinates. Matching is by normalised name — whole-name substring
     // either way, or a shared distinctive token (e.g. "Schenley" links a
@@ -157,7 +162,7 @@ export function filterGames(
       session,
       going,
       maybe,
-      status: session.capacity != null && going >= session.capacity ? 'full' : going >= session.targetPlayers ? 'target-reached' : 'needs-players',
+      status: full ? 'full' : going >= session.targetPlayers ? 'target-reached' : 'needs-players',
       cancelled,
       past,
       distanceMiles,
