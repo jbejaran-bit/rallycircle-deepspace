@@ -36,6 +36,8 @@ test('shared link and live readiness update across two accounts', async ({ users
     await expect(alice.page.getByRole('link', { name: 'Open court calendar' })).toHaveAttribute('href', /pittsburgh\.recdesk\.com/)
     await alice.page.getByRole('link', { name: 'Plan a Rally here' }).click()
     await expect(alice.page.getByRole('main')).toHaveCount(1)
+    const createDialog = alice.page.getByRole('dialog', { name: 'Create a session' })
+    await expect(createDialog.getByLabel('Session title')).toBeFocused()
     await expect(alice.page.getByPlaceholder('Schenley Park')).toHaveValue('Highland Park Tennis Courts')
     await expect(alice.page.getByPlaceholder('Pittsburgh, PA')).toHaveValue('Stanton Avenue, Pittsburgh')
     await alice.page.getByPlaceholder('Sunday doubles & rallies').fill(title)
@@ -113,6 +115,13 @@ test('shared link and live readiness update across two accounts', async ({ users
     await expect(alice.page.getByRole('button', { name: new RegExp(title) })).toBeVisible()
     await alice.page.goto(invitation)
     await expect(hostScoreboard.getByRole('cell', { name: '15', exact: true })).toBeVisible()
+
+    await bob.page.goto('/dashboard')
+    await expect(bob.page.getByRole('heading', { name: 'Your dashboard' })).toBeVisible()
+    await expect(bob.page.getByRole('region', { name: 'My matches' }).getByRole('link', { name: new RegExp(title) })).toBeVisible()
+    await bob.page.getByRole('button', { name: 'Week', exact: true }).click()
+    await expect(bob.page.getByRole('status').filter({ hasText: 'Week of' })).toBeVisible()
+    await bob.page.goto(invitation)
 
     const forgedIdentity = await invokeRallyCommand(bob.page, {
       operation: 'rsvp',

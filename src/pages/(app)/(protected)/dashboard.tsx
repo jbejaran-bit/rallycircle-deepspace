@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useAuth, useQuery, useUser } from 'deepspace'
 import { Link } from 'react-router-dom'
-import { ArrowRight, CalendarDays, MapPin, Plus } from 'lucide-react'
-import { buildDashboard, filterAgenda, type DashboardFilter } from '@/lib/rally-dashboard'
+import { ArrowRight, CalendarDays, ChevronLeft, ChevronRight, MapPin, Plus } from 'lucide-react'
+import { agendaWeek, buildDashboard, filterAgenda, type DashboardFilter } from '@/lib/rally-dashboard'
 import { formatSessionTime, type RallyRSVP, type RallySession, type RallyWaitlist } from '@/lib/rally'
 import { resultStatus } from '@/lib/rally-score'
 
@@ -28,12 +28,19 @@ export default function DashboardPage() {
   const rsvps = useQuery<RallyRSVP>('rsvps', { where: { userId } })
   const waitlist = useQuery<RallyWaitlist>('waitlists', { where: { userId } })
   const [filter, setFilter] = useState<DashboardFilter>('upcoming')
-  const [now] = useState(Date.now)
+  const [now, setNow] = useState(Date.now)
+  const [week, setWeek] = useState(0)
+  const [view, setView] = useState<'list' | 'calendar'>('list')
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
   const dashboard = useMemo(
     () => buildDashboard(sessions.records, rsvps.records.map(row => row.data), waitlist.records.map(row => row.data), userId ?? '', now),
     [sessions.records, rsvps.records, waitlist.records, userId, now],
   )
   const agenda = filterAgenda(dashboard.entries, filter)
+  const days = view === 'calendar' ? agendaWeek(new Date(now), week, dashboard.entries) : []
   const statuses = [sessions.status, rsvps.status, waitlist.status]
   const failed = statuses.includes('error')
   const ready = statuses.every(status => status === 'ready')
@@ -59,7 +66,42 @@ export default function DashboardPage() {
         ) : !ready ? <p role="status" className={panel}>Loading your rallies and matches…</p> : (
           <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
             <section className={panel} aria-labelledby="agenda-title">
-              <h2 id="agenda-title" className="text-xl font-bold">My sessions</h2>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h2 id="agenda-title" className="text-xl font-bold">My sessions</h2>
+                <div className="flex gap-2" role="group" aria-label="Schedule view">
+                  <button type="button" className={outline} aria-pressed={view === 'list'} onClick={() => setView('list')}>List</button>
+                  <button type="button" className={outline} aria-pressed={view === 'calendar'} onClick={() => setView('calendar')}>Week</button>
+                </div>
+              </div>
+              {view === 'calendar' ? (
+                <div className="mt-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button type="button" className={outline} aria-label="Previous week" onClick={() => setWeek(value => value - 1)}><ChevronLeft size={17} aria-hidden /></button>
+                    <button type="button" className={outline} onClick={() => setWeek(0)}>This week</button>
+                    <button type="button" className={outline} aria-label="Next week" onClick={() => setWeek(value => value + 1)}><ChevronRight size={17} aria-hidden /></button>
+                  </div>
+                  <p className="mt-3 text-sm text-white/75" role="status">Week of {days[0]?.date.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}</p>
+                  <ol className="mt-2 divide-y divide-white/15">
+                    {days.map(day => (
+                      <li key={day.date.getTime()} className="py-3">
+                        <h3 className="text-sm font-bold">{day.date.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}</h3>
+                        {day.entries.length === 0 ? <p className="mt-1 text-sm text-white/70">No sessions</p> : (
+                          <ul className="mt-1 space-y-1">
+                            {day.entries.map(({ recordId, data, cancelled }) => (
+                              <li key={recordId}>
+                                <Link className="block min-h-11 rounded-md py-2 text-sm text-[#d7fc83] hover:underline focus-visible:outline-2" to={`/rallies?session=${encodeURIComponent(recordId)}`}>
+                                  <span className="break-words font-semibold">{data.title}</span> · <time dateTime={data.startsAt}>{new Date(data.startsAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</time>
+                                  {cancelled && ' · Cancelled'}
+                                </Link>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              ) : <>
               <div className="mt-4 flex flex-wrap gap-2" aria-label="Filter sessions" role="group">
                 {filters.map(({ id, label }) => (
                   <button type="button" key={id} aria-pressed={filter === id} onClick={() => setFilter(id)} className={`${outline} aria-pressed:border-[#d7fc83] aria-pressed:bg-[#d7fc83]/15`}>{label}</button>
@@ -75,7 +117,7 @@ export default function DashboardPage() {
                   {agenda.map(({ recordId, data, hosting, response, waiting, cancelled }) => (
                     <li key={recordId}>
                       <Link to={`/rallies?session=${encodeURIComponent(recordId)}`} className="block rounded-lg py-4 focus-visible:outline-2">
-                        <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="break-all font-bold">{data.title}</h3><span className="text-sm text-[#d7fc83]">{cancelled ? 'Cancelled' : waiting ? 'Waitlisted' : hosting ? 'Hosting' : response === 'maybe' ? 'Tentative' : response === 'going' ? 'Going' : 'Match participant'}</span></div>
+                        <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="break-words font-bold">{data.title}</h3><span className="text-sm text-[#d7fc83]">{cancelled ? 'Cancelled' : waiting ? 'Waitlisted' : hosting ? 'Hosting' : response === 'maybe' ? 'Tentative' : response === 'going' ? 'Going' : 'Match participant'}</span></div>
                         <p className="mt-2 flex items-center gap-2 text-sm text-white/75"><CalendarDays size={15} aria-hidden />{formatSessionTime(data.startsAt)}</p>
                         <p className="mt-1 flex items-center gap-2 text-sm text-white/75"><MapPin size={15} aria-hidden />{data.court} · {data.location}</p>
                       </Link>
@@ -83,6 +125,7 @@ export default function DashboardPage() {
                   ))}
                 </ul>
               )}
+              </>}
             </section>
             <section className={panel} aria-labelledby="matches-title">
               <h2 id="matches-title" className="text-xl font-bold">My matches</h2>
@@ -92,7 +135,7 @@ export default function DashboardPage() {
                   {dashboard.matches.map(({ recordId, data, score, side }) => score && (
                     <li key={recordId}>
                       <Link to={`/rallies?session=${encodeURIComponent(recordId)}`} className="block rounded-lg py-3 focus-visible:outline-2">
-                        <h3 className="break-all font-semibold">{data.title}</h3>
+                        <h3 className="break-words font-semibold">{data.title}</h3>
                         <p className="text-sm text-white/75">{matchLabels[resultStatus(score)]}{resultStatus(score) === 'final' && (score.winner === side ? ' · Won' : ' · Lost')}</p>
                       </Link>
                     </li>

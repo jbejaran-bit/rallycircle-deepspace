@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildDashboard, filterAgenda } from './rally-dashboard'
+import { agendaWeek, buildDashboard, filterAgenda } from './rally-dashboard'
 import type { RallySession } from './rally'
 import { createMatchScore } from './rally-score'
 
@@ -42,4 +42,18 @@ describe('personal tennis activity', () => {
     expect(agenda).toMatchObject({ finalized: 1, wins: 1 })
     expect(buildDashboard([row('someone-else')], [], [], 'me', now)).toMatchObject({ entries: [], wins: 0 })
   })
+})
+
+it('buckets the week using local dates and does not repeat events at a day boundary', () => {
+  const monday = new Date(2026, 10, 16)
+  const sunday = new Date(2026, 10, 22, 23, 30)
+  const nextMonday = new Date(2026, 10, 23)
+  const entries = buildDashboard([row('opens', { hostId: 'me', startsAt: monday.toISOString() }),
+    row('late', { hostId: 'me', startsAt: sunday.toISOString() }),
+    row('next', { hostId: 'me', startsAt: nextMonday.toISOString() })], [], [], 'me', now).entries
+  const days = agendaWeek(sunday, 0, entries)
+  expect(days).toHaveLength(7)
+  expect(days[0].entries.map(entry => entry.recordId)).toEqual(['opens'])
+  expect(days[6].entries.map(entry => entry.recordId)).toEqual(['late'])
+  expect(agendaWeek(sunday, 1, entries)[0].entries.map(entry => entry.recordId)).toEqual(['next'])
 })

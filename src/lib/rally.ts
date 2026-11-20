@@ -125,6 +125,17 @@ export function summarizeReadiness(confirmed: number, target: number, format?: S
   }
 }
 
+/** Resolve the browser's local date input without silently rolling invalid wall times forward. */
+export function parseLocalSessionStart(value: string): Date | null {
+  const selected = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value)
+  if (!selected) return null
+  const [, year, month, day, hour, minute] = selected.map(Number)
+  const date = new Date(value)
+  if (date.getFullYear() !== year || date.getMonth() + 1 !== month || date.getDate() !== day ||
+      date.getHours() !== hour || date.getMinutes() !== minute) return null
+  return date
+}
+
 export function formatSessionTime(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return 'Time unavailable'

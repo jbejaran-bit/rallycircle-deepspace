@@ -1,9 +1,11 @@
 import { findCourt, type Court } from '@/lib/courts'
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { PlayerIdentity } from '@/components/PlayerIdentity'
+import { Dialog, DialogClose, DialogContent, DialogTitle, DialogTrigger } from '@/components/ui'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth, useMessages, useMutations, usePresenceRoom, useQuery, useUserLookup, type Channel, type Message } from 'deepspace'
 import { CalendarDays, Check, ChevronRight, Clock3, Copy, MapPin, MessageCircle, Plus, Radio, Send, Share2, ShieldCheck, Sparkles, Users, X } from 'lucide-react'
-import { buildSessionUrl, formatSessionTime, groupSessionRsvps, SESSION_FORMATS, summarizeAttendance, summarizeReadiness, validateSession, type Level, type RallyRSVP, type RallyWaitlist, type RallySession, type RSVPStatus, type SessionFormat } from '@/lib/rally'
+import { buildSessionUrl, formatSessionTime, groupSessionRsvps, parseLocalSessionStart, SESSION_FORMATS, summarizeAttendance, summarizeReadiness, validateSession, type Level, type RallyRSVP, type RallyWaitlist, type RallySession, type RSVPStatus, type SessionFormat } from '@/lib/rally'
 import { runRallyCommand } from '@/lib/rally-actions'
 import { readMatchScore } from '@/lib/rally-score'
 import { buildCalendarEvent } from '@/lib/rally-calendar'
@@ -79,6 +81,10 @@ function CreateSession({ userId, onCreated, selectedCourt, prefillCourt, prefill
   const { createConfirmed, putConfirmed, ready } = useMutations<Omit<RallySession, 'hostId' | 'status'>>('sessions')
   const { createConfirmed: createChannel } = useMutations<Channel>('channels')
   const [open, setOpen] = useState(Boolean(startOpen || selectedCourt || prefillCourt))
+  const publishing = useRef(false)
+  const titleInput = useRef<HTMLInputElement>(null)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [hostRsvpError, setHostRsvpError] = useState<string | null>(null)
@@ -112,15 +118,20 @@ function CreateSession({ userId, onCreated, selectedCourt, prefillCourt, prefill
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (pending || !ready || !userId) return
-    const timestamp = Date.parse(startsAt)
+    if (publishing.current || !ready || !userId) return
+    const start = parseLocalSessionStart(startsAt)
+    if (!start) {
+      setError('Choose a valid date and time in your local time zone.')
+      return
+    }
     const candidate = {
       format, title: title.trim(), court: court.trim(), location: location.trim(),
-      startsAt: Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : startsAt,
+      startsAt: start.toISOString(),
       durationMinutes, targetPlayers, capacity, level, notes: notes.trim(),
     }
     const problem = validateSession(candidate)
     if (problem) { setError(problem); return }
+    publishing.current = true
     setPending(true)
     setError(null)
     setHostRsvpError(null)
@@ -157,6 +168,7 @@ function CreateSession({ userId, onCreated, selectedCourt, prefillCourt, prefill
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not create session. Try again.')
     } finally {
+      publishing.current = false
       setPending(false)
     }
   }
@@ -176,10 +188,10 @@ function CreateSession({ userId, onCreated, selectedCourt, prefillCourt, prefill
   }
 
   return (
-    <>
-      <button type="button" className={`${accent} inline-flex items-center gap-2`} onClick={() => setOpen(true)}>
-        <Plus size={17} strokeWidth={2.6} /> New session
-      </button>
+    <Dialog open={open} onOpenChange={next => { if (!publishing.current) setOpen(next) }}>
+      <DialogTrigger ref={trigger} className={`${accent} inline-flex items-center gap-2`}>
+        <Plus size={17} strokeWidth={2.6} aria-hidden /> New session
+      </DialogTrigger>
       {hostRsvpError && <ErrorMessage message={hostRsvpError}/>}
       {chatWarning && <ErrorMessage message={chatWarning}/>}
       {unlinkedChat && chatWarning && (
@@ -187,16 +199,15 @@ function CreateSession({ userId, onCreated, selectedCourt, prefillCourt, prefill
           {retryingChat ? 'Linking chat…' : 'Retry chat setup'}
         </button>
       )}
-      {open && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) setOpen(false) }}>
-        <section role="dialog" aria-modal="true" aria-labelledby="new-session-title" className="w-full max-w-xl overflow-y-auto rounded-3xl border border-white/15 bg-[#17201c] p-6 text-white shadow-2xl max-h-[90vh] sm:p-8">
-          <div className="mb-6 flex items-start justify-between gap-4">
-            <div><p className="mb-1 text-xs font-bold uppercase tracking-[0.18em] text-[#d7fc83]">Make it happen</p><h2 id="new-session-title" className="text-2xl font-bold tracking-tight">Create a session</h2></div>
-            <button type="button" aria-label="Close" onClick={() => setOpen(false)} className="rounded-full p-2 text-white/65 hover:bg-white/10"><X size={22}/></button>
+      <DialogContent hideClose initialFocus={titleInput} finalFocus={trigger} className="block max-h-[90dvh] overflow-y-auto rounded-3xl border-white/15 bg-[#17201c] p-5 text-white sm:max-w-xl sm:p-7">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <DialogTitle className="text-2xl font-bold">Create a session</DialogTitle>
+            <DialogClose disabled={pending} aria-label="Close" className="grid size-11 place-items-center rounded-full text-white/75 hover:bg-white/10 focus-visible:outline-2"><X size={22} aria-hidden /></DialogClose>
           </div>
-          <button type="button" onClick={fillExample} className="mb-5 rounded-xl border border-[#d7fc83]/50 px-4 py-2 text-xs font-bold text-[#d7fc83] hover:bg-[#d7fc83]/10">Fill sample session</button>
+          <button type="button" disabled={pending} onClick={fillExample} className="mb-4 min-h-11 rounded-xl border border-[#d7fc83]/50 px-4 py-2 text-xs font-bold text-[#d7fc83] hover:bg-[#d7fc83]/10 focus-visible:outline-2">Fill sample session</button>
           <form onSubmit={e => void submit(e)} className="space-y-4">
             <label className="block text-xs font-medium text-white/75">Format<select className={`${field} mt-1.5`} value={format} onChange={e => setFormat(e.target.value as SessionFormat)}>{SESSION_FORMATS.map(option => <option key={option}>{option}</option>)}</select></label>
-            <label className="block text-xs font-medium text-white/75">Session title<input required maxLength={72} className={`${field} mt-1.5`} placeholder="Sunday doubles & rallies" value={title} onChange={e => setTitle(e.target.value)}/></label>
+            <label className="block text-xs font-medium text-white/75">Session title<input ref={titleInput} required maxLength={72} className={`${field} mt-1.5`} placeholder="Sunday doubles & rallies" value={title} onChange={e => setTitle(e.target.value)}/></label>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <label className="block text-xs font-medium text-white/75">Court<input required maxLength={100} className={`${field} mt-1.5`} placeholder="Schenley Park" value={court} onChange={e => setCourt(e.target.value)}/></label>
               <label className="block text-xs font-medium text-white/75">Area<input required maxLength={100} className={`${field} mt-1.5`} placeholder="Pittsburgh, PA" value={location} onChange={e => setLocation(e.target.value)}/></label>
@@ -218,9 +229,8 @@ function CreateSession({ userId, onCreated, selectedCourt, prefillCourt, prefill
             <ErrorMessage message={error}/>
             <button type="submit" disabled={pending || !ready} className={`${accent} w-full`}>{pending ? 'Creating…' : 'Publish session'}</button>
           </form>
-        </section>
-      </div>}
-    </>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -228,7 +238,7 @@ function ChatPanel({ channelId, sessionId, userId }: { channelId: string; sessio
   const { messages, status: messagesStatus, error: messagesError } = useMessages(channelId)
   const { createConfirmed: sendMessage, ready: canSend } = useMutations<Message>('messages')
   const { peers, connected } = usePresenceRoom(`rally:${sessionId}`)
-  const { getName } = useUserLookup()
+  const { getUser } = useUserLookup()
   const [draft, setDraft] = useState('')
   const [pending, setPending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
@@ -257,10 +267,13 @@ function ChatPanel({ channelId, sessionId, userId }: { channelId: string; sessio
       </div>
       <div className="flex-1 space-y-3 overflow-y-auto rounded-2xl border border-white/10 bg-[#0d1411] p-4" aria-live="polite">
         {messages.length === 0 && <div className="grid h-full place-items-center text-center text-sm text-white/45"><div><MessageCircle size={25} className="mx-auto mb-3 opacity-60"/>Start the conversation.<br/>Coordinate arrival and warm-ups.</div></div>}
-        {messages.map(message => <div key={message.recordId} className="rounded-xl bg-white/5 p-3">
-          <div className="mb-1.5 flex items-center justify-between gap-2"><span className="text-xs font-bold text-[#d7fc83]">{getName(message.data.authorId) ?? 'Player'}</span><span className="text-[11px] text-white/40">{new Date(message.createdAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})}</span></div>
+        {messages.map(message => {
+          const author = getUser(message.data.authorId)
+          return <div key={message.recordId} className="rounded-xl bg-white/5 p-3">
+          <div className="mb-1.5 flex items-center justify-between gap-2"><PlayerIdentity name={author?.name} imageUrl={author?.imageUrl} /><time className="shrink-0 text-xs text-white/65" dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time></div>
           <p className="break-words text-sm leading-relaxed text-white/85">{message.data.deleted ? 'Message deleted' : message.data.content}</p>
-        </div>)}
+        </div>
+        })}
       </div>
       <form onSubmit={e => void submit(e)} className="mt-3 flex gap-2"><input aria-label="Your message" maxLength={500} value={draft} onChange={e=>setDraft(e.target.value)} placeholder="Say something to the group…" className={`${field} min-w-0 flex-1`}/><button type="submit" aria-label="Send message" className={`${accent} flex shrink-0 items-center`} disabled={!draft.trim() || pending || !canSend || messagesStatus !== 'ready'}><Send size={17}/></button></form>
       <ErrorMessage message={sendError || (messagesStatus === 'error' ? (messagesError ?? 'Chat could not load.') : null)} />

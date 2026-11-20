@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { validateSession, groupSessionRsvps, summarizeAttendance, summarizeReadiness, formatSessionTime, buildSessionUrl } from '../src/lib/rally.ts'
+import { validateSession, groupSessionRsvps, parseLocalSessionStart, summarizeAttendance, summarizeReadiness, formatSessionTime, buildSessionUrl } from '../src/lib/rally.ts'
 
 const now = Date.parse('2030-06-15T12:00:00Z')
 const future = new Date(now + 86400000).toISOString()
@@ -87,4 +87,13 @@ test('a session maximum must cover its planning target', () => {
   assert.match(validate({ ...base, capacity: 3 }), /target cannot exceed/)
   assert.match(validate({ ...base, capacity: 4.5 }), /capacity/)
   assert.equal(validate({ ...base, capacity: 4 }), null)
+})
+
+test('local session times round-trip without silently changing impossible dates', () => {
+  const date = parseLocalSessionStart('2026-11-20T17:30')
+  assert.equal(date?.getHours(), 17)
+  assert.equal(date?.getMinutes(), 30)
+  assert.equal(parseLocalSessionStart('2026-02-30T17:30'), null)
+  assert.equal(parseLocalSessionStart('2026-11-20T24:00'), null)
+  assert.equal(parseLocalSessionStart('2026-11-20T17:30Z'), null)
 })

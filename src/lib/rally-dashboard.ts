@@ -51,3 +51,12 @@ export function filterAgenda(entries: Entry[], filter: DashboardFilter) {
     case 'upcoming': return entries.filter(row => row.scheduled && !row.past && !row.cancelled)
   }
 }
+
+export function agendaWeek(anchor: Date, offset: number, entries: Entry[]) {
+  const monday = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() - ((anchor.getDay() + 6) % 7) + offset * 7)
+  return Array.from({ length: 7 }, (_, day) => {
+    const date = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + day)
+    const next = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1)
+    return { date, entries: entries.filter(entry => entry.start >= date.getTime() && entry.start < next.getTime()) }
+  })
+}
