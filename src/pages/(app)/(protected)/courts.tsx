@@ -67,7 +67,7 @@ export default function CourtsPage() {
   }
 
   return (
-    <main className="min-h-screen bg-[#0b110f] text-white">
+    <div className="min-h-screen bg-[#0b110f] text-white">
       <div className="mx-auto max-w-7xl space-y-6 px-4 py-10 sm:px-8">
         <header className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -111,6 +111,6 @@ export default function CourtsPage() {
           </div>
         </div>
       </div>
-    </main>
+    </div>
   )
 }
