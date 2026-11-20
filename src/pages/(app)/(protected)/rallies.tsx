@@ -1,9 +1,10 @@
 import { findCourt, type Court } from '@/lib/courts'
-import { useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth, useMessages, useMutations, usePresenceRoom, useQuery, useUserLookup, type Channel, type Message } from 'deepspace'
 import { CalendarDays, Check, ChevronRight, Clock3, Copy, MapPin, MessageCircle, Plus, Radio, Send, Share2, ShieldCheck, Sparkles, Users, X } from 'lucide-react'
 import { buildSessionUrl, formatSessionTime, summarizeAttendance, summarizeReadiness, validateSession, type Level, type RallyRSVP, type RallySession, type RSVPStatus } from '@/lib/rally'
+import { downloadSessionIcs } from '@/lib/ics'
 import { runRallyCommand } from '@/lib/rally-actions'
 
 const surface = 'rounded-3xl border border-white/10 bg-[#141b1a] shadow-[0_18px_60px_rgba(0,0,0,0.17)]'
@@ -76,6 +77,9 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [hostRsvpError, setHostRsvpError] = useState<string | null>(null)
+  const [chatSetupError, setChatSetupError] = useState<string | null>(null)
+  const [chatSettingUp, setChatSettingUp] = useState(false)
+  const [createdChat, setCreatedChat] = useState<{ sessionId: string; channelId: string } | null>(null)
   const [title, setTitle] = useState('')
   const [court, setCourt] = useState(selectedCourt?.name ?? '')
   const [location, setLocation] = useState(selectedCourt?.area ?? '')
@@ -112,6 +116,8 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
     setPending(true)
     setError(null)
     setHostRsvpError(null)
+    setChatSetupError(null)
+    setCreatedChat(null)
     try {
       // Persist the most important product path first. Chat setup is secondary.
       const id = await createConfirmed({ ...candidate, chatChannelId: '' })
@@ -123,6 +129,7 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
         setHostRsvpError(`Session created, but your RSVP could not be saved.${detail}`)
       }
       try {
+        setChatSettingUp(true)
         const channelId = await createChannel({
           name: `rally-${id}`,
           description: `Public chat for ${candidate.title}`,
@@ -130,17 +137,39 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
           createdBy: userId,
           archived: false,
         })
+        setCreatedChat({ sessionId: id, channelId })
         await putConfirmed(id, { chatChannelId: channelId })
+        setCreatedChat(null)
       } catch (e) {
         // A session remains usable even if its optional discussion cannot initialize.
+        // The channel id is kept so the retry below reuses it instead of
+        // creating a second orphaned rally-<id> channel (R-03).
         console.warn('Session created without a chat channel', e)
+        setChatSetupError('Session created, but chat could not be set up. RSVPs still work — retry below.')
       }
       setTitle(''); setCourt(''); setLocation(''); setStartsAt(''); setNotes('')
       setOpen(false)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not create session. Try again.')
     } finally {
+      setChatSettingUp(false)
       setPending(false)
+    }
+  }
+
+  // Retry only the failed chat-channel link, reusing the channel that was
+  // already created. Never creates a second channel for the same session.
+  async function retryChatSetup() {
+    if (!createdChat || !ready) return
+    setChatSetupError(null)
+    setChatSettingUp(true)
+    try {
+      await putConfirmed(createdChat.sessionId, { chatChannelId: createdChat.channelId })
+      setCreatedChat(null)
+    } catch (cause) {
+      setChatSetupError(cause instanceof Error ? `Chat setup failed again: ${cause.message}` : 'Chat setup failed again. Try once more.')
+    } finally {
+      setChatSettingUp(false)
     }
   }
 
@@ -150,6 +179,13 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
         <Plus size={17} strokeWidth={2.6} /> New session
       </button>
       {hostRsvpError && <ErrorMessage message={hostRsvpError}/>}
+      {chatSettingUp && <p role="status" className="text-sm text-white/60">Setting up chat…</p>}
+      {chatSetupError && <div className="flex flex-col items-start gap-2">
+        <ErrorMessage message={chatSetupError}/>
+        <button type="button" onClick={() => void retryChatSetup()} disabled={!createdChat || !ready} className="rounded-xl border border-[#d7fc83]/50 px-4 py-2 text-xs font-bold text-[#d7fc83] hover:bg-[#d7fc83]/10 disabled:opacity-50">
+          {chatSettingUp ? 'Retrying…' : 'Retry chat setup'}
+        </button>
+      </div>}
       {open && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) setOpen(false) }}>
         <section role="dialog" aria-modal="true" aria-labelledby="new-session-title" className="w-full max-w-xl overflow-y-auto rounded-3xl border border-white/15 bg-[#17201c] p-6 text-white shadow-2xl max-h-[90vh] sm:p-8">
           <div className="mb-6 flex items-start justify-between gap-4">
@@ -180,7 +216,7 @@ function CreateSession({ userId, onCreated, selectedCourt }: { userId: string; o
   )
 }
 
-function ChatPanel({ channelId, sessionId, userId }: { channelId: string; sessionId: string; userId: string }) {
+function ChatPanel({ channelId, sessionId, userId, cancelled }: { channelId: string; sessionId: string; userId: string; cancelled: boolean }) {
   const { messages, status: messagesStatus, error: messagesError } = useMessages(channelId)
   const { createConfirmed: sendMessage, ready: canSend } = useMutations<Message>('messages')
   const { peers, connected } = usePresenceRoom(`rally:${sessionId}`)
@@ -192,7 +228,7 @@ function ChatPanel({ channelId, sessionId, userId }: { channelId: string; sessio
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const msg = draft.trim()
-    if (!msg || msg.length > 500 || pending || !canSend || messagesStatus !== 'ready') return
+    if (!msg || msg.length > 500 || pending || !canSend || messagesStatus !== 'ready' || cancelled) return
     setPending(true)
     setSendError(null)
     try {
@@ -218,7 +254,7 @@ function ChatPanel({ channelId, sessionId, userId }: { channelId: string; sessio
           <p className="break-words text-sm leading-relaxed text-white/85">{message.data.deleted ? 'Message deleted' : message.data.content}</p>
         </div>)}
       </div>
-      <form onSubmit={e => void submit(e)} className="mt-3 flex gap-2"><input aria-label="Your message" maxLength={500} value={draft} onChange={e=>setDraft(e.target.value)} placeholder="Say something to the group…" className={`${field} min-w-0 flex-1`}/><button type="submit" aria-label="Send message" className={`${accent} flex shrink-0 items-center`} disabled={!draft.trim() || pending || !canSend || messagesStatus !== 'ready'}><Send size={17}/></button></form>
+      {cancelled ? <p role="status" className="mt-3 text-sm text-white/60">This session was cancelled — chat is read-only. Past messages stay visible so players can coordinate.</p> : <form onSubmit={e => void submit(e)} className="mt-3 flex gap-2"><input aria-label="Your message" maxLength={500} value={draft} onChange={e=>setDraft(e.target.value)} placeholder="Say something to the group…" className={`${field} min-w-0 flex-1`}/><button type="submit" aria-label="Send message" className={`${accent} flex shrink-0 items-center`} disabled={!draft.trim() || pending || !canSend || messagesStatus !== 'ready'}><Send size={17}/></button></form>}
       <ErrorMessage message={sendError || (messagesStatus === 'error' ? (messagesError ?? 'Chat could not load.') : null)} />
       <p className="mt-2 text-[11px] text-white/40">Public channel within this app; do not share sensitive information.</p>
     </div>
@@ -234,15 +270,18 @@ function SessionDetail({ session, sessionId, userId, allRsvps, rsvpStatus, rsvpE
   rsvpError?: string
 }) {
   const { getName } = useUserLookup()
-  const { removeConfirmed, ready: rsvpReady } = useMutations<RallyRSVP>('rsvps')
-  const [busy, setBusy] = useState(false)
+  // RSVP writes go through the command room now (including withdraw), so
+  // this component no longer needs the direct rsvps mutations at all.
+  const [rsvpBusy, setRsvpBusy] = useState(false)
+  const [cancelBusy, setCancelBusy] = useState(false)
+  const [calendarError, setCalendarError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
   const people = allRsvps.filter(r => r.data.sessionId === sessionId)
   const myRSVP = people.find(r => r.data.userId === userId)
   const {going, maybe} = summarizeAttendance(people.map(r=>r.data), sessionId)
   const cancelled = session.status === 'cancelled'
-  const canChangeRsvp = rsvpStatus === 'ready' && rsvpReady && !busy && !cancelled
+  const canChangeRsvp = rsvpStatus === 'ready' && !rsvpBusy && !cancelled
 
   async function shareSession() {
     try {
@@ -254,20 +293,27 @@ function SessionDetail({ session, sessionId, userId, allRsvps, rsvpStatus, rsvpE
   }
 
   async function respond(status: RSVPStatus | null) {
-    if (!canChangeRsvp) return
-    setBusy(true); setError(null)
+    if (!canChangeRsvp) {
+      // The buttons are disabled in these states, but a programmatic call
+      // used to fail silently (R-07). Say why instead.
+      if (cancelled) setError('This session is cancelled — responses are closed.')
+      return
+    }
+    // Re-clicking the status you already have is a no-op, not a write (R-17a).
+    if (status && myRSVP?.data.status === status) return
+    setRsvpBusy(true); setError(null)
     try {
-      if (!status && myRSVP) await removeConfirmed(myRSVP.recordId)
+      if (!status && myRSVP) await runRallyCommand({ operation: 'withdraw', sessionId })
       else if (status) await runRallyCommand({ operation: 'rsvp', sessionId, status })
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'RSVP did not save.') }
-    finally { setBusy(false) }
+    finally { setRsvpBusy(false) }
   }
   async function cancelSession() {
-    if (busy || !window.confirm('Cancel this session for everyone?')) return
-    setBusy(true); setError(null)
+    if (cancelBusy || !window.confirm('Cancel this session for everyone?')) return
+    setCancelBusy(true); setError(null)
     try { await runRallyCommand({ operation: 'cancel', sessionId }) }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not cancel.') }
-    finally { setBusy(false) }
+    finally { setCancelBusy(false) }
   }
 
   return <div className={`${surface} overflow-hidden`}>
@@ -276,6 +322,8 @@ function SessionDetail({ session, sessionId, userId, allRsvps, rsvpStatus, rsvpE
       <div className="relative">
         <div className="mb-5 flex items-center justify-between gap-3"><span className="inline-flex items-center gap-1.5 rounded-full bg-[#d7fc83]/15 px-3 py-1 text-xs font-bold uppercase tracking-wider text-[#d7fc83]"><Radio size={12}/> {cancelled?'Cancelled':'Session details'}</span><span className="text-xs text-white/65">{session.level}</span></div>
         <button type="button" onClick={() => void shareSession()} className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/25 bg-black/15 px-3 py-2 text-xs font-semibold text-white hover:border-[#d7fc83]"><Share2 size={14}/>{copyState === 'copied' ? 'Link copied!' : 'Share this session'}{copyState === 'copied' && <Copy size={13}/>}</button>
+        {!cancelled && <button type="button" onClick={() => { setCalendarError(null); const ok = downloadSessionIcs({ sessionId, session, origin: window.location.origin, goingCount: going }); if (!ok) setCalendarError('The calendar file could not be created for this session.') }} className="mb-4 ml-2 inline-flex items-center gap-2 rounded-full border border-white/25 bg-black/15 px-3 py-2 text-xs font-semibold text-white hover:border-[#d7fc83]"><CalendarDays size={14}/>Add to Calendar (.ics)</button>}
+        {calendarError && <p role="alert" className="mb-3 text-xs text-rose-200">{calendarError}</p>}
         {copyState === 'error' && <p role="alert" className="mb-3 text-xs text-rose-200">Copy failed. You can copy this page’s URL instead.</p>}
         <h2 className="max-w-lg text-3xl font-black tracking-tight text-white sm:text-4xl">{session.title}</h2>
         <div className="mt-5 grid gap-3 text-sm text-white/80 sm:grid-cols-2">
@@ -295,14 +343,14 @@ function SessionDetail({ session, sessionId, userId, allRsvps, rsvpStatus, rsvpE
         {session.notes && <p className="mt-4 rounded-xl bg-white/5 p-4 text-sm leading-relaxed text-white/70">{session.notes}</p>}
       </section>
       {cancelled ? <p className="rounded-xl bg-rose-500/10 p-4 text-sm font-medium text-rose-300">This session was cancelled by its organizer.</p> : <div className="flex flex-wrap gap-2">
-        <button type="button" disabled={!canChangeRsvp} onClick={()=>void respond('going')} className={`${myRSVP?.data.status==='going'?accent:'rounded-xl border border-[#d7fc83]/50 px-4 py-3 text-sm font-bold text-[#d7fc83] hover:bg-[#d7fc83]/10'} inline-flex items-center gap-2 disabled:opacity-50`}><Check size={16}/>{busy ? 'Saving…' : myRSVP?.data.status==='going'?'Going ✓':'I’m in'}</button>
+        <button type="button" disabled={!canChangeRsvp} onClick={()=>void respond('going')} className={`${myRSVP?.data.status==='going'?accent:'rounded-xl border border-[#d7fc83]/50 px-4 py-3 text-sm font-bold text-[#d7fc83] hover:bg-[#d7fc83]/10'} inline-flex items-center gap-2 disabled:opacity-50`}><Check size={16}/>{rsvpBusy ? 'Saving…' : myRSVP?.data.status==='going'?'Going ✓':'I’m in'}</button>
         <button type="button" disabled={!canChangeRsvp} onClick={()=>void respond('maybe')} className="rounded-xl border border-white/15 px-4 py-3 text-sm font-semibold text-white/85 hover:bg-white/10 disabled:opacity-50">{myRSVP?.data.status==='maybe'?'Maybe ✓':'Maybe'}</button>
         {myRSVP&&<button type="button" disabled={!canChangeRsvp} onClick={()=>void respond(null)} className="rounded-xl px-3 py-3 text-sm text-white/50 hover:bg-white/10 hover:text-white">Withdraw</button>}
       </div>}
-      {!cancelled&&session.hostId===userId&&<button type="button" disabled={busy} onClick={()=>void cancelSession()} className="text-xs text-rose-300/75 underline underline-offset-4 hover:text-rose-200">Cancel my session</button>}
+      {!cancelled&&session.hostId===userId&&<button type="button" disabled={cancelBusy} onClick={()=>void cancelSession()} className="text-xs text-rose-300/75 underline underline-offset-4 hover:text-rose-200">Cancel my session</button>}
       <ErrorMessage message={error}/>
       <div className="h-px bg-white/10"/>
-      {session.chatChannelId ? <ChatPanel channelId={session.chatChannelId} sessionId={sessionId} userId={userId}/> : <div className="rounded-2xl bg-white/5 p-5 text-sm text-white/60"><MessageCircle className="mb-2" size={20}/>Chat is not available for this session. RSVPs still work.</div>}
+      {session.chatChannelId ? <ChatPanel channelId={session.chatChannelId} sessionId={sessionId} userId={userId} cancelled={cancelled}/> : <div className="rounded-2xl bg-white/5 p-5 text-sm text-white/60"><MessageCircle className="mb-2" size={20}/>Chat is not available for this session. RSVPs still work.</div>}
     </div>
   </div>
 }
@@ -326,7 +374,13 @@ export default function RalliesPage() {
     }, { replace: true })
   }
   const [view, setView] = useState<'upcoming'|'all'|'mine'>('upcoming')
-  const now = Date.now()
+  // Refresh "now" once a minute so a session moves out of "Upcoming" while
+  // the page sits idle (R-15). The memo below legitimately depends on it.
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
   const listings = useMemo(() => sessions.filter(s => view === 'all' || (view === 'mine' ? (s.data.hostId === userId || rsvps.some(r=>r.data.sessionId===s.recordId&&r.data.userId===userId)) : Date.parse(s.data.startsAt) > now && s.data.status==='open')), [sessions, view, rsvps, userId, now])
   const selected = activeId ? sessions.find(s => s.recordId === activeId) : listings[0]
   const signedInId = userId ?? ''
