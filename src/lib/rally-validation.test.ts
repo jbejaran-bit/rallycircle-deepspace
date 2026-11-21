@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { summarizeAttendance, validateSession } from './rally'
+import { groupSessionRsvps, summarizeAttendance, validateSession } from './rally'
 import type { RallySession } from './rally'
 
 const NOW = Date.parse('2026-11-21T12:00:00Z')
@@ -71,4 +71,17 @@ describe('session detail attendance consistency', () => {
     ] as unknown as Parameters<typeof summarizeAttendance>[0]
     expect(summarizeAttendance(rows, 's1')).toEqual({ going: 1, maybe: 1 })
   })
+})
+
+
+it('gives rally cards and roster controls the same first valid membership with its record ID', () => {
+  const records = [
+    { recordId: 'corrupt', data: { sessionId: 'a', userId: 'player', status: 'invalid' } },
+    { recordId: 'keep', data: { sessionId: 'a', userId: 'player', status: 'going' } },
+    { recordId: 'duplicate', data: { sessionId: 'a', userId: 'player', status: 'maybe' } },
+    { recordId: 'other', data: { sessionId: 'b', userId: 'player', status: 'maybe' } },
+  ] as unknown as Parameters<typeof groupSessionRsvps>[0]
+  const groups = groupSessionRsvps(records)
+  expect(groups.get('a')).toEqual([records[1]])
+  expect(groups.get('b')).toEqual([records[3]])
 })

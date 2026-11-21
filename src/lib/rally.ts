@@ -54,28 +54,31 @@ export function validCapacity(value: number): boolean {
   return Number.isInteger(value) && value >= 2 && value <= 12
 }
 
-/** Index record envelopes without losing the record IDs used for withdrawal. */
+function hasValidMembership(rsvp: RallyRSVP): boolean {
+  return typeof rsvp.sessionId === 'string' && rsvp.sessionId.length > 0 &&
+    typeof rsvp.userId === 'string' && rsvp.userId.length > 0 &&
+    (rsvp.status === 'going' || rsvp.status === 'maybe')
+}
+
+/** Keep the first valid membership and its record ID for each player in a session. */
 export function groupSessionRsvps<T extends { data: RallyRSVP }>(records: readonly T[]): Map<string, T[]> {
-  const bySession = new Map<string, T[]>()
+  const memberships = new Map<string, Map<string, T>>()
   for (const record of records) {
-    const sessionId = record.data.sessionId
-    const group = bySession.get(sessionId)
-    if (group) group.push(record)
-    else bySession.set(sessionId, [record])
+    const rsvp = record.data
+    if (!hasValidMembership(rsvp)) continue
+    const group = memberships.get(rsvp.sessionId) ?? new Map<string, T>()
+    if (!group.has(rsvp.userId)) group.set(rsvp.userId, record)
+    memberships.set(rsvp.sessionId, group)
   }
-  return bySession
+  return new Map([...memberships].map(([sessionId, members]) => [sessionId, [...members.values()]]))
 }
 
 export function summarizeAttendance(rsvps: RallyRSVP[], sessionId: string) {
-  // Match Find Games' first-valid-membership semantics. Legacy duplicate
-  // rows must not inflate the session detail's capacity or readiness counts.
   const seen = new Set<string>()
   let going = 0
   let maybe = 0
   for (const rsvp of rsvps) {
-    if (rsvp.sessionId !== sessionId || typeof rsvp.userId !== 'string' || !rsvp.userId) continue
-    if (rsvp.status !== 'going' && rsvp.status !== 'maybe') continue
-    if (seen.has(rsvp.userId)) continue
+    if (rsvp.sessionId !== sessionId || !hasValidMembership(rsvp) || seen.has(rsvp.userId)) continue
     seen.add(rsvp.userId)
     if (rsvp.status === 'going') going++
     else maybe++
