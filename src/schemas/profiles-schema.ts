@@ -97,6 +97,19 @@ export const matchResultsSchema: CollectionSchema = {
     { name: 'resultRevision', storage: 'number', interpretation: 'plain', required: true },
     { name: 'finalizedAt', storage: 'text', interpretation: { kind: 'datetime' }, required: true },
     { name: 'visibility', storage: 'text', interpretation: { kind: 'select', options: [...PROFILE_VISIBILITY] }, default: 'public' },
+    /**
+     * Outcome lifecycle, maintained by the serialized RallyCommandRoom at
+     * write time (see result-finalization.ts): 'final' counts in statistics,
+     * 'pending' is a host correction awaiting fresh approval (visible in
+     * history, never counted), 'disputed' is hidden from both, 'cancelled'
+     * is a session cancelled after finalization (hidden from both; the room
+     * flips rows to it at cancel time, migration F4 write-side form). The read path
+     * trusts this instead of fetching each session, so getPlayerStats issues
+     * zero session GETs no matter how many results a player has. Additive:
+     * rows written before this column count as 'final' (they were written
+     * only on finalization); the read path treats a missing status that way.
+     */
+    { name: 'status', storage: 'text', interpretation: { kind: 'select', options: ['final', 'pending', 'disputed', 'cancelled'] }, default: 'final' },
   ],
   uniqueOn: ['sessionId', 'userId'],
   ownerField: 'userId',

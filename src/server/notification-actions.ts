@@ -49,14 +49,19 @@ export const notificationsAction: ActionHandler<Env> = async ({ userId, params, 
   }
 
   if (operation === 'markAllRead') {
+    // Legacy rows predate the readAt column: filtering on readAt: ''
+    // never matches a row without the field, so it stayed unread forever.
+    // Query by recipient only (bounded by the 100-per-user retention cap)
+    // and skip already-read rows in code.
     const found = await tools.query('notifications', {
-      where: { recipientId: userId, readAt: '' },
+      where: { recipientId: userId },
       limit: 100,
     })
     if (!found.success) return failure('Notifications could not be loaded.')
-    const records = (found.data as { records: { recordId: string }[] }).records
+    const records = (found.data as { records: { recordId: string; data?: { readAt?: unknown } }[] }).records
     let count = 0
     for (const record of records) {
+      if (record.data?.readAt) continue
       const updated = await tools.update('notifications', record.recordId, { readAt: now })
       if (updated.success) count++
     }

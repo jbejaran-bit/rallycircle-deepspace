@@ -85,9 +85,11 @@ export function parseSeriesTemplate(raw: string | undefined): SeriesTemplate | n
     if (typeof template.title !== 'string' || typeof template.court !== 'string' ||
         typeof template.location !== 'string' || typeof template.durationMinutes !== 'number' ||
         typeof template.targetPlayers !== 'number' || typeof template.level !== 'string' ||
-        typeof template.notes !== 'string') return null
+        (template.notes !== undefined && typeof template.notes !== 'string')) return null
     if (template.format !== undefined && typeof template.format !== 'string') return null
     if (template.capacity !== undefined && typeof template.capacity !== 'number') return null
+    // A stored template from before the notes column reads as empty notes.
+    if (template.notes === undefined) template.notes = ''
     return template as unknown as SeriesTemplate
   } catch {
     return null

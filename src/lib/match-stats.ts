@@ -9,17 +9,28 @@
  * result-finalization.ts), and withdrawals after selection do not remove
  * a finalized result — the recorded participants are what counts.
  *
+ * Row status (issue #23 semantics): a host correction moves the session
+ * score to a newer revision awaiting fresh approval. The stored row is
+ * NOT deleted and its old outcome is NOT counted; instead the history
+ * surfaces the corrected outcome as `status: 'pending'` (visible, not
+ * counted) until re-approval finalizes it in place, when it becomes
+ * 'final' again. A dispute puts rows in `status: 'disputed'`, hidden from
+ * both statistics and history until a correction reopens them as pending.
+ * `summarizePlayerStats` counts final rows only.
+ *
+ * Where the status lives: the serialized command room maintains it at
+ * write time (finalization writes 'final'; a correction flips rows to
+ * 'pending' and a dispute to 'disputed' before the session score commits),
+ * so the read path can trust the stored outcome for 'final' rows without
+ * fetching each session. The read path never trusts a status it cannot
+ * classify: a missing status means a pre-migration row, which was written
+ * only on finalization and counts as 'final'; any other value hides the
+ * row (fail closed).
+ *
  * Singles and doubles are kept strictly separate (C10): a `format`
  * parameter is required everywhere, and no function ever mixes formats.
  * Practice matches are never written to `matchResults` and so never
  * affect statistics.
- *
- * Pending rows (issue #23 semantics): a host correction moves the
- * session score to a newer revision awaiting fresh approval. The stored
- * row is NOT deleted and its old outcome is NOT counted; instead the
- * history surfaces the corrected outcome as `status: 'pending'` (visible,
- * not counted) until re-approval finalizes it in place, when it becomes
- * 'final' again. `summarizePlayerStats` counts final rows only.
  *
  * Provisional status (C11/D03): fewer than PROVISIONAL_MATCH_THRESHOLD
  * matches is provisional. The threshold is a single named constant so a
@@ -45,13 +56,50 @@ export interface MatchResultRow {
   finalizedAt: string
   visibility: ProfileVisibility
   /**
-   * 'final' — the row's outcome is verified against the session's committed
-   * score and counts in statistics. 'pending' — the session's committed
-   * score moved to a newer revision (a host correction awaiting fresh
-   * approval); the match stays visible in history but must NOT count in
-   * statistics until the corrected result finalizes (issue #23 semantics).
+   * 'final' — the row's outcome is verified and counts in statistics.
+   * 'pending' — the session's committed score moved to a newer revision
+   * (a host correction awaiting fresh approval); the match stays visible
+   * in history but must NOT count in statistics until the corrected result
+   * finalizes (issue #23 semantics).
    */
   status: 'final' | 'pending'
+}
+
+/** Write-side row status, including the hidden 'disputed' and 'cancelled' states (never surfaced as a MatchResultRow). 'cancelled' is the migration-F4 write-side form: the room flips a session's rows to it at cancel time so a finalized result on a later-cancelled session stops counting without a per-row session read. */
+export type MatchResultStatus = 'final' | 'pending' | 'disputed' | 'cancelled'
+
+/**
+ * Normalize a stored row status. A missing status means a pre-migration
+ * row, written only on finalization, so it counts as 'final'. Any value
+ * outside the known set hides the row (fail closed) — the read path must
+ * never count an outcome it cannot classify.
+ */
+export function normalizeResultStatus(value: unknown): MatchResultStatus | null {
+  if (value === undefined || value === null) return 'final'
+  if (value === 'final' || value === 'pending' || value === 'disputed' || value === 'cancelled') return value
+  return null
+}
+
+/**
+ * Parse a stored `sets` value. The column uses the SDK's `json`
+ * interpretation, so production reads return the decoded array; older or
+ * hand-written rows may still carry the raw JSON string. Anything else
+ * (unparseable text, wrong shape) returns null and the row is dropped —
+ * corrupt data must never brick the call (D1/F6).
+ */
+export function parseStoredSets(value: unknown): Array<[number, number]> | null {
+  const parsed: unknown = typeof value === 'string'
+    ? (() => { try { return JSON.parse(value) } catch { return null } })()
+    : value
+  if (!Array.isArray(parsed)) return null
+  const sets: Array<[number, number]> = []
+  for (const entry of parsed) {
+    if (!Array.isArray(entry) || entry.length !== 2
+      || typeof entry[0] !== 'number' || typeof entry[1] !== 'number'
+      || !Number.isFinite(entry[0]) || !Number.isFinite(entry[1])) return null
+    sets.push([entry[0], entry[1]])
+  }
+  return sets
 }
 
 export interface PlayerStatsSummary {

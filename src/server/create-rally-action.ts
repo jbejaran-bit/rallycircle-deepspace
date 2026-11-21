@@ -13,7 +13,7 @@ const rallyDraft = z.object({
   targetPlayers: z.number(),
   capacity: z.number().optional(),
   level: z.enum(['All levels', 'Beginner', 'Intermediate', 'Advanced']),
-  notes: z.string().trim().max(400),
+  notes: z.string().trim().max(400).optional(),
 }).strict()
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -23,7 +23,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export const createRallyAction: ActionHandler<Env> = async ({ userId, params, env }) => {
   const parsed = rallyDraft.safeParse(params)
   if (!parsed.success) return { success: false, error: 'Check the rally details and try again.' }
-  const problem = validateSession(parsed.data)
+  // Drafts from before the notes column carry no notes; store '' so the
+  // created record is complete and validateSession never sees undefined.
+  const draft = { ...parsed.data, notes: parsed.data.notes ?? '' }
+  const problem = validateSession(draft)
   if (problem) return { success: false, error: problem }
   // Creation is serialized per host in a dedicated command room
   // (`rally:<appId>:user:<userId>`): the room returns the existing open
@@ -44,7 +47,7 @@ export const createRallyAction: ActionHandler<Env> = async ({ userId, params, en
         body: JSON.stringify({
           operation: 'createRally',
           userId,
-          draft: { ...parsed.data, startsAt: new Date(parsed.data.startsAt).toISOString() },
+          draft: { ...draft, startsAt: new Date(parsed.data.startsAt).toISOString() },
         }),
       }),
     )

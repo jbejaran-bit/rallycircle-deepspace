@@ -8,7 +8,7 @@ import { occurrenceStartsAt, parseSeriesTemplate, serializeSeriesTemplate, valid
 import { pollCreatedKey, resultConfirmedKey, resultDisputedKey, scheduleChangedKey, sessionCancelledKey, waitlistPromotedKey } from '../lib/rally-notifications.js'
 import { emitNotification, type EmitNotificationInput } from './notifications.js'
 import type { z } from 'zod'
-import { applyFinalization, writeAudit } from './result-finalization.js'
+import { applyFinalization, markSessionResults, writeAudit } from './result-finalization.js'
 import { fetchGeocodedPlaces, GEOCODER_MIN_GAP_MS } from './court-discovery.js'
 import type { Env } from '../../worker.js'
 
@@ -160,11 +160,14 @@ async function applyCommand(command: RallyCommand, tool: RecordTool, recovery: R
     // A failed finalization leaves pendingResult set; cancelling must
     // still be possible, otherwise the session is frozen until the exact
     // retry succeeds. Cancelling clears the marker — the unfinalized
-    // result stays unfinalized. On this architecture the history rows a
-    // partial finalization already wrote are inert: loadVerifiedResults
-    // only counts rows whose session score is final at the same revision,
-    // and a cancelled session's score can never become final, so the rows
-    // remain as storage-level provenance and never count.
+    // result stays unfinalized. Rows a partial finalization already wrote
+    // carry status 'final' and are trusted by the read path, so they are
+    // NOT inert on this architecture: the flip below moves every row for
+    // the session to 'cancelled', which loadVerifiedResults drops from
+    // both statistics and history (migration F4, write-side form). The
+    // flip runs after the session commit, so a failed flip can never
+    // un-cancel the session; it only leaves rows counted until a later
+    // maintenance sweep flips them (see the implementation log).
     const activePoll = await checkPendingPoll(tool, command.sessionId, command.userId)
     if (activePoll !== false) return failure('The session schedule must finish updating before cancellation.')
 
@@ -175,6 +178,10 @@ async function applyCommand(command: RallyCommand, tool: RecordTool, recovery: R
       command.userId,
     )
     if (!result.success) return failure('The session could not be cancelled.')
+    // Migration F4 (write-side): a finalized result on a now-cancelled
+    // session must stop counting. Best-effort after the commit — a flip
+    // failure never un-cancels the session.
+    await markSessionResults(tool, command.sessionId, 'cancelled', command.userId)
     // Best-effort: a notification failure never un-cancels the session.
     await notifySessionCancelled(tool, session, command.sessionId, command.userId)
     return { success: true, data: { recordId: command.sessionId } }
@@ -553,7 +560,10 @@ async function applyPollCommand(
 
   if (operation === 'cancelPoll') {
     if (session.hostId !== userId) return failure('Only the session host can cancel the poll.')
-    if (pollData.status !== 'open') return failure('This poll is already closed.')
+    // Only terminal states refuse cancellation. A poll in an unknown
+    // legacy status must be cancellable, otherwise the host can never
+    // remove it and createPoll keeps refusing a replacement.
+    if (pollData.status === 'finalized' || pollData.status === 'finalizing' || pollData.status === 'cancelled') return failure('This poll is already closed.')
     const updated = await tool<MutateActionData>(
       'records.update',
       { collection: 'polls', recordId: command.pollId, data: { status: 'cancelled' } },
@@ -711,6 +721,12 @@ async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: R
         sets: next.sets, winner: next.winner, revision: next.revision,
       }, next.revision)
       if (!audited) return failure('The dispute could not be audited. Retry your dispute.')
+      // Flip the rows to 'disputed' BEFORE the session score commits: if
+      // the commit fails, the rows stay hidden (fail closed) and the retry
+      // re-runs the flip. See markSessionResults.
+      if (!await markSessionResults(tool, command.sessionId, 'disputed', command.userId)) {
+        return failure('The dispute could not be recorded. Retry your dispute.')
+      }
     }
   } else if (command.operation === 'correctResult') {
     if (!current) return failure('There is no result to correct.')
@@ -729,6 +745,12 @@ async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: R
       sets: next.sets, winner: next.winner, revision: next.revision,
     }, next.revision)
     if (!audited) return failure('The correction could not be audited. Retry the same correction.')
+    // Flip the rows to 'pending' BEFORE the session score commits: if the
+    // commit fails, the old outcome is already excluded from statistics
+    // (fail closed) and the retry re-runs the flip. See markSessionResults.
+    if (!await markSessionResults(tool, command.sessionId, 'pending', command.userId)) {
+      return failure('The correction could not be recorded. Retry the same correction.')
+    }
   } else {
     if (!current || current.winner !== null) return failure('There is no active scoreboard.')
     if (current.revision !== command.revision) return failure('The score changed. Check the latest score before trying again.')

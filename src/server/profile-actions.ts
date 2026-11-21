@@ -34,7 +34,7 @@ import {
 } from '../lib/profile.js'
 import { readMatchScore, isEligibleForStats } from '../lib/rally-score.js'
 import { recordPages } from './record-pages.js'
-import { buildMatchHistory, summarizePlayerStats, type MatchResultRow, type StatsFormat } from '../lib/match-stats.js'
+import { buildMatchHistory, normalizeResultStatus, parseStoredSets, summarizePlayerStats, type MatchResultRow, type StatsFormat } from '../lib/match-stats.js'
 
 interface StoredProfileRow {
   recordId: string
@@ -42,12 +42,53 @@ interface StoredProfileRow {
   data: PlayerProfile
 }
 
-type ResultIndexRow = {
+/**
+ * Stored `matchResults` row as read back from the collection. `status` is
+ * absent on rows written before the status column existed (they count as
+ * 'final': they were written only on finalization).
+ */
+type StoredResultRow = {
   sessionId: string
+  userId: string
+  format: string
+  won: number
+  sets: unknown
   resultRevision: number
   finalizedAt: string
+  status?: string
 }
 
+/**
+ * Load one player's verified results, newest first, up to `limit` entries.
+ *
+ * Aggregation design (fix for the getPlayerStats unbounded scan): the
+ * serialized command room maintains a write-side `status` on every row
+ * (finalization writes 'final'; a correction flips rows to 'pending' and
+ * a dispute to 'disputed' before the session score commits), so this read
+ * path can trust the stored outcome for 'final' rows with ZERO session
+ * GETs — getPlayerStats costs one paged query per 30 rows and nothing
+ * per row, no matter how many results a player has. The old code fetched
+ * every session (N results = N session GETs, `limit: Infinity`).
+ *
+ * Only 'pending' rows cost a session GET (at most one per history entry,
+ * bounded by the history limit ≤ 50): the corrected outcome lives only in
+ * the session until re-approval finalizes it in place, so the entry is
+ * derived from the committed session score. Statistics never needs pending
+ * rows (they are excluded from totals either way), so `includePending`
+ * stays false there and getPlayerStats issues zero session GETs even when
+ * the player has pending corrections. A pending row whose session
+ * revision has NOT moved past the row's revision has no committed
+ * correction to show (the correction's session commit failed and the
+ * retry has not landed yet) — the entry is dropped, fail closed, and
+ * reappears once the retry commits. A pending row is NEVER self-healed
+ * to 'final' on read: a revision match here is exactly the failed-commit
+ * window, and healing it would count the superseded outcome while the
+ * correction is still in flight. Re-approval heals the row on the write
+ * path instead.
+ *
+ * Disputed rows and rows with an unknown status or corrupt stored sets
+ * are dropped (fail closed), never counted, never shown.
+ */
 async function loadVerifiedResults(
   tools: ActionTools,
   userId: string,
@@ -57,15 +98,45 @@ async function loadVerifiedResults(
 ): Promise<MatchResultRow[] | null> {
   const verified = new Map<string, MatchResultRow>()
   try {
-    const pages = recordPages<ResultIndexRow>(offset => {
+    const pages = recordPages<StoredResultRow>(offset => {
       // The app action adapter forwards the SDK's offset even though the
       // installed ActionTools declaration omits it.
       const options = { where: { userId }, orderBy: 'finalizedAt', orderDir: 'desc' as const, limit: 30, offset }
-      return tools.query<ResultIndexRow>('matchResults', options)
+      return tools.query<StoredResultRow>('matchResults', options)
     })
     for await (const records of pages) {
-      const checked = await Promise.all(records.map(async (record) => {
+      // Page-granular over-fetch (perf audit, package 8): without this slice
+      // a history call with limit 50 issued 60 session GETs — the second
+      // 30-row page was checked in full although only 20 more verified rows
+      // were needed. Check only the rows still needed; a page that yields
+      // fewer verified rows than checked simply continues to the next page.
+      // For stats (limit Infinity) the slice is a no-op.
+      const remaining = limit - verified.size
+      const needed = Number.isFinite(remaining) ? records.slice(0, remaining) : records
+      const checked = await Promise.all(needed.map(async (record) => {
         const { sessionId, resultRevision, finalizedAt } = record.data
+        const status = normalizeResultStatus(record.data.status)
+        // Disputed rows are hidden from both statistics and history.
+        // Cancelled rows (migration F4, write-side form): the session was
+        // cancelled and the room flipped its rows to 'cancelled' at cancel
+        // time, so the result must not count or appear anywhere.
+        if (!status || status === 'disputed' || status === 'cancelled') return null
+        if (status === 'pending' && !includePending) return null
+        const format = record.data.format === 'singles' ? 'singles' : record.data.format === 'doubles' ? 'doubles' : null
+        if (!format) return null
+        if (status === 'final') {
+          // Trust the stored outcome: the row was written (or re-finalized
+          // in place) by the serialized command room at this revision, and
+          // any later correction/dispute flips the status before the
+          // session score commits. No session GET.
+          const sets = parseStoredSets(record.data.sets)
+          if (!sets) return null
+          return { recordId: record.recordId, sessionId, userId, format, resultRevision, finalizedAt,
+            visibility, won: record.data.won === 1, sets, status: 'final' } satisfies MatchResultRow
+        }
+        // Pending: derive the corrected outcome from the committed session
+        // score (one GET, bounded by the history limit). The stored row
+        // still carries the superseded outcome, which must never be shown.
         const result = await tools.get('sessions', sessionId)
         if (!result.success) {
           if (result.error === 'Record not found') return null
@@ -73,27 +144,11 @@ async function loadVerifiedResults(
         }
         const session = result.data.record.data
         const score = readMatchScore(typeof session.matchScore === 'string' ? session.matchScore : undefined)
-        const format = session.format === 'Singles' ? 'singles' : session.format === 'Doubles' ? 'doubles' : null
-        if (!format || session.pendingResult || !score) return null
+        if (!score || score.winner === null || score.disputed || score.revision <= resultRevision) return null
         const side = score.teams.findIndex(team => team.includes(userId))
-        if (side < 0 || score.winner === null) return null
-        if (isEligibleForStats(score) && score.revision === resultRevision) {
-          return { recordId: record.recordId, sessionId, userId, format, resultRevision, finalizedAt,
-            visibility, won: side === score.winner, sets: score.sets, status: 'final' } satisfies MatchResultRow
-        }
-        // Superseded by a host correction awaiting fresh approval: the
-        // outcome must not count in verified statistics, but the match
-        // must not vanish from history either. Surface it as pending
-        // (visible, not counted) showing the corrected outcome, until
-        // re-approval finalizes it in place (issue #23 semantics). All
-        // other unverified states (disputed, partially approved,
-        // in-progress) stay hidden, as before.
-        if (includePending && score.revision !== resultRevision) {
-          return { recordId: record.recordId, sessionId, userId, format, resultRevision: score.revision,
-            finalizedAt, visibility, won: side === score.winner, sets: score.sets,
-            status: 'pending' } satisfies MatchResultRow
-        }
-        return null
+        if (side < 0) return null
+        return { recordId: record.recordId, sessionId, userId, format, resultRevision: score.revision, finalizedAt,
+          visibility, won: side === score.winner, sets: score.sets, status: 'pending' } satisfies MatchResultRow
       }))
       for (const row of checked) {
         if (row) verified.set(row.sessionId, row)
@@ -134,6 +189,8 @@ async function syncOwnedVisibility(
   // Page through every owned row: a single capped query (the old limit: 100)
   // left rows past the cap at their previous visibility, so a profile
   // deletion could leave match history publicly readable in storage.
+  // (Port branch's paged version, kept in the combined branch — the stats
+  // branch's copy of this file still had the single capped query.)
   const pageSize = 100
   for (const collection of ['playerStats', 'matchResults'] as const) {
     let offset = 0

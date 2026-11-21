@@ -2,7 +2,7 @@ import type { ActionResult, MutateActionData, QueryActionData } from 'deepspace/
 import type { RallySession } from '../lib/rally.js'
 import type { MatchScore } from '../lib/rally-score.js'
 import type { ProfileVisibility } from '../lib/profile.js'
-import type { StatsFormat } from '../lib/match-stats.js'
+import type { MatchResultStatus, StatsFormat } from '../lib/match-stats.js'
 
 export type FinalizationTool = <T>(
   tool: string,
@@ -21,6 +21,7 @@ interface MatchResultRowData {
   resultRevision: number
   finalizedAt: string
   visibility: ProfileVisibility
+  status?: MatchResultStatus
 }
 
 interface ProfileRowData {
@@ -123,6 +124,8 @@ export async function applyFinalization(
       resultRevision: score.revision,
       finalizedAt,
       visibility: await profileVisibility(tool, player),
+      // Finalized in this same call: the row counts in statistics immediately.
+      status: 'final' as const,
     }
     const saved = prior
       ? await tool<MutateActionData>('records.update', {
@@ -139,4 +142,39 @@ export async function applyFinalization(
   }, score.revision)
   if (!audited) return failure('The finalized result could not be audited.')
   return { ok: true, applied }
+}
+
+/**
+ * Flip every `matchResults` row for one session to a lifecycle status
+ * ('pending' on correction, 'disputed' on dispute), preserving each row's
+ * outcome fields — a correction is resolved in place, not by rewriting the
+ * stored outcome. Runs before the session score commit in applyScoreEdit,
+ * so a commit failure leaves the rows uncounted (fail closed) and the
+ * retry re-runs the flip. Idempotent: rows already at the target status
+ * are skipped. An update failure returns false and the edit fails with
+ * `pendingResult` still set, so the retry can run it again.
+ *
+ * This is the write-side half of the stats-aggregation design: it is what
+ * lets the read path trust stored rows without fetching each session, so
+ * getPlayerStats stays exact with zero session GETs at any result count.
+ * Serialized by the per-session command room, so no two edits can interleave.
+ * A session's match has at most four players (doubles), so a single query
+ * with limit 100 covers every row.
+ */
+export async function markSessionResults(
+  tool: FinalizationTool,
+  sessionId: string,
+  status: MatchResultStatus,
+  actorUserId: string,
+): Promise<boolean> {
+  const rows = await query<MatchResultRowData>(tool, 'matchResults', { sessionId }, actorUserId, 100)
+  if (rows === null) return false
+  for (const row of rows) {
+    if (row.data.status === status) continue
+    const updated = await tool<MutateActionData>('records.update', {
+      collection: 'matchResults', recordId: row.recordId, data: { status },
+    }, row.data.userId)
+    if (!updated.success) return false
+  }
+  return true
 }

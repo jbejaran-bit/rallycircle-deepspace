@@ -107,12 +107,19 @@ function createToolsHarness() {
     return recordId
   }
 
-  const seedResult = (won: boolean, revision: number, finalizedAt: string, pendingResult = '') => {
+  const seedResult = (won: boolean, revision: number, finalizedAt: string, pendingResult = '', status: 'final' | 'pending' | 'disputed' = 'final') => {
     const base = createMatchScore([['alice'], ['bob']])
-    const score = { ...base, sets: won ? [[6, 3], [6, 3]] : [[3, 6], [3, 6]], winner: won ? 0 : 1,
+    const sets = won ? [[6, 3], [6, 3]] : [[3, 6], [3, 6]]
+    const score = { ...base, sets, winner: won ? 0 : 1,
       revision, approvals: ['alice', 'bob'] }
     const sessionId = seed('sessions', { format: 'Singles', matchScore: JSON.stringify(score), pendingResult }, 'host')
-    seed('matchResults', { sessionId, resultRevision: revision, finalizedAt }, 'alice')
+    // Seed the complete row as finalization actually writes it (format/won/
+    // sets/status): the read path trusts stored final rows without fetching
+    // the session, so an incomplete row would be dropped, not derived.
+    seed('matchResults', {
+      sessionId, format: 'singles', won: won ? 1 : 0, sets: JSON.stringify(sets),
+      resultRevision: revision, finalizedAt, status,
+    }, 'alice')
     return sessionId
   }
 
@@ -217,7 +224,10 @@ describe('getPlayerStats and getMatchHistory privacy gates', () => {
     await harness.call(updateProfileAction, 'alice', validProfile)
     harness.seed('playerStats', { format: 'singles', wins: 99, losses: 2, matchesPlayed: 101, visibility: 'public' }, 'alice')
     for (let i = 0; i < 5; i++) harness.seedResult(i < 3, 1, '2026-11-01T18:00:00.000Z')
-    harness.seedResult(true, 1, '2026-11-02T18:00:00.000Z', 'in-progress')
+    // A result edit in flight: the row is pending (its session commit has
+    // not landed), so it must not count even though the session score is
+    // complete and eligible.
+    harness.seedResult(true, 1, '2026-11-02T18:00:00.000Z', 'in-progress', 'pending')
     const result = await harness.call(getPlayerStatsAction, 'bob', { userId: 'alice' })
     expect(result).toMatchObject({
       success: true,
@@ -243,7 +253,7 @@ describe('getPlayerStats and getMatchHistory privacy gates', () => {
   it('limits result audit reads to the host and participants and hides pending changes', async () => {
     const harness = createToolsHarness()
     const committed = harness.seedResult(true, 2, '2026-11-01T18:00:00.000Z')
-    const pending = harness.seedResult(true, 2, '2026-11-01T18:00:00.000Z', 'pending')
+    const pending = harness.seedResult(true, 2, '2026-11-01T18:00:00.000Z', 'pending', 'pending')
     harness.seed('resultAudits', { sessionId: committed, kind: 'finalized', resultRevision: 2 }, 'alice')
     harness.seed('resultAudits', { sessionId: committed, kind: 'corrected', resultRevision: 3 }, 'alice')
     await expect(harness.call(getResultAuditAction, 'outsider', { sessionId: committed })).resolves.toMatchObject({ success: false })
@@ -264,7 +274,7 @@ describe('getPlayerStats and getMatchHistory privacy gates', () => {
     await harness.call(updateProfileAction, 'alice', validProfile)
     const older = harness.seedResult(false, 1, '2026-11-01T18:00:00.000Z')
     const newer = harness.seedResult(true, 2, '2026-11-18T18:00:00.000Z')
-    harness.seedResult(true, 1, '2026-11-19T18:00:00.000Z', 'in-progress')
+    harness.seedResult(true, 1, '2026-11-19T18:00:00.000Z', 'in-progress', 'pending')
     const result = await harness.call(getMatchHistoryAction, 'bob', { userId: 'alice', limit: 500 })
     expect(result).toMatchObject({
       success: true,

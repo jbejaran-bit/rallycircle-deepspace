@@ -48,8 +48,10 @@ export function validateSession(input: Omit<RallySession, 'hostId' | 'chatChanne
   if (!Number.isInteger(input.targetPlayers) || input.targetPlayers < 2 || input.targetPlayers > 12) return 'Choose 2–12 target players.'
   if (input.capacity != null && input.targetPlayers > input.capacity) return 'The planning target cannot exceed the maximum.'
   if (!['All levels', 'Beginner', 'Intermediate', 'Advanced'].includes(input.level)) return 'Select a skill level.'
-  // Stored pre-field templates may lack `notes` entirely; treat a missing
-  // value as empty instead of crashing (F7).
+  // F7 (user decision, 2026-11-21): missing or null notes read as '' —
+  // stored pre-field templates predate the column. A present but
+  // non-string value is malformed and rejected, never coerced.
+  if (input.notes != null && typeof input.notes !== 'string') return 'Notes must be text.'
   if ((input.notes ?? '').length > 400) return 'Keep notes under 400 characters.'
   return null
 }
