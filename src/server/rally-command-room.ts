@@ -690,7 +690,22 @@ export class RallyCommandRoom {
   ) {}
 
   fetch(request: Request): Promise<Response> {
-    if (request.method === 'POST' && new URL(request.url).pathname === '/geocode') {
+    // K01 (N-03): the room trusts no caller by default. Only the verified
+    // in-app actions call this object, and they stamp every fetch with the
+    // internal X-App-Action marker. A direct fetch without the marker — e.g.
+    // a forged body claiming userId 'host' — is rejected here, before the
+    // command is queued or parsed. This is defense in depth, not
+    // authentication: the action's Bearer <redacted> remains the only auth
+    // boundary, and no route exposes this object today. The marker itself
+    // is not a secret.
+    const pathname = new URL(request.url).pathname
+    if (request.method === 'POST' && (pathname === '/rally-command' || pathname === '/geocode')
+      && request.headers.get('X-App-Action') !== 'true') {
+      return Promise.resolve(pathname === '/geocode'
+        ? Response.json({ error: 'Invalid place name.' }, { status: 400 })
+        : Response.json(failure('Invalid rally command request.'), { status: 400 }))
+    }
+    if (request.method === 'POST' && pathname === '/geocode') {
       return this.geocode(request)
     }
     const result = this.queue.then(() => this.handle(request))
@@ -751,6 +766,7 @@ export class RallyCommandRoom {
         const id = this.env.RALLY_COMMAND_ROOMS.idFromName(`rally:${this.env.DEEPSPACE_APP_ID}:${sessionId}`)
         const response = await this.env.RALLY_COMMAND_ROOMS.get(id).fetch(new Request('https://internal/rally-command', {
           method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-App-Action': 'true' },
           body: JSON.stringify({ operation: 'cancel', sessionId, userId }),
         }))
         return (await response.json() as RallyCommandResult).success
@@ -862,7 +878,7 @@ export const rallyCommandAction: ActionHandler<Env> = async ({ userId, params, t
     const response = await room.fetch(
       new Request('https://internal/rally-command', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-App-Action': 'true' },
         body: JSON.stringify(command),
       }),
     )
@@ -1088,7 +1104,7 @@ export const schedulingAction: ActionHandler<Env> = async ({ userId, params, env
     const response = await room.fetch(
       new Request('https://internal/rally-command', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-App-Action': 'true' },
         body: JSON.stringify(command),
       }),
     )
