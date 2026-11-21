@@ -560,6 +560,12 @@ async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: R
     }
     next = createMatchScore(command.teams)
   } else if (command.operation === 'reviewResult') {
+    if (command.revision !== undefined && current?.revision !== command.revision) {
+      return failure('The score changed. Check the latest score before trying again.')
+    }
+    if (command.decision === 'approve' && !current?.disputed && current?.approvals.includes(command.userId)) {
+      return { success: true, data: { recordId: command.sessionId } }
+    }
     next = current && reviewResult(current, command.userId, command.decision)
     if (!next) return failure('This result is closed or unavailable for your review.')
     if (current && isFinalTransition(current, next)) {

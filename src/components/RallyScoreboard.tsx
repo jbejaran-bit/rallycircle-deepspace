@@ -27,7 +27,7 @@ const button = 'min-h-11 rounded-lg border border-white/25 px-3 text-sm font-sem
 
 export default function RallyScoreboard({ session, sessionId, userId, isHost, players, nameOf }: Props) {
   const inFlight = useRef(false)
-  const [review, setReview] = useState<'approve' | 'dispute' | null>(null)
+  const [review, setReview] = useState<{ decision: 'approve' | 'dispute'; revision: number } | null>(null)
   const [selected, setSelected] = useState<Record<string, string>>({})
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
@@ -106,8 +106,8 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
           </div>
           {canReview && (
             <div className="flex flex-wrap gap-2">
-              <button type="button" className={button} disabled={pending} onClick={() => setReview('approve')}>Confirm result</button>
-              <button type="button" className={button} disabled={pending} onClick={() => setReview('dispute')}>Dispute result</button>
+              <button type="button" className={button} disabled={pending} onClick={() => setReview({ decision: 'approve', revision: score.revision })}>Confirm result</button>
+              <button type="button" className={button} disabled={pending} onClick={() => setReview({ decision: 'dispute', revision: score.revision })}>Dispute result</button>
             </div>
           )}
           {editable && score.winner === null && (
@@ -153,11 +153,11 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
       <ConfirmModal
         open={review !== null && Boolean(canReview)}
         onClose={() => { if (!inFlight.current) setReview(null) }}
-        onConfirm={() => { if (review && canReview) void edit({ operation: 'reviewResult', sessionId, decision: review }) }}
-        title={review === 'dispute' ? 'Dispute this result?' : 'Confirm this result?'}
-        description={review === 'dispute' ? 'A dispute closes further approvals for this result.' : 'The result becomes final after every recorded player approves it.'}
-        confirmText={review === 'dispute' ? 'Dispute result' : 'Confirm result'}
-        variant={review === 'dispute' ? 'destructive' : 'default'}
+        onConfirm={() => { if (review && canReview) void edit({ operation: 'reviewResult', sessionId, decision: review.decision, revision: review.revision }) }}
+        title={review?.decision === 'dispute' ? 'Dispute this result?' : 'Confirm this result?'}
+        description={review?.decision === 'dispute' ? 'A dispute closes further approvals for this result.' : 'The result becomes final after every recorded player approves it.'}
+        confirmText={review?.decision === 'dispute' ? 'Dispute result' : 'Confirm result'}
+        variant={review?.decision === 'dispute' ? 'destructive' : 'default'}
         loading={pending}
       />
       {pending && <p role="status">Saving score…</p>}

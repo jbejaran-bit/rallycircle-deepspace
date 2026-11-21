@@ -49,7 +49,7 @@ export type ScoreSide = z.infer<typeof side>
 export const scoreEditSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('startMatch'), teams }),
   z.object({ operation: z.literal('scorePoint'), side, revision: z.number().int().min(0) }),
-  z.object({ operation: z.literal('reviewResult'), decision: z.enum(['approve', 'dispute']) }),
+  z.object({ operation: z.literal('reviewResult'), decision: z.enum(['approve', 'dispute']), revision: z.number().int().min(0).optional() }),
   z.object({
     operation: z.literal('correctResult'),
     revision: z.number().int().min(0),

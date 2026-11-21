@@ -917,6 +917,15 @@ describe('Track A regression suite — waitlist, scoring and authorization', () 
     await expect(harness.command('host', correction)).resolves.toMatchObject({ success: true })
     expect(session.pendingResult).toBe('')
     expect(resultStatus(readMatchScore(session.matchScore)!)).toBe('corrected')
+    await expect(harness.command('alice', { operation: 'reviewResult', sessionId: 'correction', decision: 'approve', revision }))
+      .resolves.toMatchObject({ success: false })
+    const latestRevision = readMatchScore(session.matchScore)!.revision
+    const approval = { operation: 'reviewResult', sessionId: 'correction', decision: 'approve', revision: latestRevision }
+    for (const result of await Promise.all([harness.command('alice', approval), harness.command('alice', approval)])) {
+      expect(result.success).toBe(true)
+    }
+    expect(readMatchScore(session.matchScore)!.approvals).toEqual(['alice'])
+
     expect([...harness.resultCollections.get('resultAudits')!.values()].filter(row => row.data.kind === 'corrected')).toHaveLength(1)
   })
 
