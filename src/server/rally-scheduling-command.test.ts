@@ -65,7 +65,12 @@ function createHarness() {
         const records = Array.from(rsvps.values()).filter(record =>
           Object.entries(where).every(([key, value]) => record.data[key as keyof RallyRSVP] === value),
         )
-        return Response.json({ success: true, data: { records, count: records.length } })
+        const offset = Number(params.offset ?? 0)
+        const limit = Number(params.limit ?? 100)
+        const page = records.slice(offset, offset + limit)
+        return Response.json({ success: true, data: { records: page, count: page.length,
+          nextOffset: records.length > offset + limit ? offset + limit : undefined } })
+
       }
 
       if (tool === 'records.query' && params.collection === 'waitlists') {
@@ -285,7 +290,15 @@ function createHarness() {
       get: () => recordRoom,
     },
   } as unknown as Env
-  let room = new RallyCommandRoom({} as DurableObjectState, env)
+  const store = new Map<string, unknown>()
+  const state = { storage: {
+    setAlarm: async () => undefined,
+    deleteAlarm: async () => undefined,
+    put: async (key: string, value: unknown) => { store.set(key, value) },
+    get: async (key: string) => store.get(key),
+    delete: async (key: string) => store.delete(key),
+  } } as unknown as DurableObjectState
+  let room = new RallyCommandRoom(state, env)
   const commandNamespace = {
     idFromName: (name: string) => name,
     get: () => ({ fetch: (request: Request) => room.fetch(request) }),
@@ -364,7 +377,8 @@ function createHarness() {
   return {
     addSession, command, scheduleCommand, notificationCommand,
     failMutation: (index: number) => { mutationsUntilFailure = index },
-    restart: () => { room = new RallyCommandRoom({} as DurableObjectState, env) },
+    restart: () => { room = new RallyCommandRoom(state, env) },
+    alarm: () => room.alarm(),
     rsvps, sessions, waitlists, polls, pollVotes, notifications, notificationPreferences, recurringSeries,
     interruptQueueCleanup: (times = 1) => { failQueueDeletes = times },
   }
@@ -456,6 +470,9 @@ describe('Scheduling polls', () => {
     const harness = createHarness()
     const pollId = await openPoll(harness)
     const session = harness.sessions.get('poll-session')!.data
+    const poll = harness.polls.get(pollId)!.data
+    poll.status = 'finalizing'
+    poll.finalizedOptionId = 'sat'
     session.startsAt = '2030-01-05T18:00:00.000Z'
     session.scheduleRevision = 1
     await expect(harness.command('host', { operation: 'finalizePoll', sessionId: 'poll-session', pollId, optionId: 'sat' }))
@@ -481,6 +498,25 @@ describe('Scheduling polls', () => {
     expect(harness.sessions.get('poll-session')?.data.scheduleRevision).toBe(1)
     expect(harness.polls.get(pollId)?.data).toMatchObject({ status: 'finalized', finalizedOptionId: 'sat' })
     expect([...harness.notifications.values()].filter(row => row.data.type === 'schedule_changed')).toHaveLength(2)
+  })
+
+  it('recovers without a host retry and delivers to a second RSVP page', async () => {
+    const harness = createHarness()
+    const pollId = await openPoll(harness)
+    for (let i = 0; i < 101; i++) {
+      const userId = `extra-${i}`
+      harness.rsvps.set(userId, { recordId: userId, createdBy: userId,
+        data: { userId, sessionId: 'poll-session', status: 'going' } })
+    }
+    harness.failMutation(3)
+    await expect(harness.command('host', { operation: 'finalizePoll', sessionId: 'poll-session', pollId, optionId: 'sat' }))
+      .resolves.toMatchObject({ success: false })
+    harness.restart()
+    await harness.alarm()
+    await harness.alarm()
+    expect(harness.polls.get(pollId)?.data.status).toBe('finalized')
+    expect(harness.sessions.get('poll-session')?.data.scheduleRevision).toBe(1)
+    expect([...harness.notifications.values()].filter(row => row.data.type === 'schedule_changed')).toHaveLength(103)
   })
 
   it('rejects finalising a time that is no longer in the future', async () => {

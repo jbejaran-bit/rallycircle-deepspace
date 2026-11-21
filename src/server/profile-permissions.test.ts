@@ -47,16 +47,16 @@ describe('profile / stats / results record permissions', () => {
     const privateStats = record({ userId: 'alice', visibility: 'private' }, 'alice')
     expect(canRead(playerStatsSchema, 'member', publicStats, 'bob')).toBe(false)
     expect(canRead(playerStatsSchema, 'member', privateStats, 'bob')).toBe(false)
-    expect(canRead(playerStatsSchema, 'member', privateStats, 'alice')).toBe(true)
+    expect(canRead(playerStatsSchema, 'member', privateStats, 'alice')).toBe(false)
 
     const privateResult = record({ userId: 'alice', visibility: 'private' }, 'alice')
     expect(canRead(matchResultsSchema, 'member', privateResult, 'bob')).toBe(false)
-    expect(canRead(matchResultsSchema, 'member', privateResult, 'alice')).toBe(true)
+    expect(canRead(matchResultsSchema, 'member', privateResult, 'alice')).toBe(false)
   })
 
-  it('lets members read audit rows for sessions they can already read', () => {
+  it('requires the guarded action for audit reads', () => {
     const audit = record({ sessionId: 's1', kind: 'finalized' }, 'alice')
-    expect(canRead(resultAuditsSchema, 'member', audit, 'bob')).toBe(true)
+    expect(canRead(resultAuditsSchema, 'member', audit, 'bob')).toBe(false)
     expect(canRead(resultAuditsSchema, 'viewer', audit, null as unknown as string)).toBe(false)
   })
 })

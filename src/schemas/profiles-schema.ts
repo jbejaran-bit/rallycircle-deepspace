@@ -72,8 +72,8 @@ export const playerStatsSchema: CollectionSchema = {
   visibilityField: { field: 'visibility', value: 'public' },
   permissions: {
     '*': { read: false, create: false, update: false, delete: false },
-    member: { read: 'own', create: false, update: false, delete: false },
-    admin: { read: true, create: false, update: false, delete: false },
+    member: { read: false, create: false, update: false, delete: false },
+    admin: { read: false, create: false, update: false, delete: false },
   },
 }
 
@@ -103,8 +103,8 @@ export const matchResultsSchema: CollectionSchema = {
   visibilityField: { field: 'visibility', value: 'public' },
   permissions: {
     '*': { read: false, create: false, update: false, delete: false },
-    member: { read: 'own', create: false, update: false, delete: false },
-    admin: { read: true, create: false, update: false, delete: false },
+    member: { read: false, create: false, update: false, delete: false },
+    admin: { read: false, create: false, update: false, delete: false },
   },
 }
 
@@ -125,8 +125,8 @@ export const resultAuditsSchema: CollectionSchema = {
   ownerField: 'userId',
   permissions: {
     '*': { read: false, create: false, update: false, delete: false },
-    member: { read: true, create: false, update: false, delete: false },
-    admin: { read: true, create: false, update: false, delete: false },
+    member: { read: false, create: false, update: false, delete: false },
+    admin: { read: false, create: false, update: false, delete: false },
   },
 }
 
