@@ -89,3 +89,26 @@ it('keeps personal attendance visible when the community counts are unavailable'
   ])
   expect(available.gamesNeedingPlayers[0]).toMatchObject({ recordId: 'open', needed: 1 })
 })
+
+it('does not invent full games from duplicate or malformed community RSVPs', () => {
+  const sessions = [row('opening', { targetPlayers: 2, capacity: 2 })]
+  const community = [
+    { sessionId: 'opening', userId: 'player-a', status: 'going' },
+    { sessionId: 'opening', userId: 'player-a', status: 'going' },
+    { sessionId: 'opening', userId: '', status: 'going' },
+    { sessionId: 'opening', userId: 'player-b', status: 'unknown' },
+  ] as unknown as Parameters<typeof buildDashboard>[5]
+  const result = buildDashboard(sessions, [], [], 'me', now, community)
+  expect(result.gamesNeedingPlayers.map(game => ({ id: game.recordId, needed: game.needed })))
+    .toEqual([{ id: 'opening', needed: 1 }])
+  const full = buildDashboard(sessions, [], [], 'me', now, [
+    ...community!, { sessionId: 'opening', userId: 'player-b', status: 'going' },
+  ])
+  expect(full.gamesNeedingPlayers).toEqual([])
+  // The same player in a different session is a distinct attendance record.
+  const separate = buildDashboard([...sessions, row('other')], [], [], 'me', now, [
+    { sessionId: 'opening', userId: 'player-a', status: 'going' },
+    { sessionId: 'other', userId: 'player-a', status: 'going' },
+  ])
+  expect(separate.gamesNeedingPlayers.map(game => game.recordId)).toEqual(['opening', 'other'])
+})
