@@ -13,6 +13,7 @@ export default function Home() {
   return (
     <main className="tennis-landing" data-testid="static-landing">
       <Seo {...seo} path="/" />
+      <a className="tennis-skip" href="#tennis-heading">Skip to content</a>
       <header className="tennis-frame tennis-header">
         <a href="/" className="tennis-wordmark" aria-label="RallyCircle home">
           <span className="tennis-mark" aria-hidden="true" /> RallyCircle
@@ -25,23 +26,24 @@ export default function Home() {
 
       <section className="tennis-frame tennis-hero" aria-labelledby="tennis-heading">
         <div className="tennis-intro">
-          <h1 id="tennis-heading">Good tennis<br />starts <em>here.</em></h1>
-          <p>Find a court, get your players together, and keep track of the match from first serve to final score.</p>
+          <h1 id="tennis-heading" tabIndex={-1}>Find players.<br />Play tennis.</h1>
+          <p>Join a nearby game, invite your hitting partners, and keep score together.</p>
           <div className="tennis-actions">
             <a className="tennis-primary" href="/games">Find a game <ArrowRight size={19} aria-hidden /></a>
             <a className="tennis-secondary" href="/rallies?create=1"><Plus size={18} aria-hidden /> Create a rally</a>
             <a className="tennis-secondary" href="/courts"><MapPin size={18} aria-hidden /> Explore courts</a>
           </div>
         </div>
-        <div className="tennis-art" aria-hidden="true">
-          <div className="tennis-court">
-            <i className="tennis-baseline tennis-baseline-start" />
-            <i className="tennis-baseline tennis-baseline-end" />
-            <i className="tennis-singles" />
-            <i className="tennis-service" />
-            <i className="tennis-net" />
-          </div>
-          <div className="tennis-ball" />
+        <div className="tennis-art">
+          <img
+            src="/images/rallycircle-court-800.webp"
+            srcSet="/images/rallycircle-court-480.webp 480w, /images/rallycircle-court-800.webp 800w, /images/rallycircle-court-1120.webp 1120w"
+            sizes="(max-width: 760px) calc(100vw - 2rem), (max-width: 1392px) 47vw, 660px"
+            width={800}
+            height={533}
+            alt=""
+            fetchPriority="high"
+          />
         </div>
       </section>
 
@@ -58,10 +60,10 @@ export default function Home() {
 
       <section className="tennis-frame tennis-matchday" aria-labelledby="tennis-matchday-heading">
         <div>
-          <h2 id="tennis-matchday-heading">Stay with the match.</h2>
-          <p>Keep the singles or doubles score as you play. After the match, recorded players can confirm or dispute the result, and it appears in their match history.</p>
+          <h2 id="tennis-matchday-heading">Play it through.</h2>
+          <p>Keep the singles or doubles score as you play. After the match, recorded players can confirm or dispute the result from the session scoreboard.</p>
         </div>
-        <a className="tennis-secondary" href="/dashboard">Open match history <ArrowRight size={18} aria-hidden /></a>
+        <a className="tennis-secondary" href="/dashboard">Open dashboard <ArrowRight size={18} aria-hidden /></a>
       </section>
       <footer className="tennis-frame tennis-footer">
         <a href="/" className="tennis-wordmark">RallyCircle</a>

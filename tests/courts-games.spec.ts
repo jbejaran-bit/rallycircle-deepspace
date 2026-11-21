@@ -28,6 +28,23 @@ const overpassFixture = {
 }
 
 test.describe('court discovery', () => {
+  test('mobile map is opt-in and keyboard markers update the same selection as the list', async ({ users }) => {
+    const [{ page }] = await users(1)
+    await page.setViewportSize({ width: 375, height: 820 })
+    await page.goto('/courts')
+    const map = page.getByRole('region', { name: 'Pittsburgh tennis court map' })
+    const list = page.getByRole('list', { name: 'Pittsburgh courts' })
+    const selected = page.getByRole('region', { name: 'Selected court' })
+    await expect(list).toBeVisible()
+    await expect(map).toHaveCount(0)
+    await page.getByRole('button', { name: 'Map', exact: true }).click()
+    await expect(map).toBeVisible()
+    await map.getByRole('button', { name: 'Select Highland Park Tennis Courts' }).press('Enter')
+    await expect(selected).toContainText('Highland Park Tennis Courts')
+    await page.getByRole('button', { name: 'List', exact: true }).click()
+    await expect(list.getByRole('button', { name: /Highland Park Tennis Courts/ })).toHaveAttribute('aria-pressed', 'true')
+  })
+
   test('nearby search shows map + list sorted by distance, with details only when tagged', async ({ users }) => {
     const [{ page }] = await users(1)
     await page.route('**/api/courts/nearby*', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(overpassFixture) }))
@@ -100,8 +117,9 @@ test.describe('find games', () => {
     await page.goto('/games')
     await page.getByPlaceholder(/e\.g\. Schenley, Oakland/i).fill('Tokyo')
     await expect(page.getByText(/No games match these filters/)).toBeVisible()
-    await page.getByPlaceholder(/e\.g\. Schenley, Oakland/i).fill('')
+    await page.getByRole('button', { name: 'Show all upcoming games' }).click()
+    await expect(page.getByRole('searchbox', { name: 'Rally title, court or area' })).toHaveValue('')
     // With no sessions seeded in the test app, the empty state is the honest result.
-    await expect(page.getByText(/No games match these filters|games found/)).toBeVisible()
+    await expect(page.getByText(/No upcoming games yet|games found/)).toBeVisible()
   })
 })

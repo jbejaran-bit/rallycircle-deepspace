@@ -10,6 +10,9 @@ import { prerender } from './prerender.ts'
 const appDir = fileURLToPath(new URL('.', import.meta.url))
 
 export default defineConfig({
+  // Linked dependencies can be shared across review worktrees. Keep generated
+  // optimizer chunks local so another worktree cannot replace a running app's cache.
+  cacheDir: fileURLToPath(new URL('./.vite', import.meta.url)),
   plugins: [
     react(),
     generouted(),

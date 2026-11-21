@@ -35,9 +35,9 @@ export interface RallyRSVP {
 /** Validate the input BEFORE sending a write. Server schema still enforces ownership and uniqueness. */
 export function validateSession(input: Omit<RallySession, 'hostId' | 'chatChannelId' | 'status'>, now = Date.now()): string | null {
   if (input.format !== undefined && !SESSION_FORMATS.includes(input.format)) return 'Select a session format.'
-  if (!input.title.trim() || input.title.trim().length > 72) return 'Use a title between 1 and 72 characters.'
-  if (!input.court.trim() || input.court.trim().length > 100) return 'Enter a court name (up to 100 characters).'
-  if (!input.location.trim() || input.location.trim().length > 100) return 'Enter a location (up to 100 characters).'
+  if (typeof input.title !== 'string' || !input.title.trim() || input.title.trim().length > 72) return 'Use a title between 1 and 72 characters.'
+  if (typeof input.court !== 'string' || !input.court.trim() || input.court.trim().length > 100) return 'Enter a court name (up to 100 characters).'
+  if (typeof input.location !== 'string' || !input.location.trim() || input.location.trim().length > 100) return 'Enter a location (up to 100 characters).'
   const time = Date.parse(input.startsAt)
   if (!Number.isFinite(time) || time <= now) return 'Choose a future date and time.'
   if (![60, 90, 120, 150].includes(input.durationMinutes)) return 'Select a valid session duration.'
@@ -45,7 +45,8 @@ export function validateSession(input: Omit<RallySession, 'hostId' | 'chatChanne
   if (!Number.isInteger(input.targetPlayers) || input.targetPlayers < 2 || input.targetPlayers > 12) return 'Choose 2–12 target players.'
   if (input.capacity != null && input.targetPlayers > input.capacity) return 'The planning target cannot exceed the maximum.'
   if (!['All levels', 'Beginner', 'Intermediate', 'Advanced'].includes(input.level)) return 'Select a skill level.'
-  if (input.notes.length > 400) return 'Keep notes under 400 characters.'
+  if (input.notes != null && typeof input.notes !== 'string') return 'Enter valid session notes.'
+  if ((input.notes ?? '').length > 400) return 'Keep notes under 400 characters.'
   return null
 }
 
@@ -53,24 +54,36 @@ export function validCapacity(value: number): boolean {
   return Number.isInteger(value) && value >= 2 && value <= 12
 }
 
-/** Index record envelopes without losing the record IDs used for withdrawal. */
+function hasValidMembership(rsvp: RallyRSVP): boolean {
+  return typeof rsvp.sessionId === 'string' && rsvp.sessionId.length > 0 &&
+    typeof rsvp.userId === 'string' && rsvp.userId.length > 0 &&
+    (rsvp.status === 'going' || rsvp.status === 'maybe')
+}
+
+/** Keep the first valid membership and its record ID for each player in a session. */
 export function groupSessionRsvps<T extends { data: RallyRSVP }>(records: readonly T[]): Map<string, T[]> {
-  const bySession = new Map<string, T[]>()
+  const memberships = new Map<string, Map<string, T>>()
   for (const record of records) {
-    const sessionId = record.data.sessionId
-    const group = bySession.get(sessionId)
-    if (group) group.push(record)
-    else bySession.set(sessionId, [record])
+    const rsvp = record.data
+    if (!hasValidMembership(rsvp)) continue
+    const group = memberships.get(rsvp.sessionId) ?? new Map<string, T>()
+    if (!group.has(rsvp.userId)) group.set(rsvp.userId, record)
+    memberships.set(rsvp.sessionId, group)
   }
-  return bySession
+  return new Map([...memberships].map(([sessionId, members]) => [sessionId, [...members.values()]]))
 }
 
 export function summarizeAttendance(rsvps: RallyRSVP[], sessionId: string) {
-  const people = rsvps.filter(r => r.sessionId === sessionId)
-  return {
-    going: people.filter(r => r.status === 'going').length,
-    maybe: people.filter(r => r.status === 'maybe').length,
+  const seen = new Set<string>()
+  let going = 0
+  let maybe = 0
+  for (const rsvp of rsvps) {
+    if (rsvp.sessionId !== sessionId || !hasValidMembership(rsvp) || seen.has(rsvp.userId)) continue
+    seen.add(rsvp.userId)
+    if (rsvp.status === 'going') going++
+    else maybe++
   }
+  return { going, maybe }
 }
 
 export function summarizeReadiness(confirmed: number, target: number, format?: SessionFormat) {

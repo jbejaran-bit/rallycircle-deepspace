@@ -165,6 +165,7 @@ it('uses the shared geocoder room for production requests and preserves throttli
   })
   expect(idFromName).toHaveBeenCalledWith('court-discovery:nominatim')
   expect(new URL(fetch.mock.calls[0][0].url).pathname).toBe('/geocode')
+  expect(fetch.mock.calls[0][0].headers.get('X-App-Action')).toBe('true')
   expect(await fetch.mock.calls[0][0].text()).toBe('Denver')
   expect(response.status).toBe(429)
   expect(response.headers.get('Retry-After')).toBe('2')

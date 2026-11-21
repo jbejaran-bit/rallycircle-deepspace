@@ -18,15 +18,18 @@
  * Capacity comes from the optional immutable session maximum, independently of the target.
  */
 
-import { haversineMiles, matchesArea, normalizePlaceName, type LatLng } from './geo.ts'
+import { haversineMiles, isValidLatLng, matchesArea, normalizePlaceName, type LatLng } from './geo.ts'
 import type { Level, RallyRSVP, RallySession } from './rally'
 
 export type GameFormat = 'any' | 'singles' | 'doubles' | 'practice'
+export type GameSort = 'soonest' | 'nearest'
 export type GameStatus = 'needs-players' | 'target-reached' | 'full'
 
 export interface GameFilters {
   /** Free-text area/court substring; empty means no area filter. */
   area?: string
+  /** Match game title, court, or area. */
+  query?: string
   level?: Level | 'Any level'
   format?: GameFormat
   /** Inclusive ISO date bounds (`YYYY-MM-DD`); empty means unbounded. */
@@ -39,6 +42,7 @@ export interface GameFilters {
   /** Default false: hide sessions that already started. */
   showPast?: boolean
   availability?: 'any' | 'spots' | 'waitlist'
+  sort?: GameSort
 }
 
 export interface KnownCourtLocation {
@@ -83,9 +87,8 @@ function formatMatches(session: RallySession, format: GameFormat): boolean {
 
 /**
  * Filter + annotate sessions. Pure function: `now` is injectable so tests
- * are deterministic. Sorting is by start time, then by distance when the
- * viewer location is known (unknown-distance sessions sort after known
- * ones at the same time).
+ * are deterministic. Sort by start time by default or by nearest known
+ * distance when requested and a location is available.
  */
 export function filterGames(
   sessions: { recordId: string; data: RallySession }[],
@@ -99,25 +102,39 @@ export function filterGames(
   } = {},
 ): AnnotatedGame[] {
   const now = options.now ?? Date.now()
-  const userLocation = options.userLocation
+  const userLocation = isValidLatLng(options.userLocation) ? options.userLocation : undefined
+  const terms = normalizePlaceName(filters.query ?? '').split(' ').filter(Boolean)
 
   const fromMs = filters.fromDate ? Date.parse(`${filters.fromDate}T00:00:00`) : undefined
   const toMs = filters.toDate ? Date.parse(`${filters.toDate}T23:59:59.999`) : undefined
 
   const attendance = new Map<string, { going: number; maybe: number; isMine: boolean }>()
+  const countedMembers = new Set<string>()
   for (const rsvp of rsvps) {
+    // Legacy/partially synced records can contain duplicate membership rows or
+    // unexpected statuses. Neither should inflate capacity or produce NaN.
+    if (rsvp.status !== 'going' && rsvp.status !== 'maybe') continue
+    if (typeof rsvp.sessionId !== 'string' || typeof rsvp.userId !== 'string' || !rsvp.userId) continue
+    const memberKey = JSON.stringify([rsvp.sessionId, rsvp.userId])
+    if (countedMembers.has(memberKey)) continue
+    countedMembers.add(memberKey)
     const existing = attendance.get(rsvp.sessionId) ?? { going: 0, maybe: 0, isMine: false }
     existing[rsvp.status]++
-    existing.isMine ||= rsvp.userId === options.userId
+    existing.isMine ||= options.userId !== undefined && rsvp.userId === options.userId
     attendance.set(rsvp.sessionId, existing)
   }
   const annotated: AnnotatedGame[] = []
   for (const { recordId, data: session } of sessions) {
     const startMs = Date.parse(session.startsAt)
+    if (!Number.isFinite(startMs)) continue
     const cancelled = session.status === 'cancelled'
-    const past = Number.isFinite(startMs) && startMs <= now
+    const past = startMs <= now
     if (cancelled && !filters.showCancelled) continue
     if (past && !filters.showPast) continue
+    if (terms.length) {
+      const text = normalizePlaceName(`${session.title} ${session.court} ${session.location}`)
+      if (!terms.every(term => text.includes(term))) continue
+    }
     if (filters.area && !matchesArea(`${session.court} ${session.location}`, filters.area)) continue
     if (filters.level && filters.level !== 'Any level' && session.level !== filters.level) continue
     if (!formatMatches(session, filters.format ?? 'any')) continue
@@ -127,8 +144,8 @@ export function filterGames(
     const { going, maybe, isMine } = attendance.get(recordId) ?? { going: 0, maybe: 0, isMine: false }
 
     const full = session.capacity != null && going >= session.capacity
-    if (filters.availability === 'spots' && (full || cancelled)) continue
-    if (filters.availability === 'waitlist' && (!full || cancelled)) continue
+    if (filters.availability === 'spots' && (full || cancelled || past)) continue
+    if (filters.availability === 'waitlist' && (!full || cancelled || past)) continue
 
     // Keep distance unknown when a court name is ambiguous. Use locality
     // when available, and never geocode a user's free-text session fields.
@@ -140,6 +157,7 @@ export function filterGames(
       )
       const area = normalizePlaceName(session.location)
       const candidates = (options.knownCourts ?? []).filter(known => {
+        if (!isValidLatLng(known)) return false
         const locality = known.locality && normalizePlaceName(known.locality)
         if (locality && (!area || (!area.includes(locality) && !locality.includes(area)))) return false
         const knownName = normalizePlaceName(known.name)
@@ -180,11 +198,8 @@ export function filterGames(
 
   annotated.sort((a, b) => {
     const timeDiff = Date.parse(a.session.startsAt) - Date.parse(b.session.startsAt)
-    if (timeDiff !== 0) return timeDiff
-    if (a.distanceMiles === null && b.distanceMiles === null) return 0
-    if (a.distanceMiles === null) return 1
-    if (b.distanceMiles === null) return -1
-    return a.distanceMiles - b.distanceMiles
+    const distanceDiff = a.distanceMiles === b.distanceMiles ? 0 : (a.distanceMiles ?? Infinity) - (b.distanceMiles ?? Infinity)
+    return filters.sort === 'nearest' && userLocation ? distanceDiff || timeDiff : timeDiff || distanceDiff
   })
   return annotated
 }
