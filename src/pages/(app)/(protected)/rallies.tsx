@@ -9,6 +9,7 @@ import { buildSessionUrl, formatSessionTime, groupSessionRsvps, parseLocalSessio
 import { runRallyCommand } from '@/lib/rally-actions'
 import { readMatchScore } from '@/lib/rally-score'
 import { buildCalendarEvent, canDownloadCalendar } from '@/lib/rally-calendar'
+import RallySchedulingPoll from '@/components/RallySchedulingPoll'
 import RallyScoreboard from '@/components/RallyScoreboard'
 import LiveCourtboard from '@/components/LiveCourtboard'
 
@@ -411,6 +412,9 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
       )}
       {!cancelled&&session.hostId===userId&&<button type="button" disabled={busy} onClick={()=>void cancelSession()} className="text-xs text-rose-300/75 underline underline-offset-4 hover:text-rose-200">Cancel my session</button>}
       <ErrorMessage message={error}/>
+      {!cancelled && (session.hostId === userId || myRSVP) && (
+        <RallySchedulingPoll key={sessionId} sessionId={sessionId} userId={userId} isHost={session.hostId === userId} />
+      )}
       <div id="rally-match" tabIndex={-1} className="scroll-mt-4">
       <RallyScoreboard
         userId={userId}
