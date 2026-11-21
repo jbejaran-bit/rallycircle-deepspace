@@ -103,6 +103,31 @@ interface RecoveryHooks {
   result(command: ResultRecovery): Promise<void>
 }
 const RECOVERY_DELAY_MS = 30_000
+/**
+ * A recovery that can never succeed (deleted record, permanently invalid
+ * command) must not alarm every 30s forever. After this many failed alarm
+ * ticks the key is dropped and the alarm stops; the user can still retry
+ * the original operation manually, which is the path the error messages
+ * already describe.
+ */
+const MAX_RECOVERY_ATTEMPTS = 10
+
+interface RecoveryEntry<T> {
+  command: T
+  attempts: number
+}
+
+/** Read a stored recovery entry. Accepts the legacy bare-command shape. */
+function readRecoveryEntry<T>(value: unknown): RecoveryEntry<T> | null {
+  if (!isRecord(value)) return null
+  if (typeof value.operation === 'string') {
+    return { command: value as unknown as T, attempts: 0 }
+  }
+  if (isRecord(value.command) && typeof value.attempts === 'number') {
+    return { command: value.command as unknown as T, attempts: value.attempts }
+  }
+  return null
+}
 
 async function applyCommand(command: RallyCommand, tool: RecordTool, recovery: RecoveryHooks): Promise<RallyCommandResult> {
   const sessionResult = await tool<GetActionData<RallySession>>(
@@ -552,6 +577,16 @@ async function applyPollCommand(
       Date.parse(session.startsAt) !== Date.parse(chosen.startsAt) &&
       (Date.parse(session.startsAt) !== Date.parse(pollData.preparedStartsAt) ||
         (session.scheduleRevision ?? 0) !== pollData.preparedRevision)) {
+    // The finalize is abandoned — the edit wins — but the poll must not
+    // stay 'finalizing' forever: that bricks the poll (it can neither be
+    // finalized, cancelled, nor replaced) and blocks session cancellation,
+    // while the recovery alarm replays this same failure every 30s.
+    // Reopen the poll so the host can cancel it; the next alarm tick then
+    // sees the poll is no longer outstanding and clears the recovery key.
+    // A later finalize still fails honestly at the baseStartsAt check.
+    await tool<MutateActionData>('records.update', {
+      collection: 'polls', recordId: command.pollId, data: { status: 'open' },
+    }, userId)
     return failure('The session was edited during poll finalization. Its time was preserved.')
   }
   // A retry after the session write may find the chosen time already persisted.
@@ -844,24 +879,62 @@ export class RallyCommandRoom {
 
   private async armRecovery(key: string, command: PollFinalization | ResultRecovery) {
     await this.state.storage.setAlarm(Date.now() + RECOVERY_DELAY_MS)
-    await this.state.storage.put(key, command)
+    await this.state.storage.put(key, { command, attempts: 0 })
   }
 
   async alarm(): Promise<void> {
     const recovery = this.queue.then(() => this.recover())
     this.queue = recovery.then(() => undefined, () => undefined)
-    await recovery
+    try {
+      await recovery
+    } catch (error) {
+      // A throw before recover() persisted the next alarm (for example a
+      // storage read failed) would otherwise leave the recovery with no
+      // future alarm once the platform's retry budget is spent. Re-arm
+      // best-effort, then rethrow so the platform retries still apply;
+      // the replays are idempotent, so a duplicate delivery is safe.
+      await this.state.storage.setAlarm(Date.now() + RECOVERY_DELAY_MS).catch(() => undefined)
+      throw error
+    }
   }
 
   private async recover(): Promise<void> {
     const storage = this.state.storage
-    const pollCommand = await storage.get<PollFinalization>('pollRecovery')
-    const resultCommand = await storage.get<ResultRecovery>('resultRecovery')
-    if (!pollCommand && !resultCommand) return
+    const pollRaw = await storage.get('pollRecovery')
+    const resultRaw = await storage.get('resultRecovery')
+    let pollEntry = pollRaw === undefined ? null : readRecoveryEntry<PollFinalization>(pollRaw)
+    let resultEntry = resultRaw === undefined ? null : readRecoveryEntry<ResultRecovery>(resultRaw)
+    // A stored value that cannot be interpreted can never succeed: drop
+    // it instead of alarming on it forever.
+    if (pollRaw !== undefined && !pollEntry) await storage.delete('pollRecovery')
+    if (resultRaw !== undefined && !resultEntry) await storage.delete('resultRecovery')
+    if (!pollEntry && !resultEntry) return
+    // Drop entries that have exhausted the retry budget.
+    if (pollEntry && pollEntry.attempts >= MAX_RECOVERY_ATTEMPTS) {
+      await storage.delete('pollRecovery')
+      pollEntry = null
+    }
+    if (resultEntry && resultEntry.attempts >= MAX_RECOVERY_ATTEMPTS) {
+      await storage.delete('resultRecovery')
+      resultEntry = null
+    }
+    if (!pollEntry && !resultEntry) {
+      await storage.deleteAlarm()
+      return
+    }
     // The next alarm is persisted before network writes so eviction is safe.
     await storage.setAlarm(Date.now() + RECOVERY_DELAY_MS)
+    // Count this tick against the budget before replaying, so a crash
+    // mid-replay still consumes an attempt.
+    if (pollEntry) {
+      await storage.put('pollRecovery', { command: pollEntry.command, attempts: pollEntry.attempts + 1 })
+    }
+    if (resultEntry) {
+      await storage.put('resultRecovery', { command: resultEntry.command, attempts: resultEntry.attempts + 1 })
+    }
     const tool = this.recordTool()
-    if (pollCommand) {
+    if (pollEntry) {
+      const pollCommand = pollEntry.command
       const poll = await tool<GetActionData<RallyPoll>>('records.get', {
         collection: 'polls', recordId: pollCommand.pollId,
       }, pollCommand.userId)
@@ -873,7 +946,8 @@ export class RallyCommandRoom {
         }
       }
     }
-    if (resultCommand) {
+    if (resultEntry) {
+      const resultCommand = resultEntry.command
       const session = await tool<GetActionData<RallySession>>('records.get', {
         collection: 'sessions', recordId: resultCommand.sessionId,
       }, resultCommand.userId)
