@@ -26,8 +26,8 @@ export default function Home() {
 
       <section className="tennis-frame tennis-hero" aria-labelledby="tennis-heading">
         <div className="tennis-intro">
-          <h1 id="tennis-heading" tabIndex={-1}>Good tennis<br />starts <em>here.</em></h1>
-          <p>Find tennis games near you, invite your hitting partners, and keep score together.</p>
+          <h1 id="tennis-heading" tabIndex={-1}>Find players.<br />Play tennis.</h1>
+          <p>Join a nearby game, invite your hitting partners, and keep score together.</p>
           <div className="tennis-actions">
             <a className="tennis-primary" href="/games">Find a game <ArrowRight size={19} aria-hidden /></a>
             <a className="tennis-secondary" href="/rallies?create=1"><Plus size={18} aria-hidden /> Create a rally</a>

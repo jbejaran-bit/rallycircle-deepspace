@@ -4,7 +4,7 @@ for (const width of [320, 375, 390, 768, 1024, 1440]) {
   test(`landing remains usable at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 })
     await page.goto('/')
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText(/Good tennis.*starts here\./)
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(/Find players\..*Play tennis\./)
     await expect(page.getByRole('link', { name: 'Find a game', exact: true })).toBeVisible()
     await expect(page.getByRole('link', { name: 'Create a rally', exact: true })).toBeVisible()
     await expect(page.getByRole('link', { name: 'Explore courts', exact: true })).toBeVisible()
