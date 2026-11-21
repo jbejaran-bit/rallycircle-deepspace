@@ -471,21 +471,24 @@ underlying entries/totals are unchanged:
 
 ### 10.6 Deliverables and caveats
 
-- Branch: `feature/muse-pr22-combined-fixes` @ `674311f` (was `e1e0d57`).
-  New commits: `1bb7d17` loader verification, `310b097` K05 fidelity,
-  `87ff445` adversarial ports, `674311f` stale-assertion updates.
-- Bundle: `fullstack/pr22-combined-fixes.bundle` — SHA-256
-  `3072c7343d1383e90bdce0f1e2532cb0973b6a90ca6841b7da1ab0e77d03e5cb`,
-  `git bundle verify` OK (complete history, head `674311f`) as reported
-  by the creation call. **Caveat:** that creation result failed an
-  execution-risk check, so the bundle was NOT re-processed afterwards —
-  no independent re-verify, no fresh-clone import, no patch-apply check
-  of this bundle. Those remain with the blocked fresh-clone
+- Branch: `feature/muse-pr22-combined-fixes` (was `e1e0d57` at the
+  matrix run). New fix commits: `1bb7d17` loader verification,
+  `310b097` K05 fidelity, `87ff445` adversarial ports, `674311f`
+  stale-assertion updates (plus log commits after them).
+- Bundle: `fullstack/pr22-combined-fixes.bundle`, regenerated at the
+  final tip. The bundle SHA is deliberately NOT pinned here: pinning
+  it in the branch log would move the tip with every correction and
+  stale the bundle again. The deliverable SHA, patch count, and tip
+  are recorded in `SPRINT_HANDOFF.md` §18 and in the delivery report.
+  **Caveat:** each bundle-creation result failed an execution-risk
+  check, so no bundle was re-processed afterwards — no independent
+  re-verify, no fresh-clone import, no patch-apply check of the
+  deliverable bundle. Those remain with the blocked fresh-clone
   verification (SPRINT_HANDOFF.md §15). The old bundle (`69e83ea9…`,
   tip `e1e0d57`) and old patches are now stale.
-- Patches: `fullstack/pr22-combined-fixes-patches/` — 31 files
-  (0001–0031), regenerated cleanly from `e6ff2d9..HEAD`; 34 commits in
-  range, 3 are merges (skipped by `format-patch`, as before).
+- Patches: `fullstack/pr22-combined-fixes-patches/`, regenerated
+  cleanly from `e6ff2d9..HEAD` at the final tip (merges skipped by
+  `format-patch`, as before); the count is in SPRINT_HANDOFF.md §18.
 - Deliberately left as-is: the stats window trade-off (§10.1 — a failed
   commit unretried past 10 minutes starts counting; the alternative,
   reordering the finalization writes, would have required changing the
