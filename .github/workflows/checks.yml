@@ -1,7 +1,7 @@
 name: Validate RallyCircle
 on:
   push:
-    branches: [main, review/rallycircle-integrated-release]
+    branches: [main, review/rallycircle-integrated-release, review/rallycircle-release-attendance]
   pull_request:
 jobs:
   validate:

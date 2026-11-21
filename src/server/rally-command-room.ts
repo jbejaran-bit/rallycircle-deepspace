@@ -303,6 +303,19 @@ async function applyAttendance(command: AttendanceCommand, session: RallySession
       : tool<MutateActionData>('records.create', { collection: 'rsvps', data: { sessionId, status } }, player)
   const success = (recordId = sessionId): RallyCommandResult => ({ success: true, data: { recordId } })
 
+  async function clearOwnRows(collection: 'waitlists' | 'rsvps'): Promise<'query' | 'delete' | 'ok'> {
+    // Delete by record ID and re-read from the start. An offset would skip
+    // siblings after a deletion. Extremely damaged rosters can be retried.
+    for (let attempt = 0; attempt <= 32; attempt++) {
+      const response = await query<RallyRSVP | RallyWaitlist>(collection, owns)
+      if (!response.success) return 'query'
+      const row = response.data.records[0]
+      if (!row) return 'ok'
+      if (attempt === 32 || !(await remove(collection, row.recordId)).success) return 'delete'
+    }
+    return 'delete'
+  }
+
   // Persist the RSVP before deleting the queue entry. The next command can
   // repair that intermediate state without consuming a second place.
   // A single retry of the queue delete happens inside this same command
@@ -318,9 +331,22 @@ async function applyAttendance(command: AttendanceCommand, session: RallySession
     if (capacity == null || session.status !== 'open') return { count: 0, promoted: [] }
     const promoted: string[] = []
     for (let attempt = 0; attempt < 32; attempt++) {
-      const confirmed = await query<RallyRSVP>('rsvps', { sessionId, status: 'going' }, capacity)
-      if (!confirmed.success) return null
-      const count = confirmed.data.records.length
+      const confirmed = new Set<string>()
+      try {
+        for await (const rows of recordPages<RallyRSVP>(offset =>
+          tool<QueryActionData<RallyRSVP>>('records.query', {
+            collection: 'rsvps', where: { sessionId, status: 'going' }, limit: capacity, offset,
+          }, userId),
+        )) {
+          for (const { data } of rows) {
+            if (typeof data.userId === 'string' && data.userId) confirmed.add(data.userId)
+          }
+          if (confirmed.size >= capacity) break
+        }
+      } catch {
+        return null
+      }
+      const count = confirmed.size
       const queued = await query<RallyWaitlist>('waitlists', { sessionId }, 1, true)
       if (!queued.success) return null
       const first = queued.data.records[0]
@@ -361,16 +387,14 @@ async function applyAttendance(command: AttendanceCommand, session: RallySession
 
   if (operation === 'leaveWaitlist' || operation === 'withdraw') {
     if (configuredCapacity != null) {
-      const response = await query<RallyWaitlist>('waitlists', owns)
-      if (!response.success) return failure('Your waitlist entry could not be checked.')
-      const waiting = response.data.records[0]
-      if (waiting && !(await remove('waitlists', waiting.recordId)).success) return failure('You could not leave the waitlist.')
+      const cleared = await clearOwnRows('waitlists')
+      if (cleared === 'query') return failure('Your waitlist entry could not be checked.')
+      if (cleared === 'delete') return failure('You could not leave the waitlist.')
     }
     if (operation === 'withdraw') {
-      const response = await query<RallyRSVP>('rsvps', owns)
-      if (!response.success) return failure('Your existing RSVP could not be checked.')
-      const existing = response.data.records[0]
-      if (existing && !(await remove('rsvps', existing.recordId)).success) return failure('Your RSVP could not be withdrawn.')
+      const cleared = await clearOwnRows('rsvps')
+      if (cleared === 'query') return failure('Your existing RSVP could not be checked.')
+      if (cleared === 'delete') return failure('Your RSVP could not be withdrawn.')
     }
     await fillVacancies()
     return success()

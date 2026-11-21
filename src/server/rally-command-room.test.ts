@@ -75,13 +75,17 @@ function createHarness() {
 
       if (tool === 'records.query' && params.collection === 'rsvps') {
         const where = params.where as Partial<RallyRSVP>
-        const records = applyQueryOrder(
+        const offset = Number(params.offset ?? 0)
+        const limit = Number(params.limit ?? 100)
+        const matching = applyQueryOrder(
           Array.from(rsvps.values()).filter(record =>
             Object.entries(where).every(([key, value]) => record.data[key as keyof RallyRSVP] === value),
           ),
-          params,
+          { ...params, limit: undefined },
         )
-        return Response.json({ success: true, data: { records, count: records.length } })
+        const records = matching.slice(offset, offset + limit)
+        return Response.json({ success: true, data: { records, count: records.length,
+          nextOffset: matching.length > offset + limit ? offset + limit : undefined } })
       }
 
       if (tool === 'records.query' && params.collection === 'waitlists') {
@@ -225,6 +229,22 @@ function createHarness() {
 }
 
 describe('RallyCircle server-side session and RSVP rules', () => {
+  it('counts unique confirmed players across RSVP pages and clears legacy duplicate rows on withdrawal', async () => {
+    const harness = createHarness()
+    harness.addSession('legacy', 'host')
+    harness.sessions.get('legacy')!.data.capacity = 2
+    for (const recordId of ['old-host', 'duplicate-host']) {
+      harness.rsvps.set(recordId, { recordId, createdBy: 'host', createdAt: 1,
+        data: { sessionId: 'legacy', userId: 'host', status: 'going' } })
+    }
+    await expect(harness.command('guest', { operation: 'rsvp', sessionId: 'legacy', status: 'going' })).resolves.toMatchObject({ success: true })
+    await expect(harness.command('queued', { operation: 'rsvp', sessionId: 'legacy', status: 'going' })).resolves.toMatchObject({ success: false })
+    await expect(harness.command('queued', { operation: 'joinWaitlist', sessionId: 'legacy' })).resolves.toMatchObject({ success: true })
+    await expect(harness.command('host', { operation: 'withdraw', sessionId: 'legacy' })).resolves.toMatchObject({ success: true })
+    expect([...harness.rsvps.values()].map(row => row.data.userId).sort()).toEqual(['guest', 'queued'])
+    expect(harness.waitlists.size).toBe(0)
+  })
+
   it('rejects missing and cancelled sessions before creating an RSVP', async () => {
     const harness = createHarness()
     harness.addSession('cancelled-session', 'host', 'cancelled')
