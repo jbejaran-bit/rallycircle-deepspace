@@ -52,7 +52,7 @@ the stats branch: `match-stats.ts` (`MatchResultStatus`, `normalizeResultStatus`
 in `profiles-schema.ts`, `result-finalization.ts` (`status: 'final'` on finalization
 writes + `markSessionResults`), the dispute/correction flips in `applyScoreEdit`
 (flip to `'disputed'`/`'pending'` **before** the session score commits — fail closed,
-retry idempotent), and the stats-aggregation test suite (13 tests) plus the
+retry idempotent), and the stats-aggregation test suite (11 tests) plus the
 `profile-actions.test.ts` seed changes (complete seeded rows, as finalization writes
 them). No stored `playerStats` row reintroduced — F2/S10 + F5/S2 stay closed.
 
@@ -230,8 +230,9 @@ orphaned rows) are closed.
 - Vitest **356/356** (42 files), tsc clean, eslint clean, vite build clean,
   node --test **31/31**.
 - The three former perf `it.fails` bounds now pass as ordinary tests; the
-  history page slice keeps history N=200 at exactly 50 GETs; stats N=500 at
-  0 GETs.
+  history page slice keeps pending-row session GETs bounded to the page
+  limit (history N=200 with all-final rows issues 0 GETs — the write-side
+  loader trusts stored final rows); stats N=500 at 0 GETs.
 - All evidence is local mock-harness simulation (in-memory RecordRoom, single
   Node process, this 1.5-CPU VM) unless labeled otherwise. Live verification
   (two-account flows, live RecordRoom enforcement, real-DO queue behaviour,
