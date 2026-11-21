@@ -42,3 +42,23 @@ test('mobile navigation closes on Escape and restores focus', async ({ page }) =
   await expect(menu).toHaveAttribute('aria-expanded', 'false')
   await expect(menu).toBeFocused()
 })
+
+test('landing puts the hero above account navigation in keyboard order', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.getByTestId('static-landing')).toBeVisible()
+  await page.keyboard.press('Tab')
+  const skip = page.getByRole('link', { name: 'Skip to content' })
+  await expect(skip).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(page.getByRole('heading', { level: 1 })).toBeFocused()
+})
+
+test('mobile landing serves the small hero image without lazy loading it', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 820 })
+  await page.goto('/')
+  const image = page.locator('.tennis-art img')
+  await expect(image).toHaveAttribute('fetchpriority', 'high')
+  await expect.poll(async () => image.evaluate((element: HTMLImageElement) =>
+    element.complete && element.currentSrc.endsWith('/rallycircle-court-480.webp'),
+  )).toBe(true)
+})
