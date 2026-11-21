@@ -11,6 +11,11 @@ function createHarness() {
   const sessions = new Map<string, { recordId: string; createdBy: string; data: RallySession }>()
   const rsvps = new Map<string, { recordId: string; createdBy: string; createdAt: number; data: RallyRSVP }>()
   const waitlists = new Map<string, { recordId: string; createdAt: number; data: RallyWaitlist }>()
+  const resultCollections = new Map(
+    ['profiles', 'matchResults', 'playerStats', 'resultAudits'].map(name =>
+      [name, new Map<string, { recordId: string; createdAt: number; data: Record<string, unknown> }>()] as const,
+    ),
+  )
   let nextRecordId = 0
   let nextCreatedAt = 0
   let failQueueDeletes = 0
@@ -33,6 +38,29 @@ function createHarness() {
         params: Record<string, unknown>
       }
       await new Promise(resolve => setTimeout(resolve, 1))
+
+      const resultRecords = resultCollections.get(String(params.collection))
+      if (resultRecords && tool === 'records.query') {
+        const filters = Object.entries(params.where ?? {})
+        const records = applyQueryOrder(
+          [...resultRecords.values()].filter(record => filters.every(([key, value]) => record.data[key] === value)),
+          params,
+        )
+        return Response.json({ success: true, data: { records, count: records.length } })
+      }
+      if (resultRecords && tool === 'records.create') {
+        const recordId = `result-${++nextRecordId}`
+        const data = { ...params.data as Record<string, unknown> }
+        resultRecords.set(recordId, { recordId, createdAt: ++nextCreatedAt, data })
+        return Response.json({ success: true, data: { recordId } })
+      }
+      if (resultRecords && tool === 'records.update') {
+        const recordId = String(params.recordId)
+        const record = resultRecords.get(recordId)
+        if (!record) return Response.json({ success: false, error: 'Record not found' })
+        Object.assign(record.data, params.data)
+        return Response.json({ success: true, data: { recordId } })
+      }
 
       if (tool === 'records.get' && params.collection === 'sessions') {
         const record = sessions.get(String(params.recordId))

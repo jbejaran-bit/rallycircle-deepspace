@@ -176,6 +176,17 @@ describe('deleteProfile', () => {
 })
 
 describe('getPlayerStats and getMatchHistory privacy gates', () => {
+  it('keeps history private when a profile is absent even if a stored row was public', async () => {
+    const harness = createToolsHarness()
+    harness.seed('matchResults', { sessionId: 'old', visibility: 'public' }, 'alice')
+    await expect(harness.call(getMatchHistoryAction, 'bob', { userId: 'alice' })).resolves.toEqual({
+      success: true, data: { userId: 'alice', public: false, entries: [] },
+    })
+    await expect(harness.call(getPlayerStatsAction, 'bob', { userId: 'alice' })).resolves.toEqual({
+      success: true, data: { userId: 'alice', public: false },
+    })
+  })
+
   it('hides a private profile and its stats from other callers but not its owner', async () => {
     const harness = createToolsHarness()
     await harness.call(updateProfileAction, 'alice', { ...validProfile, visibility: 'private' })
@@ -213,7 +224,7 @@ describe('getPlayerStats and getMatchHistory privacy gates', () => {
         sessionId: `s${index}`,
         format: 'singles',
         won: index,
-        sets: JSON.stringify([[6, 4], [6, 3]]),
+        sets: index === 0 ? JSON.stringify([[6, 4], [6, 3]]) : [[6, 4], [6, 3]],
         resultRevision: index + 1,
         finalizedAt: date,
         visibility: 'public',

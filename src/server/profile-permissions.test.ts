@@ -31,7 +31,7 @@ describe('profile / stats / results record permissions', () => {
     }
   })
 
-  it('lets members read public profiles and stats but not another member’s private rows', () => {
+  it('lets members read public profiles and keeps statistics and results behind the action policy', () => {
     const publicProfile = record({ userId: 'alice', visibility: 'public' }, 'alice')
     const privateProfile = record({ userId: 'alice', visibility: 'private' }, 'alice')
     expect(canRead(profilesSchema, 'member', publicProfile, 'bob')).toBe(true)
@@ -45,7 +45,7 @@ describe('profile / stats / results record permissions', () => {
 
     const publicStats = record({ userId: 'alice', visibility: 'public' }, 'alice')
     const privateStats = record({ userId: 'alice', visibility: 'private' }, 'alice')
-    expect(canRead(playerStatsSchema, 'member', publicStats, 'bob')).toBe(true)
+    expect(canRead(playerStatsSchema, 'member', publicStats, 'bob')).toBe(false)
     expect(canRead(playerStatsSchema, 'member', privateStats, 'bob')).toBe(false)
     expect(canRead(playerStatsSchema, 'member', privateStats, 'alice')).toBe(true)
 

@@ -59,7 +59,7 @@ interface StoredResultRow {
     userId: string
     format: StatsFormat
     won: number
-    sets: string
+    sets: string | Array<[number, number]>
     resultRevision: number
     finalizedAt: string
     visibility: PlayerProfile['visibility']
@@ -172,7 +172,7 @@ export const getPlayerStatsAction: ActionHandler<Env> = async ({ userId: callerI
   if (!lookup.ok) return failure('stats_unavailable', 'Player statistics could not be loaded.')
   const profile = lookup.profile
   const isOwner = callerId === targetUserId
-  if (!isOwner && profile?.data.visibility === 'private') {
+  if (!isOwner && profile?.data.visibility !== 'public') {
     return { success: true, data: { userId: targetUserId, public: false } }
   }
 
@@ -236,7 +236,7 @@ export const getMatchHistoryAction: ActionHandler<Env> = async ({ userId: caller
   if (!lookup.ok) return failure('history_unavailable', 'Match history could not be loaded.')
   const profile = lookup.profile
   const isOwner = callerId === targetUserId
-  if (!isOwner && profile?.data.visibility === 'private') {
+  if (!isOwner && profile?.data.visibility !== 'public') {
     return { success: true, data: { userId: targetUserId, public: false, entries: [] } }
   }
   const requested = isRecord(params) && typeof params.limit === 'number' ? Math.floor(params.limit) : 20
@@ -255,7 +255,7 @@ export const getMatchHistoryAction: ActionHandler<Env> = async ({ userId: caller
     userId: record.data.userId,
     format: record.data.format,
     won: record.data.won === 1,
-    sets: JSON.parse(record.data.sets) as Array<[number, number]>,
+    sets: typeof record.data.sets === 'string' ? JSON.parse(record.data.sets) as Array<[number, number]> : record.data.sets,
     resultRevision: record.data.resultRevision,
     finalizedAt: record.data.finalizedAt,
     visibility: record.data.visibility,

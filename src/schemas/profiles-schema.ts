@@ -72,7 +72,7 @@ export const playerStatsSchema: CollectionSchema = {
   visibilityField: { field: 'visibility', value: 'public' },
   permissions: {
     '*': { read: false, create: false, update: false, delete: false },
-    member: { read: 'published', create: false, update: false, delete: false },
+    member: { read: 'own', create: false, update: false, delete: false },
     admin: { read: true, create: false, update: false, delete: false },
   },
 }
@@ -103,7 +103,7 @@ export const matchResultsSchema: CollectionSchema = {
   visibilityField: { field: 'visibility', value: 'public' },
   permissions: {
     '*': { read: false, create: false, update: false, delete: false },
-    member: { read: 'published', create: false, update: false, delete: false },
+    member: { read: 'own', create: false, update: false, delete: false },
     admin: { read: true, create: false, update: false, delete: false },
   },
 }
