@@ -20,6 +20,7 @@ export const sessionsSchema: CollectionSchema = {
   name: 'sessions',
   columns: [
     { name: 'matchScore', storage: 'text', interpretation: 'plain' },
+    { name: 'pendingResult', storage: 'text', interpretation: 'plain', default: '' },
     { name: 'format', storage: 'text', interpretation: { kind: 'select', options: [...SESSION_FORMATS] } },
     { name: 'title', storage: 'text', interpretation: 'plain', required: true, maxLength: 72 },
     { name: 'court', storage: 'text', interpretation: 'plain', required: true, maxLength: 100 },
@@ -88,7 +89,7 @@ export const pollsSchema: CollectionSchema = {
     { name: 'sessionId', storage: 'text', interpretation: 'plain', required: true, immutable: true },
     { name: 'hostId', storage: 'text', interpretation: 'plain', userBound: true, immutable: true },
     { name: 'options', storage: 'text', interpretation: 'plain', required: true },
-    { name: 'status', storage: 'text', interpretation: { kind: 'select', options: ['open', 'finalized', 'cancelled'] }, default: 'open' },
+    { name: 'status', storage: 'text', interpretation: { kind: 'select', options: ['open', 'finalizing', 'finalized', 'cancelled'] }, default: 'open' },
     { name: 'finalizedOptionId', storage: 'text', interpretation: 'plain', default: '' },
     { name: 'tally', storage: 'text', interpretation: 'plain', default: '{}' },
   ],

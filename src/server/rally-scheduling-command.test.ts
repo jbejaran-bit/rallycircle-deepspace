@@ -28,6 +28,7 @@ function createHarness() {
   let nextRecordId = 0
   let nextSeq = 0
   let failQueueDeletes = 0
+  let mutationsUntilFailure = 0
 
   const recordRoom = {
     async fetch(request: Request) {
@@ -36,6 +37,10 @@ function createHarness() {
         params: Record<string, unknown>
       }
       await new Promise(resolve => setTimeout(resolve, 1))
+      if (tool !== 'records.query' && tool !== 'records.get' && mutationsUntilFailure > 0 && --mutationsUntilFailure === 0) {
+        return Response.json({ success: false, error: 'Injected write failure' })
+      }
+
 
       if (tool === 'records.get' && params.collection === 'sessions') {
         const record = sessions.get(String(params.recordId))
@@ -280,7 +285,7 @@ function createHarness() {
       get: () => recordRoom,
     },
   } as unknown as Env
-  const room = new RallyCommandRoom({} as DurableObjectState, env)
+  let room = new RallyCommandRoom({} as DurableObjectState, env)
   const commandNamespace = {
     idFromName: (name: string) => name,
     get: () => ({ fetch: (request: Request) => room.fetch(request) }),
@@ -358,6 +363,8 @@ function createHarness() {
 
   return {
     addSession, command, scheduleCommand, notificationCommand,
+    failMutation: (index: number) => { mutationsUntilFailure = index },
+    restart: () => { room = new RallyCommandRoom({} as DurableObjectState, env) },
     rsvps, sessions, waitlists, polls, pollVotes, notifications, notificationPreferences, recurringSeries,
     interruptQueueCleanup: (times = 1) => { failQueueDeletes = times },
   }
@@ -455,6 +462,24 @@ describe('Scheduling polls', () => {
       .resolves.toMatchObject({ success: true })
     expect(session.scheduleRevision).toBe(1)
     expect(harness.polls.get(pollId)!.data.status).toBe('finalized')
+    expect([...harness.notifications.values()].filter(row => row.data.type === 'schedule_changed')).toHaveLength(2)
+  })
+
+  it.each([1, 2, 3, 4, 5])('recovers poll finalization after write %i fails', async (write) => {
+    const harness = createHarness()
+    const pollId = await openPoll(harness)
+    const command = { operation: 'finalizePoll', sessionId: 'poll-session', pollId }
+    harness.failMutation(write)
+    await expect(harness.command('host', { ...command, optionId: 'sat' })).resolves.toMatchObject({ success: false })
+    harness.restart()
+    if (write > 1) {
+      await expect(harness.command('host', { ...command, optionId: 'sun' })).resolves.toMatchObject({ success: false })
+    }
+    await expect(harness.command('alice', { ...command, optionId: 'sat' })).resolves.toMatchObject({ success: false })
+    const retries = await Promise.all([1, 2].map(() => harness.command('host', { ...command, optionId: 'sat' })))
+    expect(retries.every(result => result.success)).toBe(true)
+    expect(harness.sessions.get('poll-session')?.data.scheduleRevision).toBe(1)
+    expect(harness.polls.get(pollId)?.data).toMatchObject({ status: 'finalized', finalizedOptionId: 'sat' })
     expect([...harness.notifications.values()].filter(row => row.data.type === 'schedule_changed')).toHaveLength(2)
   })
 

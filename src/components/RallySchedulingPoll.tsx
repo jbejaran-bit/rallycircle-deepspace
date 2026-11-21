@@ -18,7 +18,7 @@ export default function RallySchedulingPoll({ sessionId, userId, isHost }: Props
   })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const poll = records.find(record => record.data.status === 'open')
+  const poll = records.find(record => record.data.status === 'open' || record.data.status === 'finalizing')
   const latest = records[0]
   const confirmedTime = latest?.data.status === 'finalized'
     ? parsePollOptions(latest.data.options)?.find(option => option.id === latest.data.finalizedOptionId)
@@ -88,31 +88,33 @@ function PollOptions({ sessionId, userId, isHost, poll, busy, run }: Props & {
 }) {
   const pollId = poll.recordId
   const { records: votes, status } = useQuery<RallyPollVote>('pollVotes', { where: { pollId, userId } })
+  const finalizing = poll.data.status === 'finalizing'
   const options = parsePollOptions(poll.data.options)
   const tally = parsePollTally(poll.data.tally)
   if (!options) return <p role="alert">The proposed times could not be loaded.</p>
   return (
     <div className="space-y-3">
+      {finalizing && <p role="status">The chosen time is being confirmed.</p>}
       <ul className="space-y-2">
-        {options.map(({ id, startsAt }) => {
+        {options.filter(option => !finalizing || option.id === poll.data.finalizedOptionId).map(({ id, startsAt }) => {
           const voted = votes.some(vote => vote.data.optionId === id)
           const count = tally[id] ?? 0
           return (
             <li key={id} className="flex flex-wrap items-center gap-2">
               <time dateTime={startsAt}>{new Date(startsAt).toLocaleString()}</time>
               <span className="text-sm text-muted-foreground">{count} {count === 1 ? 'vote' : 'votes'}</span>
-              <Button type="button" variant="outline" disabled={busy || status !== 'ready'} onClick={() => void run({
+              {!finalizing && <Button type="button" variant="outline" disabled={busy || status !== 'ready'} onClick={() => void run({
                 operation: voted ? 'withdrawVote' : 'castVote', sessionId, pollId, optionId: id,
-              })}>{voted ? 'Withdraw vote' : 'Vote'}</Button>
+              })}>{voted ? 'Withdraw vote' : 'Vote'}</Button>}
               {isHost && <Button type="button" disabled={busy} onClick={() => void run({
                 operation: 'finalizePoll', sessionId, pollId, optionId: id,
-              })}>Confirm time</Button>}
+              })}>{finalizing ? 'Retry confirmation' : 'Confirm time'}</Button>}
             </li>
           )
         })}
       </ul>
       {status === 'error' && <p role="alert">Your votes could not be loaded.</p>}
-      {isHost && <Button type="button" variant="outline" disabled={busy} onClick={() => void run({
+      {isHost && !finalizing && <Button type="button" variant="outline" disabled={busy} onClick={() => void run({
         operation: 'cancelPoll', sessionId, pollId,
       })}>Cancel poll</Button>}
     </div>

@@ -1,7 +1,7 @@
 import type { ActionHandler, ActionResult, GetActionData, MutateActionData, QueryActionData } from 'deepspace/worker'
 import { validCapacity, type RallyRSVP, type RallySession, type RallyWaitlist, type RSVPStatus } from '../lib/rally.js'
 import { awardPoint, correctResult, createMatchScore, isFinalTransition, readMatchScore, resultStatus, reviewResult, scoreEditSchema, validateCorrectedSets } from '../lib/rally-score.js'
-import { castVote, finalizePoll, parsePollOptions, parsePollTally, serializePollOptions, serializePollTally, tallyVotes, validatePollOptions, type PollOptionInput } from '../lib/polls.js'
+import { castVote, parsePollOptions, parsePollTally, serializePollOptions, serializePollTally, tallyVotes, validatePollOptions, type PollOptionInput } from '../lib/polls.js'
 import { occurrenceStartsAt, parseSeriesTemplate, serializeSeriesTemplate, validateSeries, type SeriesTemplate } from '../lib/recurrence.js'
 import { pollCreatedKey, resultConfirmedKey, resultDisputedKey, scheduleChangedKey, sessionCancelledKey, waitlistPromotedKey } from '../lib/rally-notifications.js'
 import { emitNotification, type EmitNotificationInput } from './notifications.js'
@@ -26,7 +26,7 @@ export interface RallyPoll {
   sessionId: string
   hostId: string
   options: string
-  status: 'open' | 'finalized' | 'cancelled'
+  status: 'open' | 'finalizing' | 'finalized' | 'cancelled'
   finalizedOptionId: string
   tally: string
 }
@@ -105,6 +105,7 @@ async function applyCommand(command: RallyCommand, tool: RecordTool): Promise<Ra
     if (session.hostId !== command.userId) return failure('Only the session host can cancel it.')
     if (session.status === 'cancelled') return { success: true, data: { recordId: command.sessionId } }
     if (session.status !== 'open') return failure('Only an open session can be cancelled.')
+    if (session.pendingResult) return failure('Complete the pending result update before cancelling.')
 
     const result = await tool<MutateActionData>(
       'records.update',
@@ -429,7 +430,7 @@ async function applyPollCommand(
   }
 
   if (operation === 'withdrawVote') {
-    if (pollData.status === 'finalized') return failure('This poll is closed.')
+    if (pollData.status === 'finalized' || pollData.status === 'finalizing') return failure('This poll is closed.')
     const existing = await tool<QueryActionData<RallyPollVote>>(
       'records.query',
       { collection: 'pollVotes', where: { pollId: command.pollId, optionId: command.optionId, userId }, limit: 1 },
@@ -464,12 +465,22 @@ async function applyPollCommand(
 
   // finalizePoll
   if (session.hostId !== userId) return failure('Only the session host can finalise a poll.')
-  if (pollData.status !== 'open') return failure('This poll is not open.')
+  if (pollData.status === 'finalized' && pollData.finalizedOptionId === command.optionId) {
+    return { success: true, data: { recordId: sessionId } }
+  }
+  if (pollData.status !== 'open' && pollData.status !== 'finalizing') return failure('This poll is not open.')
   const chosen = options.find(option => option.id === command.optionId)
   if (!chosen) return failure('That time is not part of this poll.')
-  if (Date.parse(chosen.startsAt) <= Date.now()) return failure('The proposed time is no longer in the future.')
-  const guard = finalizePoll(session.hostId, userId, command.optionId, optionIds)
-  if ('error' in guard) return failure(guard.error)
+  if (pollData.status === 'open') {
+    if (Date.parse(chosen.startsAt) <= Date.now()) return failure('The proposed time is no longer in the future.')
+    const prepared = await tool<MutateActionData>('records.update', {
+      collection: 'polls', recordId: command.pollId,
+      data: { status: 'finalizing', finalizedOptionId: command.optionId },
+    }, userId)
+    if (!prepared.success) return failure('The poll could not start finalizing. Try again.')
+  } else if (pollData.finalizedOptionId !== command.optionId) {
+    return failure('Another time is already being confirmed.')
+  }
   // A retry after the session write may find the chosen time already persisted.
   if (Date.parse(session.startsAt) !== Date.parse(chosen.startsAt)) {
     const updatedSession = await tool<MutateActionData>(
@@ -483,21 +494,29 @@ async function applyPollCommand(
     )
     if (!updatedSession.success) return failure('The session time could not be updated.')
   }
+  const recipients = await tool<QueryActionData<RallyRSVP>>(
+    'records.query', { collection: 'rsvps', where: { sessionId }, limit: 100 }, userId,
+  )
+  if (!recipients.success) return failure('Participants could not be notified. Retry the same time.')
+  for (const { data: { userId: recipientId } } of recipients.data.records) {
+    if (recipientId === userId) continue
+    const emitted = await emitNotification(tool, {
+      recipientId,
+      type: 'schedule_changed',
+      sessionId,
+      title: `New time: ${session.title}`,
+      body: `${session.title} moved to ${chosen.startsAt}. Your RSVP carries over.`,
+      link: `/rallies?session=${sessionId}`,
+      idempotencyKey: scheduleChangedKey(sessionId, chosen.startsAt, recipientId),
+    })
+    if (emitted === 'failed') return failure('Participants could not be notified. Retry the same time.')
+  }
   const updatedPoll = await tool<MutateActionData>(
     'records.update',
-    { collection: 'polls', recordId: command.pollId, data: { status: 'finalized', finalizedOptionId: command.optionId } },
+    { collection: 'polls', recordId: command.pollId, data: { status: 'finalized' } },
     userId,
   )
-  if (!updatedPoll.success) return failure('The poll could not be finalised.')
-  // RSVPs carry over untouched (G08): participants are notified, not silently moved.
-  await notifyRsvpHolders(tool, sessionId, userId, recipientId => ({
-    type: 'schedule_changed',
-    sessionId,
-    title: `New time: ${session.title}`,
-    body: `${session.title} moved to ${chosen.startsAt}. Your RSVP carries over.`,
-    link: `/rallies?session=${sessionId}`,
-    idempotencyKey: scheduleChangedKey(sessionId, chosen.startsAt, recipientId),
-  }))
+  if (!updatedPoll.success) return failure('The poll could not be finalised. Retry the same time.')
   return { success: true, data: { recordId: sessionId } }
 }
 
@@ -506,6 +525,21 @@ async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: R
   if (session.status !== 'open') return failure('This session is closed.')
 
   const current = readMatchScore(session.matchScore)
+  const operationKey = command.operation === 'reviewResult' || command.operation === 'correctResult'
+    ? JSON.stringify([command.operation, command.userId, current?.revision,
+      command.operation === 'reviewResult' ? command.decision : [command.winner, command.sets]])
+    : ''
+  if (session.pendingResult && session.pendingResult !== operationKey) {
+    return failure('Another result update is pending. Retry the original update.')
+  }
+  async function prepareResult(): Promise<boolean> {
+    if (session.pendingResult) return true
+    const prepared = await tool<MutateActionData>('records.update', {
+      collection: 'sessions', recordId: command.sessionId, data: { pendingResult: operationKey },
+    }, command.userId)
+    return prepared.success
+  }
+
   let next
   if (command.operation === 'startMatch') {
     if (session.matchScore) return failure('This session already has a scoreboard.')
@@ -529,14 +563,20 @@ async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: R
     next = current && reviewResult(current, command.userId, command.decision)
     if (!next) return failure('This result is closed or unavailable for your review.')
     if (current && isFinalTransition(current, next)) {
-      // Stats/history/audit are written BEFORE the session is saved, so a
-      // failure here leaves the result un-finalized and the client can
-      // retry; applyFinalization is idempotent for the same revision.
+      if (!await prepareResult()) return failure('The result update could not be started. Try again.')
       const finalized = await applyFinalization(tool, session, command.sessionId, next, command.userId)
-      if (!finalized.ok) return failure('The result could not be finalized. Try again.')
+      if (!finalized.ok) return failure('The result could not be finalized. Retry your approval.')
+    }
+    if (next.disputed && !current?.disputed) {
+      if (!await prepareResult()) return failure('The dispute could not be started. Try again.')
+      const audited = await writeAudit(tool, command.sessionId, command.userId, 'disputed', {
+        sets: next.sets, winner: next.winner, revision: next.revision,
+      }, next.revision)
+      if (!audited) return failure('The dispute could not be audited. Retry your dispute.')
     }
   } else if (command.operation === 'correctResult') {
     if (!current) return failure('There is no result to correct.')
+    if (current.revision !== command.revision) return failure('The score changed. Check the latest score before trying again.')
     const previousStatus = resultStatus(current)
     if (previousStatus !== 'final' && previousStatus !== 'disputed') {
       return failure('Only a finalized or disputed result can be corrected.')
@@ -545,10 +585,16 @@ async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: R
     if (invalid) return failure(invalid)
     next = correctResult(current, command.sets, command.winner)
     if (!next) return failure('This result cannot be corrected.')
+    if (!await prepareResult()) return failure('The correction could not be started. Try again.')
     if (previousStatus === 'final') {
-      const reversed = await reverseFinalization(tool, command.sessionId, command.userId)
+      const reversed = await reverseFinalization(tool, command.sessionId, command.userId, session, current)
       if (!reversed) return failure('The previous result could not be reversed. Try again.')
     }
+    const audited = await writeAudit(tool, command.sessionId, command.userId, 'corrected', {
+      previousSets: current.sets, previousWinner: current.winner, previousRevision: current.revision,
+      sets: next.sets, winner: next.winner, revision: next.revision,
+    }, next.revision)
+    if (!audited) return failure('The correction could not be audited. Retry the same correction.')
   } else {
     if (!current || current.winner !== null) return failure('There is no active scoreboard.')
     if (current.revision !== command.revision) return failure('The score changed. Check the latest score before trying again.')
@@ -558,26 +604,9 @@ async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: R
   const result = await tool<MutateActionData>('records.update', {
     collection: 'sessions',
     recordId: command.sessionId,
-    data: { matchScore: JSON.stringify(next) },
+    data: { matchScore: JSON.stringify(next), pendingResult: '' },
   }, command.userId)
   if (!result.success) return failure('The score could not be saved.')
-  if (command.operation === 'reviewResult' && next && current && next.disputed && !current.disputed) {
-    await writeAudit(tool, command.sessionId, command.userId, 'disputed', {
-      sets: next.sets,
-      winner: next.winner,
-      revision: next.revision,
-    }, next.revision)
-  }
-  if (command.operation === 'correctResult' && next && current) {
-    await writeAudit(tool, command.sessionId, command.userId, 'corrected', {
-      previousSets: current.sets,
-      previousWinner: current.winner,
-      previousRevision: current.revision,
-      sets: next.sets,
-      winner: next.winner,
-      revision: next.revision,
-    }, next.revision)
-  }
   if (command.operation === 'reviewResult') {
     const players = [...new Set(next.teams.flat())]
     const type = next.disputed

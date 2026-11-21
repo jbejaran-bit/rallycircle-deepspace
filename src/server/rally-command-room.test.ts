@@ -19,6 +19,7 @@ function createHarness() {
   let nextRecordId = 0
   let nextCreatedAt = 0
   let failQueueDeletes = 0
+  let failScoreWrite = false
 
   // The real RecordRoom honours orderBy/orderDir/limit (SDK worker.js
   // orderColumn maps createdAt to _created_at). The harness must do the
@@ -50,7 +51,7 @@ function createHarness() {
       }
       if (resultRecords && tool === 'records.create') {
         const recordId = `result-${++nextRecordId}`
-        const data = { ...params.data as Record<string, unknown> }
+        const data = { ...params.data as Record<string, unknown>, userId: request.headers.get('X-User-Id') }
         resultRecords.set(recordId, { recordId, createdAt: ++nextCreatedAt, data })
         return Response.json({ success: true, data: { recordId } })
       }
@@ -128,6 +129,10 @@ function createHarness() {
         const recordId = String(params.recordId)
         const patch = params.data as Record<string, unknown>
         if (collection === 'sessions') {
+          if (failScoreWrite && 'matchScore' in patch) {
+            failScoreWrite = false
+            return Response.json({ success: false, error: 'Injected score write failure' })
+          }
           const record = sessions.get(recordId)
           if (!record) return Response.json({ success: false, error: 'Record not found' })
           Object.assign(record.data, patch)
@@ -152,7 +157,7 @@ function createHarness() {
       get: () => recordRoom,
     },
   } as unknown as Env
-  const room = new RallyCommandRoom({} as DurableObjectState, env)
+  let room = new RallyCommandRoom({} as DurableObjectState, env)
   const commandNamespace = {
     idFromName: (name: string) => name,
     get: () => ({ fetch: (request: Request) => room.fetch(request) }),
@@ -200,7 +205,9 @@ function createHarness() {
   }
 
   return {
-    addSession, command, rsvps, sessions, waitlists,
+    addSession, command, rsvps, sessions, waitlists, resultCollections,
+    interruptScoreSave: () => { failScoreWrite = true },
+    restart: () => { room = new RallyCommandRoom({} as DurableObjectState, env) },
     interruptQueueCleanup: (times = 1) => { failQueueDeletes = times },
   }
 }
@@ -888,6 +895,29 @@ describe('Track A regression suite — waitlist, scoring and authorization', () 
     }
     expect(resultStatus(readMatchScore(cleanSession.matchScore)!)).toBe('final')
     expect(isEligibleForStats(readMatchScore(cleanSession.matchScore)!)).toBe(true)
+  })
+
+  it('resumes a correction after a failed completion and rejects unauthorized and stale corrections', async () => {
+    const harness = createHarness()
+    const session = await startSingles(harness, 'correction', ['alice', 'bob'])
+    let score = readMatchScore(session.matchScore)!
+    for (let point = 0; point < 48; point++) score = awardPoint(score, 0)
+    session.matchScore = JSON.stringify(score)
+    await harness.command('alice', { operation: 'reviewResult', sessionId: 'correction', decision: 'dispute' })
+    const revision = readMatchScore(session.matchScore)!.revision
+    const correction = { operation: 'correctResult' as const, sessionId: 'correction', revision, winner: 1, sets: [[3, 6], [4, 6]] }
+    await expect(harness.command('bob', correction)).resolves.toMatchObject({ success: false })
+    await expect(harness.command('host', { ...correction, revision: revision - 1 })).resolves.toMatchObject({ success: false })
+    harness.interruptScoreSave()
+    await expect(harness.command('host', correction)).resolves.toMatchObject({ success: false })
+    expect(session.pendingResult).toBeTruthy()
+    expect(resultStatus(readMatchScore(session.matchScore)!)).toBe('disputed')
+    harness.restart()
+    await expect(harness.command('host', { ...correction, sets: [[0, 6], [0, 6]] })).resolves.toMatchObject({ success: false })
+    await expect(harness.command('host', correction)).resolves.toMatchObject({ success: true })
+    expect(session.pendingResult).toBe('')
+    expect(resultStatus(readMatchScore(session.matchScore)!)).toBe('corrected')
+    expect([...harness.resultCollections.get('resultAudits')!.values()].filter(row => row.data.kind === 'corrected')).toHaveLength(1)
   })
 
   it('A15: legacy sessions without format, capacity or matchScore keep working', async () => {

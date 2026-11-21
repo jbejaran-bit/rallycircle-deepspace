@@ -26,6 +26,7 @@ type Row = { recordId: string; createdBy: string; data: Record<string, unknown> 
 function createToolHarness() {
   const collections = new Map<string, Map<string, Row>>()
   let nextId = 0
+  let writesUntilFailure = 0
   const getCollection = (name: string) => {
     let collection = collections.get(name)
     if (!collection) {
@@ -37,6 +38,9 @@ function createToolHarness() {
   const userBound = new Set(['profiles', 'playerStats', 'matchResults', 'resultAudits'])
 
   const tool = (async <T>(name: string, params: Record<string, unknown>, userId: string): Promise<ActionResult<T>> => {
+    if (name !== 'records.query' && writesUntilFailure > 0 && --writesUntilFailure === 0) {
+      return { success: false, error: 'Injected write failure' }
+    }
     if (name === 'records.query') {
       const where = (params.where ?? {}) as Record<string, unknown>
       const records = [...getCollection(String(params.collection)).values()].filter((row) =>
@@ -64,6 +68,13 @@ function createToolHarness() {
       getCollection(collection).set(recordId, { recordId, createdBy: userId, data })
       return { success: true, data: { recordId } } as ActionResult<T>
     }
+    if (name === 'records.delete') {
+      const recordId = String(params.recordId)
+      if (getCollection(String(params.collection)).delete(recordId)) {
+        return { success: true, data: { recordId } } as ActionResult<T>
+      }
+      return { success: false, error: 'Not found' } as ActionResult<T>
+    }
     if (name === 'records.update') {
       const row = getCollection(String(params.collection)).get(String(params.recordId))
       if (!row) return { success: false, error: 'Not found' } as ActionResult<T>
@@ -82,7 +93,7 @@ function createToolHarness() {
       data: { userId, displayName: userId, bio: '', formats: [], preferredArea: '', selfReportedLevel: 'Unrated', visibility },
     })
   }
-  return { tool, rows, seedProfile }
+  return { tool, rows, seedProfile, failWrite: (when: number) => { writesUntilFailure = when } }
 }
 
 function singlesSession(): RallySession {
@@ -117,7 +128,7 @@ describe('applyFinalization', () => {
     expect(result).toEqual({ ok: true, applied: true })
     const stats = harness.rows('playerStats')
     expect(stats).toHaveLength(2)
-    expect(stats.find((row) => row.data.userId === 'alice')?.data).toMatchObject({ wins: 1, losses: 0, matchesPlayed: 1, visibility: 'public' })
+    expect(stats.find((row) => row.data.userId === 'alice')?.data).toMatchObject({ wins: 1, losses: 0, matchesPlayed: 1, visibility: 'private' })
     expect(stats.find((row) => row.data.userId === 'bob')?.data).toMatchObject({ wins: 0, losses: 1, matchesPlayed: 1 })
     const results = harness.rows('matchResults')
     expect(results).toHaveLength(2)
@@ -159,7 +170,7 @@ describe('applyFinalization', () => {
     harness.seedProfile('bob', 'private')
     await applyFinalization(harness.tool, singlesSession(), 'session-1', finalizedScore(), 'alice')
     expect(harness.rows('playerStats').find((row) => row.data.userId === 'bob')?.data.visibility).toBe('private')
-    expect(harness.rows('playerStats').find((row) => row.data.userId === 'alice')?.data.visibility).toBe('public')
+    expect(harness.rows('playerStats').find((row) => row.data.userId === 'alice')?.data.visibility).toBe('private')
     expect(harness.rows('matchResults').find((row) => row.data.userId === 'bob')?.data.visibility).toBe('private')
   })
 })
@@ -172,7 +183,7 @@ describe('correction reversal and repair', () => {
     await applyFinalization(harness.tool, session, 'session-1', first, 'bob')
     expect(harness.rows('playerStats').find((row) => row.data.userId === 'alice')?.data).toMatchObject({ wins: 1, matchesPlayed: 1 })
 
-    await expect(reverseFinalization(harness.tool, 'session-1', 'bob')).resolves.toBe(true)
+    await expect(reverseFinalization(harness.tool, 'session-1', 'bob', session, first)).resolves.toBe(true)
     expect(harness.rows('playerStats').find((row) => row.data.userId === 'alice')?.data).toMatchObject({ wins: 0, matchesPlayed: 0 })
     expect(harness.rows('playerStats').find((row) => row.data.userId === 'bob')?.data).toMatchObject({ losses: 0, matchesPlayed: 0 })
 
@@ -196,4 +207,31 @@ describe('correction reversal and repair', () => {
     expect(harness.rows('playerStats').find((row) => row.data.userId === 'alice')?.data).toMatchObject({ wins: 1, matchesPlayed: 1 })
     expect(await reconcilePlayerStats(harness.tool, 'alice', 'singles')).toBe(false)
   })
+})
+
+it.each([1, 2, 3, 4, 5])('retries a finalization after write %i fails without duplicate contributions', async (write) => {
+  const harness = createToolHarness()
+  const apply = () => applyFinalization(harness.tool, singlesSession(), 'session-1', finalizedScore(), 'bob')
+  harness.failWrite(write)
+  await expect(apply()).resolves.toMatchObject({ ok: false })
+  await expect(apply()).resolves.toMatchObject({ ok: true })
+  await expect(apply()).resolves.toMatchObject({ ok: true, applied: false })
+  expect(harness.rows('matchResults')).toHaveLength(2)
+  expect(harness.rows('resultAudits')).toHaveLength(1)
+  expect(harness.rows('playerStats').map(row => row.data.matchesPlayed)).toEqual([1, 1])
+})
+
+it.each([1, 2, 3, 4])('retries reversal after write %i fails without subtracting other matches', async (write) => {
+  const harness = createToolHarness()
+  const session = singlesSession()
+  const score = finalizedScore()
+  await applyFinalization(harness.tool, session, 'session-1', score, 'bob')
+  await applyFinalization(harness.tool, session, 'session-2', score, 'bob')
+  const reverse = () => reverseFinalization(harness.tool, 'session-1', 'bob', session, score)
+  harness.failWrite(write)
+  await expect(reverse()).resolves.toBe(false)
+  await expect(reverse()).resolves.toBe(true)
+  await expect(reverse()).resolves.toBe(true)
+  expect(harness.rows('matchResults').map(row => row.data.sessionId)).toEqual(['session-2', 'session-2'])
+  expect(harness.rows('playerStats').map(row => row.data.matchesPlayed)).toEqual([1, 1])
 })

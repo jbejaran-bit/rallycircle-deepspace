@@ -52,6 +52,7 @@ export const scoreEditSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('reviewResult'), decision: z.enum(['approve', 'dispute']) }),
   z.object({
     operation: z.literal('correctResult'),
+    revision: z.number().int().min(0),
     sets: z.array(pair).min(2).max(3),
     winner: side,
   }),

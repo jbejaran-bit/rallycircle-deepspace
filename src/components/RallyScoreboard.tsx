@@ -1,5 +1,5 @@
 import { ConfirmModal } from '@/components/ui'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { RallySession } from '@/lib/rally'
 import { runRallyCommand } from '@/lib/rally-actions'
 import { displayPoints, isTiebreak, readMatchScore, resultStatus, type ScoreSide } from '@/lib/rally-score'
@@ -144,6 +144,12 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
       {score?.winner != null && (result === 'proposed' || result === 'confirmed' || result === 'corrected') && (
         <p className="text-sm text-white/75">{score.approvals.length} of {score.teams.flat().length} recorded players approved this result.</p>
       )}
+      {session.pendingResult && <p role="status" className="text-sm text-white/80">A result update is pending. The player who started it can retry.</p>}
+      {score && editable && (result === 'final' || result === 'disputed') && (
+        <CorrectionForm key={score.revision} sets={score.sets} winner={score.winner ?? 0} busy={pending} onSubmit={(sets, winner) => void edit({
+          operation: 'correctResult', sessionId, revision: score.revision, sets, winner,
+        })} />
+      )}
       <ConfirmModal
         open={review !== null && Boolean(canReview)}
         onClose={() => { if (!inFlight.current) setReview(null) }}
@@ -164,5 +170,52 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
       )}
       {error && <p role="alert" className="text-sm text-rose-200">{error}</p>}
     </section>
+  )
+}
+
+
+function CorrectionForm({ sets, winner, busy, onSubmit }: {
+  sets: Array<[number, number]>
+  winner: ScoreSide
+  busy: boolean
+  onSubmit: (sets: Array<[number, number]>, winner: ScoreSide) => void
+}) {
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const fields = new FormData(event.currentTarget)
+    const corrected: Array<[number, number]> = [
+      [Number(fields.get('games-0-0')), Number(fields.get('games-0-1'))],
+      [Number(fields.get('games-1-0')), Number(fields.get('games-1-1'))],
+    ]
+    if (fields.get('games-2-0') !== '' || fields.get('games-2-1') !== '') {
+      corrected.push([Number(fields.get('games-2-0')), Number(fields.get('games-2-1'))])
+    }
+    onSubmit(corrected, fields.get('winner') === '1' ? 1 : 0)
+  }
+  return (
+    <details className="rounded-lg border border-white/25 p-3">
+      <summary className="cursor-pointer py-2 font-semibold">Correct result</summary>
+      <form onSubmit={submit} className="mt-2 space-y-3">
+        <p className="text-sm text-white/75">All recorded players will need to confirm the corrected score.</p>
+        {[0, 1, 2].map(set => (
+          <fieldset key={set} className="flex flex-wrap gap-3">
+            <legend className="text-sm">Set {set + 1}{set === 2 && ' (optional)'}</legend>
+            {sides.map(side => (
+              <label key={side} className="grid gap-1 text-sm">Side {side + 1}
+                <input name={`games-${set}-${side}`} type="number" min="0" max="7" required={set < 2}
+                  defaultValue={sets[set]?.[side]} className="min-h-11 w-20 rounded-md border border-white/25 bg-[#17201c] px-2" />
+              </label>
+            ))}
+          </fieldset>
+        ))}
+        <label className="grid w-fit gap-1 text-sm">Winning side
+          <select name="winner" defaultValue={winner} className="min-h-11 rounded-md border border-white/25 bg-[#17201c] px-2">
+            <option value="0">Side 1</option>
+            <option value="1">Side 2</option>
+          </select>
+        </label>
+        <button className={button} type="submit" disabled={busy}>Save correction</button>
+      </form>
+    </details>
   )
 }

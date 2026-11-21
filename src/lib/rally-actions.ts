@@ -13,7 +13,7 @@ type RallyCommand =
   | { operation: 'cancelPoll'; sessionId: string; pollId: string }
   | { operation: 'finalizePoll'; sessionId: string; pollId: string; optionId: string }
   | { operation: 'reviewResult'; sessionId: string; decision: 'approve' | 'dispute' }
-  | { operation: 'correctResult'; sessionId: string; sets: Array<[number, number]>; winner: ScoreSide }
+  | { operation: 'correctResult'; sessionId: string; revision: number; sets: Array<[number, number]>; winner: ScoreSide }
   | { operation: 'startMatch'; sessionId: string; teams: MatchTeams }
   | { operation: 'scorePoint'; sessionId: string; side: ScoreSide; revision: number }
 
