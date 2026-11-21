@@ -63,8 +63,8 @@ it('separates the next confirmed rally from actual community openings', () => {
   const dashboard = buildDashboard([
     row('tentative', { startsAt: future }),
     row('confirmed', { startsAt: '2026-12-02T12:00:00Z' }),
-    row('full', { startsAt: future, capacity: 2, targetPlayers: 4 }),
-    row('open', { startsAt: future, capacity: 2, targetPlayers: 4 }),
+    row('full', { startsAt: future, capacity: 2, targetPlayers: 2 }),
+    row('open', { startsAt: future, capacity: 2, targetPlayers: 2 }),
     row('cancelled', { startsAt: future, status: 'cancelled' }),
   ], [
     { sessionId: 'tentative', userId: 'me', status: 'maybe' },
