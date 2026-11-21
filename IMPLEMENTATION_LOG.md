@@ -135,9 +135,12 @@ The functional reproduction below was run on `e6ff2d9` itself (commit
   against pre-existing data remain unverified (no DeepSpace login/test
   accounts in this environment). All evidence above is local mock-harness
   simulation.
-- **Bundle caveat:** integrity-verified via `git bundle verify`; fresh-clone
-  re-test status is recorded in the parent report (this log's branch passed
-  the full gate in its worktree).
+- **Bundle caveat:** integrity-verified via `git bundle verify` (complete
+  history, head matches the branch tip). **Not independently re-tested from
+  a fresh clone** — the clone step was blocked by the runtime
+  execution-risk flag, and per the safeguard it was not bypassed. The code
+  the bundle carries is the same branch that passed the full gate
+  (244/244) in its worktree.
 
 ## 6. Files
 
