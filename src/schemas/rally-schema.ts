@@ -6,7 +6,6 @@ const sessionMemberWritableFields = [
   'title',
   'court',
   'location',
-  'startsAt',
   'durationMinutes',
   'targetPlayers',
   'capacity',
@@ -40,8 +39,8 @@ export const sessionsSchema: CollectionSchema = {
   ownerField: 'hostId',
   permissions: {
     '*': { read: false, create: false, update: false, delete: false },
-    member: { read: true, create: true, update: 'own', delete: false, writableFields: sessionMemberWritableFields },
-    admin: { read: true, create: true, update: true, delete: true, writableFields: sessionMemberWritableFields },
+    member: { read: true, create: false, update: 'own', delete: false, writableFields: sessionMemberWritableFields },
+    admin: { read: true, create: false, update: true, delete: true, writableFields: sessionMemberWritableFields },
   },
 }
 

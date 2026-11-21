@@ -6,7 +6,7 @@ import { useSearchParams } from 'react-router-dom'
 import { useAuth, useMessages, useMutations, usePresenceRoom, useQuery, useUserLookup, type Channel, type Message } from 'deepspace'
 import { CalendarDays, Check, ChevronRight, Clock3, Copy, MapPin, MessageCircle, Plus, Radio, Send, Share2, ShieldCheck, Sparkles, Users, X } from 'lucide-react'
 import { buildSessionUrl, formatSessionTime, groupSessionRsvps, parseLocalSessionStart, SESSION_FORMATS, summarizeAttendance, summarizeReadiness, validateSession, type Level, type RallyRSVP, type RallyWaitlist, type RallySession, type RSVPStatus, type SessionFormat } from '@/lib/rally'
-import { runRallyCommand } from '@/lib/rally-actions'
+import { createRally, runRallyCommand } from '@/lib/rally-actions'
 import { readMatchScore } from '@/lib/rally-score'
 import { buildCalendarEvent, canDownloadCalendar } from '@/lib/rally-calendar'
 import RallySchedulingPoll from '@/components/RallySchedulingPoll'
@@ -79,7 +79,7 @@ function ReadinessPanel({ confirmed, target, status, error, cancelled, full, for
 }
 
 function CreateSession({ userId, onCreated, selectedCourt, prefillCourt, prefillArea, startOpen }: { startOpen: boolean; prefillCourt?: string; prefillArea?: string; userId: string; onCreated: (id: string) => void; selectedCourt?: Court }) {
-  const { createConfirmed, putConfirmed, ready } = useMutations<Omit<RallySession, 'hostId' | 'status'>>('sessions')
+  const { putConfirmed, ready } = useMutations<Omit<RallySession, 'hostId' | 'status'>>('sessions')
   const { createConfirmed: createChannel } = useMutations<Channel>('channels')
   const [open, setOpen] = useState(Boolean(startOpen || selectedCourt || prefillCourt))
   const publishing = useRef(false)
@@ -140,7 +140,7 @@ function CreateSession({ userId, onCreated, selectedCourt, prefillCourt, prefill
     setUnlinkedChat(null)
     try {
       // Persist the most important product path first. Chat setup is secondary.
-      const id = await createConfirmed({ ...candidate, chatChannelId: '' })
+      const id = await createRally(candidate)
       onCreated(id)
       try {
         await runRallyCommand({ operation: 'rsvp', sessionId: id, status: 'going' })
