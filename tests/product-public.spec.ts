@@ -56,3 +56,8 @@ test('landing lets keyboard users skip the navigation', async ({ page }) => {
   await page.keyboard.press('Enter')
   await expect(page.getByRole('heading', { level: 1 })).toBeFocused()
 })
+
+test('rally creation rejects anonymous requests', async ({ request }) => {
+  const response = await request.post('/api/actions/createRally', { data: {} })
+  expect(response.status()).toBe(401)
+})

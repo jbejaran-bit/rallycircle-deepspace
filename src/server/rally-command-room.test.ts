@@ -550,6 +550,8 @@ describe('RallyCircle server-side session and RSVP rules', () => {
     for (const role of ['member', 'admin']) {
       expect(checkFieldPermissions(sessionsSchema, role, { pendingResult: '' })).toContain('pendingResult')
       expect(checkFieldPermissions(sessionsSchema, role, { scheduleRevision: 9 })).toContain('scheduleRevision')
+      expect(checkFieldPermissions(sessionsSchema, role, { startsAt: '2030-01-01T12:00:00.000Z' })).toContain('startsAt')
+      expect(canCreate(sessionsSchema, role)).toBe(false)
     }
     expect(canUpdate(sessionsSchema, 'member', {
       data: { hostId: 'host' },

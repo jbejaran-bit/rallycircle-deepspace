@@ -1,6 +1,6 @@
 import { getAuthToken } from 'deepspace'
 import type { MatchTeams, ScoreSide } from './rally-score'
-import type { RSVPStatus } from './rally'
+import type { RallySession, RSVPStatus } from './rally'
 import type { PollOptionInput } from './polls'
 import type { SeriesTemplate } from './recurrence'
 
@@ -37,16 +37,27 @@ function isRallyCommandResponse(value: unknown): value is RallyCommandResponse {
 }
 
 export async function runRallyCommand(command: RallyCommand): Promise<void> {
+  await sendRallyAction('rallyCommand', command)
+}
+
+type RallyDraft = Pick<RallySession, 'format' | 'title' | 'court' | 'location' | 'startsAt' |
+  'durationMinutes' | 'targetPlayers' | 'capacity' | 'level' | 'notes'>
+
+export function createRally(draft: RallyDraft): Promise<string> {
+  return sendRallyAction('createRally', draft)
+}
+
+async function sendRallyAction(action: 'rallyCommand' | 'createRally', input: RallyCommand | RallyDraft): Promise<string> {
   const token = await getAuthToken()
   if (!token) throw new Error('Sign in before updating this session.')
 
-  const response = await fetch('/api/actions/rallyCommand', {
+  const response = await fetch(`/api/actions/${action}`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify(command),
+    body: JSON.stringify(input),
   })
   if (response.status === 401) throw new Error('Sign in before updating this session.')
 
@@ -60,6 +71,7 @@ export async function runRallyCommand(command: RallyCommand): Promise<void> {
   if (!response.ok || !result.success) {
     throw new Error(result.error ?? 'The session update was rejected.')
   }
+  return result.data!.recordId
 }
 
 type SchedulingCommand =
