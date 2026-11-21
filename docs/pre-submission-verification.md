@@ -36,10 +36,10 @@ From a local terminal in the repository, use the official CLI prompt. Complete t
 ```sh
 npx deepspace auth login
 npx deepspace auth whoami
-npx deepspace test accounts list
+npx deepspace test accounts list --usable
 ```
 
-On a headless terminal, use `npx deepspace auth login --email "$RALLYCIRCLE_OWNER_EMAIL" --password-stdin` after setting `RALLYCIRCLE_OWNER_EMAIL`, and supply the password from your approved secret source on stdin. When the owner session works, use an existing authorized pool or let the owner create three dedicated test identities. Example command, repeat with unique email and label:
+Regular DeepSpace accounts sign in through GitHub or Google OAuth in a browser. The CLI password flags apply only to test and internally provisioned accounts. Run the rehearsal on the signed-in workstation unless the cloud workspace has an approved private session mount. Keep the owner session file out of Git, chat, and uploads. When the owner session works, use an existing authorized pool or let the owner create three dedicated test identities. Example command, repeat with unique email and label:
 
 ```sh
 npx deepspace test accounts create --email="$RALLYCIRCLE_TEST_EMAIL" --label=host --password-stdin
