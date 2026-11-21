@@ -12,8 +12,17 @@ export function buildDashboard(
   now: number,
   communityResponses: RallyRSVP[] | null = responses,
 ) {
-  const myResponses = new Map(responses.filter(row => row.userId === userId).map(row => [row.sessionId, row.status]))
-  const myWaitlist = new Set(waitlist.filter(row => row.userId === userId).map(row => row.sessionId))
+  // Keep the first valid membership per session, matching Find Games and
+  // rally detail. A later malformed or duplicate legacy row must not turn a
+  // confirmed RSVP into a tentative one or hide a joinable game.
+  const myResponses = new Map<string, RallyRSVP['status']>()
+  for (const response of responses) {
+    if (response.userId !== userId || typeof response.sessionId !== 'string' || !response.sessionId ||
+        (response.status !== 'going' && response.status !== 'maybe') || myResponses.has(response.sessionId)) continue
+    myResponses.set(response.sessionId, response.status)
+  }
+  const myWaitlist = new Set(waitlist.filter(row => row.userId === userId &&
+    typeof row.sessionId === 'string' && row.sessionId).map(row => row.sessionId))
   const entries = sessions.flatMap(({ recordId, data }) => {
     const score = readMatchScore(data.matchScore)
     const side = score?.teams.findIndex(team => team.includes(userId)) ?? -1
@@ -36,13 +45,16 @@ export function buildDashboard(
 
   const confirmedPlayers = new Map<string, Set<string>>()
   for (const response of communityResponses ?? []) {
-    if (response.status !== 'going') continue
+    if (response.status !== 'going' || typeof response.sessionId !== 'string' || !response.sessionId ||
+        typeof response.userId !== 'string' || !response.userId) continue
     const players = confirmedPlayers.get(response.sessionId) ?? new Set<string>()
     players.add(response.userId)
     confirmedPlayers.set(response.sessionId, players)
   }
   const gamesNeedingPlayers = communityResponses === null ? [] : sessions
     .filter(({ recordId, data }) => data.status === 'open' && Date.parse(data.startsAt) > now &&
+      Number.isInteger(data.targetPlayers) && data.targetPlayers >= 2 && data.targetPlayers <= 12 &&
+      (data.capacity == null || (Number.isInteger(data.capacity) && data.capacity >= data.targetPlayers && data.capacity <= 12)) &&
       data.hostId !== userId && !myResponses.has(recordId) && !myWaitlist.has(recordId) &&
       !confirmedPlayers.get(recordId)?.has(userId))
     .map(({ recordId, data }) => ({
