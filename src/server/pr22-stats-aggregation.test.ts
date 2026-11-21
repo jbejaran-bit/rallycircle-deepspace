@@ -327,7 +327,7 @@ describe('PR22-STATS-AGG getPlayerStats session scan', () => {
     expect(h.counters.sessionGets).toBe(0)
   })
 
-  it('history shows a pending row with the corrected outcome for exactly 1 session GET', async () => {
+  it('history shows a pending row with the corrected outcome for 3 session GETs (1 per final row + 1 for the pending row)', async () => {
     const h = createHarness()
     h.seedProfile('alice')
     h.seedFinalMatch('alice', 'bob', 0, { won: true })
@@ -342,10 +342,13 @@ describe('PR22-STATS-AGG getPlayerStats session scan', () => {
     const pending = entries.find((entry) => entry.sessionId === pendingSession)!
     expect(pending).toMatchObject({ status: 'pending', won: false, sets: [[3, 6], [3, 6]], resultRevision: 2 })
     expect(entries.filter((entry) => entry.status === 'final')).toHaveLength(2)
-    expect(h.counters.sessionGets).toBe(1)
+    // History verifies every final row against its session (matrix
+    // follow-up): 2 final rows + the pending row = 3 GETs, bounded by
+    // the history limit.
+    expect(h.counters.sessionGets).toBe(3)
   })
 
-  it('history hides disputed rows with 0 session GETs', async () => {
+  it('history hides disputed rows (1 session GET for the surviving final row)', async () => {
     const h = createHarness()
     h.seedProfile('alice')
     h.seedFinalMatch('alice', 'bob', 0, { won: true })
@@ -356,7 +359,9 @@ describe('PR22-STATS-AGG getPlayerStats session scan', () => {
     })
     const entries = await h.readHistory('alice', 'alice')
     expect(entries.map((entry) => entry.sessionId)).toEqual(['session-0'])
-    expect(h.counters.sessionGets).toBe(0)
+    // The surviving final row is verified against its session (matrix
+    // follow-up); the disputed row is excluded before any GET.
+    expect(h.counters.sessionGets).toBe(1)
   })
 
   it('migration: rows written before the status column count as final', async () => {
@@ -374,7 +379,7 @@ describe('PR22-STATS-AGG getPlayerStats session scan', () => {
     expect(h.counters.sessionGets).toBe(0)
   })
 
-  it('corrupt stored sets drop the row from stats and history without failing the call', async () => {
+  it('corrupt stored sets drop the row from stats, but history derives it from the session score', async () => {
     const h = createHarness()
     h.seedProfile('alice')
     h.seedFinalMatch('alice', 'bob', 0, { won: true })
@@ -384,9 +389,15 @@ describe('PR22-STATS-AGG getPlayerStats session scan', () => {
     }
     const stats = await h.readStats('alice', 'alice')
     expect(stats.singles).toMatchObject({ wins: 1, losses: 0, matchesPlayed: 1 })
+    // History verifies the row against its session and derives the outcome
+    // from the verified score (matrix follow-up, ADAPT D1/F6) instead of
+    // dropping it: the corrupt stored value never bricks the call.
     const entries = await h.readHistory('alice', 'alice')
-    expect(entries.map((entry) => entry.sessionId)).toEqual(['session-0'])
-    expect(h.counters.sessionGets).toBe(0)
+    expect(entries.map((entry) => entry.sessionId)).toEqual(['session-0', 'session-1'])
+    expect(entries.find((entry) => entry.sessionId === 'session-1')).toMatchObject({
+      won: true, sets: [[6, 3], [6, 3]], status: 'final',
+    })
+    expect(h.counters.sessionGets).toBe(2)
   })
 
   it('documented window: a final row whose session commit is still in flight counts, and stays exact after the retry', async () => {
@@ -518,7 +529,9 @@ describe('PR22-STATS-AGG differential and room lifecycle', () => {
     expect(readScore().approvals).toEqual(['bob', 'alice'])
     expect(rowStatus()).toEqual(['alice:final', 'bob:final'])
     expect((await h.readStats('alice', 'alice')).singles).toMatchObject({ wins: 1, matchesPlayed: 1 })
-    expect(h.counters.sessionGets).toBe(0)
+    // The row was just finalized (fresh timestamp), so statistics verifies
+    // it against the session (matrix follow-up): 1 GET, not 0.
+    expect(h.counters.sessionGets).toBe(1)
 
     // Host corrects, but the session score commit fails: the flip to pending
     // already landed, so the match must be excluded (fail-closed), and the
@@ -531,7 +544,7 @@ describe('PR22-STATS-AGG differential and room lifecycle', () => {
     expect(readScore().revision).toBe(5)
     expect(readScore().winner).toBe(0)
     expect((await h.readStats('alice', 'alice')).singles).toMatchObject({ wins: 0, matchesPlayed: 0 })
-    expect(h.counters.sessionGets).toBe(0)
+    expect(h.counters.sessionGets).toBe(1)
 
     // Retry the same correction: the flip is a no-op, the audit is
     // idempotent, and the commit lands.
@@ -545,7 +558,7 @@ describe('PR22-STATS-AGG differential and room lifecycle', () => {
     const history = await h.readHistory('alice', 'alice')
     expect(history).toHaveLength(1)
     expect(history[0]).toMatchObject({ status: 'pending', won: false, sets: [[3, 6], [4, 6]], resultRevision: 6 })
-    expect(h.counters.sessionGets).toBe(1)
+    expect(h.counters.sessionGets).toBe(2)
 
     // Fresh approvals at the new revision finalize the corrected result in place.
     await expect(h.command('bob', { operation: 'reviewResult', sessionId: 'life-1', decision: 'approve', revision: 6 }))
@@ -555,7 +568,9 @@ describe('PR22-STATS-AGG differential and room lifecycle', () => {
     expect(rowStatus()).toEqual(['alice:final', 'bob:final'])
     expect((await h.readStats('alice', 'alice')).singles).toMatchObject({ wins: 0, losses: 1, matchesPlayed: 1 })
     expect((await h.readHistory('alice', 'alice'))[0]).toMatchObject({ status: 'final', won: false, resultRevision: 6 })
-    expect(h.counters.sessionGets).toBe(1)
+    // Stats verified the freshly re-finalized row (1 GET) and history
+    // verified it again (1 GET): 1 + 1 + 2 = 4 total.
+    expect(h.counters.sessionGets).toBe(4)
   })
 
   it('lifecycle: a dispute flips rows to disputed (hidden), a correction reopens them as pending', async () => {
@@ -605,7 +620,9 @@ describe('PR22-STATS-AGG differential and room lifecycle', () => {
     }
     expect(rowStatus()).toEqual(['alice:final', 'bob:final'])
     expect((await h.readStats('alice', 'alice')).singles).toMatchObject({ wins: 1, matchesPlayed: 1 })
-    expect(h.counters.sessionGets).toBe(0)
+    // The row was just re-finalized (fresh timestamp), so statistics
+    // verifies it against the session: 1 GET, not 0.
+    expect(h.counters.sessionGets).toBe(1)
   })
 })
 

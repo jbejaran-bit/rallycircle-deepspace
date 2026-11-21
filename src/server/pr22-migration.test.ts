@@ -748,7 +748,9 @@ describe('S7 — legacy notification rows without readAt / idempotencyKey', () =
     }, 'alice')
     const marked = await harness.notify('alice', { operation: 'markRead', recordId })
     expect(marked.success).toBe(false)
-    expect((marked as { error: string }).error).toContain('your own notifications')
+    // The uniform error from the oracle fix (matrix 6.4): a legacy row
+    // without a recipientId is indistinguishable from a missing row.
+    expect((marked as { error: string }).error).toBe('Notification not found.')
     expect(harness.notifications.get(recordId)?.data.readAt).toBe('')
   })
 
