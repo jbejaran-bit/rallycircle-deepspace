@@ -53,6 +53,10 @@ export function buildDashboard(
   }
   const gamesNeedingPlayers = communityResponses === null ? [] : sessions
     .filter(({ recordId, data }) => data.status === 'open' && Date.parse(data.startsAt) > now &&
+      // Legacy or partially written sessions with invalid planning limits must
+      // not be advertised as having a known number of open places.
+      Number.isInteger(data.targetPlayers) && data.targetPlayers >= 2 && data.targetPlayers <= 12 &&
+      (data.capacity == null || (Number.isInteger(data.capacity) && data.capacity >= data.targetPlayers && data.capacity <= 12)) &&
       data.hostId !== userId && !myResponses.has(recordId) && !myWaitlist.has(recordId))
     .map(({ recordId, data }) => ({
       recordId, data,
