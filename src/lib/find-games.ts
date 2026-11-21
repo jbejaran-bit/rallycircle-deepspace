@@ -105,10 +105,18 @@ export function filterGames(
   const toMs = filters.toDate ? Date.parse(`${filters.toDate}T23:59:59.999`) : undefined
 
   const attendance = new Map<string, { going: number; maybe: number; isMine: boolean }>()
+  const countedMembers = new Set<string>()
   for (const rsvp of rsvps) {
+    // Legacy/partially synced records can contain duplicate membership rows or
+    // unexpected statuses. Neither should inflate capacity or produce NaN.
+    if (rsvp.status !== 'going' && rsvp.status !== 'maybe') continue
+    if (typeof rsvp.sessionId !== 'string' || typeof rsvp.userId !== 'string' || !rsvp.userId) continue
+    const memberKey = JSON.stringify([rsvp.sessionId, rsvp.userId])
+    if (countedMembers.has(memberKey)) continue
+    countedMembers.add(memberKey)
     const existing = attendance.get(rsvp.sessionId) ?? { going: 0, maybe: 0, isMine: false }
     existing[rsvp.status]++
-    existing.isMine ||= rsvp.userId === options.userId
+    existing.isMine ||= options.userId !== undefined && rsvp.userId === options.userId
     attendance.set(rsvp.sessionId, existing)
   }
   const annotated: AnnotatedGame[] = []
