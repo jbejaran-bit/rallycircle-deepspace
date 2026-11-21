@@ -70,7 +70,7 @@ function pagedActionTools(h: RaceHarness, callerId: string): ActionTools {
     const page = rows.slice(offset, offset + limit)
     const nextOffset = offset + page.length < rows.length ? offset + page.length : undefined
     return { success: true as const, data: { records: page.map(pub), count: page.length, nextOffset } }
-  }) as ActionTools['query']
+  }) as unknown as ActionTools['query']
   const get = (async (collection: string, recordId: string) => {
     const row = h.store.get(collection)?.get(recordId) as RowLike | undefined
     return row
@@ -86,6 +86,7 @@ async function readStats(h: RaceHarness, userId: string) {
     params: { userId },
     tools: pagedActionTools(h, userId),
     env: {} as Env,
+    callerJwt: 'test-token',
   } as Parameters<typeof getPlayerStatsAction>[0])
   expect(seen.success).toBe(true)
   if (!seen.success) throw new Error('getPlayerStats failed')
@@ -99,6 +100,7 @@ async function readHistory(h: RaceHarness, userId: string) {
     params: { userId },
     tools: pagedActionTools(h, userId),
     env: {} as Env,
+    callerJwt: 'test-token',
   } as Parameters<typeof getMatchHistoryAction>[0])
   expect(result.success).toBe(true)
   if (!result.success) throw new Error('getMatchHistory failed')
@@ -160,6 +162,7 @@ describe('PR22-PORT', () => {
       },
       tools: h.actionTools('alice'),
       env: {} as Env,
+      callerJwt: 'test-token',
     } as Parameters<typeof updateProfileAction>[0])
     expect(updated.success).toBe(true)
     const stats = await h.queryRaw('playerStats', { userId: 'alice' })

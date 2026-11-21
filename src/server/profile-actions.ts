@@ -138,11 +138,11 @@ async function syncOwnedVisibility(
   for (const collection of ['playerStats', 'matchResults'] as const) {
     let offset = 0
     for (;;) {
-      const result = await tools.query<{ visibility: PlayerProfile['visibility'] }>(collection, {
-        where: { userId },
-        limit: pageSize,
-        offset,
-      })
+      // The app action adapter forwards the SDK's offset even though the
+      // installed ActionTools declaration omits it (same pattern as
+      // loadVerifiedResults below).
+      const options = { where: { userId }, limit: pageSize, offset }
+      const result = await tools.query<{ visibility: PlayerProfile['visibility'] }>(collection, options)
       if (!result.success) break
       const records = (result.data as unknown as { records?: Array<{ recordId: string; data: { visibility: string } }> }).records ?? []
       for (const record of records) {
