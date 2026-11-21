@@ -49,13 +49,13 @@ function luminance(rgb: string) {
   return 0.2126 * red + 0.7152 * green + 0.0722 * blue
 }
 
-test('sign-in actions meet normal-text contrast in both themes', async ({ page }) => {
+test('sign-in actions meet normal-text contrast in each theme', async ({ page }) => {
   await page.goto('/rallies')
   await expect(page.getByRole('heading', { name: 'Sign in to continue' })).toBeVisible()
 
   const signInButtons = page.getByRole('button', { name: 'Sign in', exact: true })
   await expect(signInButtons).toHaveCount(2)
-  for (const theme of ['slate', 'paper']) {
+  for (const theme of ['club', 'slate', 'paper']) {
     await page.locator('html').evaluate((html, value) => html.setAttribute('data-theme', value), theme)
     for (const button of await signInButtons.all()) {
       const colors = await button.evaluate(async element => {
@@ -71,4 +71,32 @@ test('sign-in actions meet normal-text contrast in both themes', async ({ page }
       expect(ratio, `${theme} sign-in contrast`).toBeGreaterThanOrEqual(4.5)
     }
   }
+})
+
+test('sign-in dialog keeps the invite and restores keyboard focus', async ({ page }) => {
+  const path = '/rallies?session=tennis%2Fpartner'
+  await page.goto(path)
+  const trigger = page.getByRole('button', { name: 'Sign in', exact: true }).last()
+  await trigger.press('Enter')
+  const dialog = page.getByRole('dialog', { name: 'Sign in to RallyCircle' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole('link', { name: 'Continue with Google' }))
+    .toHaveAttribute('href', '/api/auth/social-redirect?provider=google')
+  await dialog.getByText('Sign in with a test account').click()
+  await expect(dialog.getByLabel('Email')).toBeVisible()
+  await expect(dialog.getByLabel('Password')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+  await expect(trigger).toBeFocused()
+  await expect(page).toHaveURL(url => url.pathname + url.search === path)
+})
+
+test('keyboard users can skip app navigation', async ({ page }) => {
+  await page.goto('/dashboard')
+  const skip = page.getByRole('link', { name: 'Skip to content' })
+  await expect(page.getByRole('heading', { name: 'Sign in to continue' })).toBeVisible()
+  await page.keyboard.press('Tab')
+  await expect(skip).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(page.getByRole('main')).toBeFocused()
 })

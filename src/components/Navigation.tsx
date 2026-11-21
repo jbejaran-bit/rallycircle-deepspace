@@ -10,8 +10,9 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { AuthOverlay, useAuthProfileReady, signOut } from 'deepspace'
-import { ChevronDown, LogOut, Menu, X } from 'lucide-react'
+import { useAuthProfileReady, signOut } from 'deepspace'
+import { ChevronDown, CircleDot, LogOut, Menu, X } from 'lucide-react'
+import RallySignIn from './RallySignIn'
 import { APP_NAME } from '../constants'
 import type { Role } from '../constants'
 import { nav } from '../nav'
@@ -35,13 +36,13 @@ export default function Navigation() {
   const menuButton = useRef<HTMLButtonElement>(null)
   const [showAuthModal, setShowAuthModal] = useState(false)
 
-  const profileReady = !isSignedIn || (!userLoading && !!user)
+  const profileReady = !isSignedIn || !userLoading
   const userRole = (user?.role ?? 'anonymous') as Role | 'anonymous'
 
   // Close the mobile menu when navigating
   useEffect(() => {
     setMobileMenuOpen(false)
-  }, [location.pathname])
+  }, [location.pathname, location.search])
 
   const visibleNav = nav.filter((item) => {
     if (item.devOnly && !import.meta.env.DEV) return false
@@ -77,7 +78,8 @@ export default function Navigation() {
         }
       }}>
         <div className="mx-auto flex min-h-14 max-w-7xl items-center gap-2 px-4 sm:gap-4">
-          <Link to={isSignedIn ? "/dashboard" : "/"} className="shrink-0 text-base font-extrabold tracking-tight text-foreground">
+          <Link to={isSignedIn ? "/dashboard" : "/"} className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-md text-base font-extrabold tracking-tight text-foreground focus-visible:outline-2 focus-visible:outline-ring">
+            <CircleDot size={18} className="text-primary" aria-hidden="true" />
             {APP_NAME}
           </Link>
 
@@ -89,8 +91,8 @@ export default function Navigation() {
             /* Signed in, profile still loading — skeleton pill, never the
                Sign in button (that would offer sign-in to a signed-in user). */
             <div className="flex items-center gap-2 rounded-full border border-border bg-card/60 py-1 pl-1 pr-2.5">
-              <div className="h-6 w-6 animate-pulse rounded-full bg-muted" />
-              <div className="hidden h-4 w-20 animate-pulse rounded-md bg-muted sm:block" />
+              <div className="h-6 w-6 motion-safe:animate-pulse rounded-full bg-muted" />
+              <div className="hidden h-4 w-20 motion-safe:animate-pulse rounded-md bg-muted sm:block" />
             </div>
           ) : isSignedIn && user ? (
             <DropdownMenu>
@@ -138,6 +140,11 @@ export default function Navigation() {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+          ) : isSignedIn ? (
+            <div className="flex items-center gap-2">
+              <Link to="/settings" className="inline-flex min-h-11 items-center gap-2 rounded-md px-2 text-sm text-muted-foreground">Account settings</Link>
+              <button type="button" aria-label="Sign out" className="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground" onClick={() => void signOut()}><LogOut aria-hidden className="size-4" /></button>
+            </div>
           ) : (
             <button
               data-testid="nav-sign-in-button"
@@ -165,7 +172,7 @@ export default function Navigation() {
         </div>
       </nav>
 
-      {showAuthModal && <AuthOverlay onClose={() => setShowAuthModal(false)} />}
+      {showAuthModal && <RallySignIn onClose={() => setShowAuthModal(false)} />}
     </>
   )
 }

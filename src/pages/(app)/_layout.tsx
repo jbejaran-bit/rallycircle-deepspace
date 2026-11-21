@@ -32,8 +32,9 @@ export default function AppLayout() {
       <title>{APP_NAME}</title>
       <AuthBoot>
         <div className="flex h-dvh flex-col bg-background overflow-hidden">
+          <a href="#app-content" className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:rounded-lg focus:bg-background focus:p-3 focus:text-foreground">Skip to content</a>
           <Navigation />
-          <main className="flex-1 overflow-y-auto min-h-0">
+          <main id="app-content" tabIndex={-1} className="flex-1 overflow-y-auto min-h-0">
             <Suspense fallback={<div role="status" className="flex items-center justify-center h-full text-muted-foreground">Loading...</div>}>
               <Outlet />
             </Suspense>
@@ -47,11 +48,6 @@ export default function AppLayout() {
 /**
  * Waits for auth to resolve, then mounts the data layer. Distinct from the SDK's `AuthGate`.
  *
- * While the initial session check is in flight, renders a fixed full-viewport
- * panel in the theme background — visually identical to the pre-JS page
- * (index.html primes <html> with the same color), so a cold load shows a
- * steady theme-colored screen until the shell appears. No spinner text: the
- * check is one round-trip, and in-flow placeholders read as a layout jump.
  */
 function AuthBoot({ children }: { children: ReactNode }) {
   const { isLoaded } = useAuthStatus()
@@ -62,7 +58,7 @@ function AuthBoot({ children }: { children: ReactNode }) {
   const { error, warning } = useToast()
 
   if (!isLoaded) {
-    return <div role="status" aria-busy="true" className="fixed inset-0 bg-background"><span className="sr-only">Checking sign-in status</span></div>
+    return <div role="status" className="grid min-h-dvh place-items-center bg-background p-6 text-sm text-muted-foreground">Checking your session…</div>
   }
 
   return (
