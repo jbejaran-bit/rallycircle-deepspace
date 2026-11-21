@@ -168,9 +168,9 @@ function MatchHistory({ userId, stats }: { userId: string; stats: Statistics | u
       </div>}
       {visible.length > 0 && <ul className="divide-y divide-white/10">
         {visible.map(entry => <li key={entry.sessionId} className="py-2">
-          <Link className="grid min-h-11 grid-cols-[1fr_auto] items-center gap-2 rounded-lg px-2 py-1 hover:bg-white/5 focus-visible:outline-2" to={`/rallies?session=${encodeURIComponent(entry.sessionId)}`}>
+          <Link className="grid min-h-11 grid-cols-[1fr_auto] items-center gap-2 rounded-lg px-2 py-1 hover:bg-white/5 focus-visible:outline-2" to={`/rallies?session=${encodeURIComponent(entry.sessionId)}#rally-match`}>
             <span className="min-w-0">
-              <span className="block font-semibold capitalize text-[#d7fc83]">{entry.won ? 'Win' : 'Loss'} · {entry.format}</span>
+              <span className="block font-semibold capitalize text-[#d7fc83]">{entry.status === 'pending' ? 'Awaiting confirmation' : entry.won ? 'Win' : 'Loss'} · {entry.format}</span>
               <span className="block break-words text-sm tabular-nums">{entry.sets.map(set => set.join('–')).join(', ')}</span>
             </span>
             <time className="text-end text-xs text-white/75" dateTime={entry.finalizedAt}>{formatResultDate(entry.finalizedAt)}</time>
