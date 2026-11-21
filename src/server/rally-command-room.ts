@@ -1,6 +1,6 @@
 import { recordPages } from './record-pages.js'
 import type { ActionHandler, ActionResult, GetActionData, MutateActionData, QueryActionData } from 'deepspace/worker'
-import { validCapacity, type RallyRSVP, type RallySession, type RallyWaitlist, type RSVPStatus } from '../lib/rally.js'
+import { validCapacity, validateSession, type RallyRSVP, type RallySession, type RallyWaitlist, type RSVPStatus } from '../lib/rally.js'
 import { awardPoint, correctResult, createMatchScore, isFinalTransition, readMatchScore, resultStatus, reviewResult, scoreEditSchema, validateCorrectedSets } from '../lib/rally-score.js'
 import { castVote, parsePollOptions, parsePollTally, serializePollOptions, serializePollTally, tallyVotes, validatePollOptions, type PollOptionInput } from '../lib/polls.js'
 import { occurrenceStartsAt, parseSeriesTemplate, serializeSeriesTemplate, validateSeries, type SeriesTemplate } from '../lib/recurrence.js'
@@ -741,6 +741,7 @@ export class RallyCommandRoom {
 
     const command = parseCommand(body)
     const seriesCommand = command ? null : parseSeriesCommand(body)
+    const createCommand = command || seriesCommand ? null : parseCreateRallyCommand(body)
 
     const tool = this.recordTool()
     if (command) {
@@ -755,6 +756,9 @@ export class RallyCommandRoom {
         }))
         return (await response.json() as RallyCommandResult).success
       }))
+    }
+    if (createCommand) {
+      return Response.json(await applyCreateRallyCommand(createCommand, tool))
     }
     return Response.json(failure('Invalid rally command.'), { status: 400 })
   }
@@ -886,6 +890,14 @@ type SeriesCommand =
   | { operation: 'generateOccurrences'; userId: string; seriesId: string }
   | { operation: 'cancelSeries'; userId: string; seriesId: string }
 
+// A rally draft as the createRally action validated it. The room
+// re-validates it with validateSession before writing anything.
+type CreateRallyCommand = {
+  operation: 'createRally'
+  userId: string
+  draft: Omit<RallySession, 'hostId' | 'chatChannelId' | 'status'>
+}
+
 function parseSeriesCommand(value: unknown): SeriesCommand | null {
   if (!isRecord(value) || typeof value.userId !== 'string' || !value.userId ||
       typeof value.seriesId !== 'string' || !/^[a-z0-9_-]{1,100}$/i.test(value.seriesId)) return null
@@ -909,6 +921,24 @@ function parseSeriesCommand(value: unknown): SeriesCommand | null {
     return { operation: value.operation, userId: value.userId, seriesId: value.seriesId }
   }
   return null
+}
+
+// Shape/type checks only — ranges and the future-time rule are enforced
+// by validateSession in applyCreateRallyCommand, which must never see a
+// non-string field (validateSession calls .trim()/.length on them).
+function parseCreateRallyCommand(value: unknown): CreateRallyCommand | null {
+  if (!isRecord(value) || value.operation !== 'createRally') return null
+  if (typeof value.userId !== 'string' || !value.userId || value.userId.length > 200) return null
+  if (!isRecord(value.draft)) return null
+  const draft = value.draft
+  if (draft.format !== undefined && typeof draft.format !== 'string') return null
+  if (typeof draft.title !== 'string' || typeof draft.court !== 'string' ||
+      typeof draft.location !== 'string' || typeof draft.startsAt !== 'string' ||
+      typeof draft.notes !== 'string') return null
+  if (typeof draft.durationMinutes !== 'number' || typeof draft.targetPlayers !== 'number') return null
+  if (draft.capacity !== undefined && typeof draft.capacity !== 'number') return null
+  if (typeof draft.level !== 'string') return null
+  return { operation: 'createRally', userId: value.userId, draft: draft as CreateRallyCommand['draft'] }
 }
 
 async function applySeriesCommand(
@@ -1068,6 +1098,52 @@ async function applySeriesCommand(
   return updated.success
     ? { success: true, data: { recordId: command.seriesId } }
     : failure('The series could not be cancelled.')
+}
+
+// Rally creation, serialized per host in the caller's per-user room
+// (`rally:<appId>:user:<userId>`). The room's queue makes the
+// check-then-create below atomic for one host: a concurrent identical
+// create (double-submit) or a retry after a lost response sees the
+// session the first call created and returns it instead of a second
+// session. Only an exact draft match dedupes — a different host, time,
+// or any differing detail still creates a distinct session, and a
+// cancelled session never matches, so cancel-then-re-create works.
+async function applyCreateRallyCommand(command: CreateRallyCommand, tool: RecordTool): Promise<RallyCommandResult> {
+  const parsedStartsAt = Date.parse(command.draft.startsAt)
+  if (!Number.isFinite(parsedStartsAt)) return failure('Choose a future date and time.')
+  const draft: CreateRallyCommand['draft'] = {
+    ...command.draft,
+    startsAt: new Date(parsedStartsAt).toISOString(),
+  }
+  const problem = validateSession(draft)
+  if (problem) return failure(problem)
+  const existing = await tool<QueryActionData<RallySession>>('records.query', {
+    collection: 'sessions',
+    where: { hostId: command.userId, startsAt: draft.startsAt, status: 'open' },
+    limit: 10,
+  }, command.userId)
+  if (!existing.success) return failure('The rally could not be checked. Try again.')
+  const duplicate = existing.data.records.find(record => sameRallyDraft(record.data, draft))
+  if (duplicate) return { success: true, data: { recordId: duplicate.recordId } }
+  const created = await tool<MutateActionData>('records.create', {
+    collection: 'sessions',
+    data: { ...draft, status: 'open', chatChannelId: '' },
+  }, command.userId)
+  if (!created.success) return failure('The rally could not be created. Try again.')
+  return { success: true, data: { recordId: created.data.recordId } }
+}
+
+function sameRallyDraft(stored: RallySession, draft: CreateRallyCommand['draft']): boolean {
+  return (stored.format ?? undefined) === (draft.format ?? undefined) &&
+    stored.title === draft.title &&
+    stored.court === draft.court &&
+    stored.location === draft.location &&
+    stored.startsAt === draft.startsAt &&
+    stored.durationMinutes === draft.durationMinutes &&
+    stored.targetPlayers === draft.targetPlayers &&
+    (stored.capacity ?? undefined) === (draft.capacity ?? undefined) &&
+    stored.level === draft.level &&
+    stored.notes === draft.notes
 }
 
 export const schedulingAction: ActionHandler<Env> = async ({ userId, params, env }) => {
