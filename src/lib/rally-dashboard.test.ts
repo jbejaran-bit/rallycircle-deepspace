@@ -63,8 +63,8 @@ it('separates the next confirmed rally from actual community openings', () => {
   const dashboard = buildDashboard([
     row('tentative', { startsAt: future }),
     row('confirmed', { startsAt: '2026-12-02T12:00:00Z' }),
-    row('full', { startsAt: future, capacity: 2, targetPlayers: 4 }),
-    row('open', { startsAt: future, capacity: 2, targetPlayers: 4 }),
+    row('full', { startsAt: future, capacity: 2, targetPlayers: 2 }),
+    row('open', { startsAt: future, capacity: 2, targetPlayers: 2 }),
     row('cancelled', { startsAt: future, status: 'cancelled' }),
   ], [
     { sessionId: 'tentative', userId: 'me', status: 'maybe' },
@@ -88,4 +88,79 @@ it('keeps personal attendance visible when the community counts are unavailable'
     { sessionId: 'open', userId: 'another-player', status: 'going' },
   ])
   expect(available.gamesNeedingPlayers[0]).toMatchObject({ recordId: 'open', needed: 1 })
+})
+
+it('does not invent full games from duplicate or malformed community RSVPs', () => {
+  const sessions = [row('opening', { targetPlayers: 2, capacity: 2 })]
+  const community = [
+    { sessionId: 'opening', userId: 'player-a', status: 'going' },
+    { sessionId: 'opening', userId: 'player-a', status: 'going' },
+    { sessionId: 'opening', userId: '', status: 'going' },
+    { sessionId: 'opening', userId: 'player-b', status: 'unknown' },
+  ] as unknown as Parameters<typeof buildDashboard>[5]
+  const result = buildDashboard(sessions, [], [], 'me', now, community)
+  expect(result.gamesNeedingPlayers.map(game => ({ id: game.recordId, needed: game.needed })))
+    .toEqual([{ id: 'opening', needed: 1 }])
+  const full = buildDashboard(sessions, [], [], 'me', now, [
+    ...community!, { sessionId: 'opening', userId: 'player-b', status: 'going' },
+  ])
+  expect(full.gamesNeedingPlayers).toEqual([])
+  // The same player in a different session is a distinct attendance record.
+  const separate = buildDashboard([...sessions, row('other')], [], [], 'me', now, [
+    { sessionId: 'opening', userId: 'player-a', status: 'going' },
+    { sessionId: 'other', userId: 'player-a', status: 'going' },
+  ])
+  expect(separate.gamesNeedingPlayers.map(game => game.recordId)).toEqual(['opening', 'other'])
+})
+
+
+it('uses the first valid personal RSVP when legacy duplicates conflict', () => {
+  const sessions = [row('joined'), row('tentative'), row('available')]
+  const responses = [
+    { sessionId: 'joined', userId: 'me', status: 'going' },
+    { sessionId: 'joined', userId: 'me', status: 'maybe' },
+    { sessionId: 'tentative', userId: 'me', status: 'unknown' },
+    { sessionId: 'tentative', userId: 'me', status: 'maybe' },
+    { sessionId: 'available', userId: 'me', status: 'unknown' },
+    { sessionId: '', userId: 'me', status: 'going' },
+  ] as unknown as Parameters<typeof buildDashboard>[1]
+  const dashboard = buildDashboard(sessions, responses, [], 'me', now)
+  expect(dashboard.nextRally?.recordId).toBe('joined')
+  expect(filterAgenda(dashboard.entries, 'participating').map(entry => [entry.recordId, entry.response]))
+    .toEqual([['joined', 'going'], ['tentative', 'maybe']])
+  expect(dashboard.gamesNeedingPlayers.map(game => game.recordId)).toEqual(['available'])
+})
+
+it('ignores malformed waitlist identifiers without hiding community openings', () => {
+  const dashboard = buildDashboard([row('open')], [], [
+    { sessionId: '', userId: 'me' },
+    { sessionId: null, userId: 'me' },
+  ] as unknown as Parameters<typeof buildDashboard>[2], 'me', now)
+  expect(filterAgenda(dashboard.entries, 'waitlisted')).toEqual([])
+  expect(dashboard.gamesNeedingPlayers.map(game => game.recordId)).toEqual(['open'])
+})
+
+it('does not advertise a precise opening count for malformed legacy session limits', () => {
+  const invalid = [
+    { targetPlayers: 0 },
+    { targetPlayers: NaN },
+    { targetPlayers: 2.5 },
+    { targetPlayers: 13 },
+    { targetPlayers: 4, capacity: 2 },
+    { targetPlayers: 2, capacity: -1 },
+    { targetPlayers: 2, capacity: Infinity },
+    { targetPlayers: 2, capacity: 2.5 },
+  ] as Partial<RallySession>[]
+  const sessions = [
+    ...invalid.map((patch, index) => row(`invalid-${index}`, patch)),
+    row('valid-capped', { targetPlayers: 4, capacity: 4 }),
+    row('valid-uncapped', { targetPlayers: 2 }),
+  ]
+  const dashboard = buildDashboard(sessions, [], [], 'me', now)
+  expect(dashboard.gamesNeedingPlayers.map(({ recordId, needed }) => ({ recordId, needed })))
+    .toEqual([{ recordId: 'valid-capped', needed: 4 }, { recordId: 'valid-uncapped', needed: 2 }])
+  // Do not hide a user's own historical session simply because its limits
+  // are malformed; only public availability recommendations are suppressed.
+  expect(buildDashboard([row('mine', { hostId: 'me', targetPlayers: NaN })], [], [], 'me', now).entries)
+    .toHaveLength(1)
 })

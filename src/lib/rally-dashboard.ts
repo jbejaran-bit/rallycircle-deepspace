@@ -12,8 +12,17 @@ export function buildDashboard(
   now: number,
   communityResponses: RallyRSVP[] | null = responses,
 ) {
-  const myResponses = new Map(responses.filter(row => row.userId === userId).map(row => [row.sessionId, row.status]))
-  const myWaitlist = new Set(waitlist.filter(row => row.userId === userId).map(row => row.sessionId))
+  // Keep the first valid membership per session, matching Find Games and
+  // rally detail. A later malformed or duplicate legacy row must not turn a
+  // confirmed RSVP into a tentative one or hide a joinable game.
+  const myResponses = new Map<string, RallyRSVP['status']>()
+  for (const response of responses) {
+    if (response.userId !== userId || typeof response.sessionId !== 'string' || !response.sessionId ||
+        (response.status !== 'going' && response.status !== 'maybe') || myResponses.has(response.sessionId)) continue
+    myResponses.set(response.sessionId, response.status)
+  }
+  const myWaitlist = new Set(waitlist.filter(row => row.userId === userId &&
+    typeof row.sessionId === 'string' && row.sessionId).map(row => row.sessionId))
   const entries = sessions.flatMap(({ recordId, data }) => {
     const score = readMatchScore(data.matchScore)
     const side = score?.teams.findIndex(team => team.includes(userId)) ?? -1
@@ -30,12 +39,24 @@ export function buildDashboard(
     }]
   }).sort((a, b) => Number(b.scheduled) - Number(a.scheduled) || (a.start - b.start || 0))
 
+  // Community reads may contain duplicate or malformed legacy RSVPs. Count each
+  // player once per session so dashboard openings agree with Find Games.
   const confirmedCounts = new Map<string, number>()
+  const seenPlayers = new Set<string>()
   for (const response of communityResponses ?? []) {
-    if (response.status === 'going') confirmedCounts.set(response.sessionId, (confirmedCounts.get(response.sessionId) ?? 0) + 1)
+    if (response.status !== 'going' || typeof response.sessionId !== 'string' || !response.sessionId ||
+        typeof response.userId !== 'string' || !response.userId) continue
+    const key = JSON.stringify([response.sessionId, response.userId])
+    if (seenPlayers.has(key)) continue
+    seenPlayers.add(key)
+    confirmedCounts.set(response.sessionId, (confirmedCounts.get(response.sessionId) ?? 0) + 1)
   }
   const gamesNeedingPlayers = communityResponses === null ? [] : sessions
     .filter(({ recordId, data }) => data.status === 'open' && Date.parse(data.startsAt) > now &&
+      // Legacy or partially written sessions with invalid planning limits must
+      // not be advertised as having a known number of open places.
+      Number.isInteger(data.targetPlayers) && data.targetPlayers >= 2 && data.targetPlayers <= 12 &&
+      (data.capacity == null || (Number.isInteger(data.capacity) && data.capacity >= data.targetPlayers && data.capacity <= 12)) &&
       data.hostId !== userId && !myResponses.has(recordId) && !myWaitlist.has(recordId))
     .map(({ recordId, data }) => ({
       recordId, data,

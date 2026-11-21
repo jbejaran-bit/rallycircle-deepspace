@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
 import CourtsPage from '../pages/(app)/(protected)/courts'
-import { distanceMiles, findCourt, matchesCourt } from './courts'
+import { courts, distanceMiles, findCourt, matchesCourt, rankCourts } from './courts'
 
 describe('court discovery', () => {
   it('keeps one main landmark and renders the court list without map tiles', () => {
@@ -15,6 +15,11 @@ describe('court discovery', () => {
     expect(html.match(/<main\b/g)).toHaveLength(1)
     expect(html).toContain('<h1')
     expect(html).toContain('aria-label="Pittsburgh courts"')
+    expect(html).toContain('id="court-tab-pittsburgh"')
+    expect(html).toContain('aria-controls="court-source-panel"')
+    expect(html).toContain('id="court-source-panel"')
+    expect(html).toContain('aria-labelledby="court-tab-pittsburgh"')
+    expect(html).toContain('aria-selected="true"')
     expect(html).toContain('aria-pressed="true"')
     expect(html).toContain('Schenley Oval Tennis Courts')
     expect(html).toContain('href="/rallies?court=schenley"')
@@ -40,4 +45,15 @@ it('finds courts by case-insensitive name and area terms', () => {
   expect(matchesCourt(venue, '  CLAY   Regent ')).toBe(true)
   expect(matchesCourt(venue, 'Downtown')).toBe(false)
   expect(matchesCourt(venue, '')).toBe(true)
+})
+
+it('keeps court map pin numbering in the same nearest-first list order', () => {
+  const nearestHighland = findCourt('highland')!
+  const ranked = rankCourts(courts, nearestHighland)
+  expect(ranked[0].court.id).toBe('highland')
+  expect(ranked[0].distance).toBe(0)
+  expect(ranked.map(item => item.distance)).toEqual(
+    [...ranked.map(item => item.distance)].sort((a, b) => (a ?? 0) - (b ?? 0)),
+  )
+  expect(rankCourts(courts).map(item => item.court.id)).toEqual(courts.map(court => court.id))
 })
