@@ -535,6 +535,10 @@ describe('RallyCircle server-side session and RSVP rules', () => {
     expect(checkFieldPermissions(sessionsSchema, 'member', { status: 'open' })).toContain('status')
     expect(checkFieldPermissions(sessionsSchema, 'member', { matchScore: '{}' })).toContain('matchScore')
     expect(checkFieldPermissions(sessionsSchema, 'admin', { matchScore: '{}' })).toContain('matchScore')
+    for (const role of ['member', 'admin']) {
+      expect(checkFieldPermissions(sessionsSchema, role, { pendingResult: '' })).toContain('pendingResult')
+      expect(checkFieldPermissions(sessionsSchema, role, { scheduleRevision: 9 })).toContain('scheduleRevision')
+    }
     expect(canUpdate(sessionsSchema, 'member', {
       data: { hostId: 'host' },
       createdBy: 'host',
