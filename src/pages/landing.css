@@ -50,3 +50,7 @@
   .tennis-court { inset: 7% 26%; }
   .tennis-nav-guide { display: none; }
 }
+
+.tennis-matchday { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 1.25rem; border-top: 1px solid var(--tennis-line); padding-block: 2.25rem; }
+.tennis-matchday h2 { font: 500 clamp(1.8rem, 4vw, 3rem)/1.15 Georgia, serif; letter-spacing: -.05em; }
+.tennis-matchday p { max-width: 40rem; margin-top: .65rem; line-height: 1.6; color: var(--tennis-muted); }

@@ -44,6 +44,7 @@ export interface GameFilters {
 export interface KnownCourtLocation {
   /** Court name as it appears in session records (matching is normalised). */
   name: string
+  locality?: string
   lat: number
   lng: number
 }
@@ -129,26 +130,30 @@ export function filterGames(
     if (filters.availability === 'spots' && (full || cancelled)) continue
     if (filters.availability === 'waitlist' && (!full || cancelled)) continue
 
-    // Distance only when the session's court matches a court with known
-    // coordinates. Matching is by normalised name — whole-name substring
-    // either way, or a shared distinctive token (e.g. "Schenley" links a
-    // session at "Schenley Park" to "Schenley Oval Tennis Courts"). Generic
-    // tokens such as "tennis"/"court" never match on their own.
-    // Text-only locations are never geocoded.
+    // Keep distance unknown when a court name is ambiguous. Use locality
+    // when available, and never geocode a user's free-text session fields.
     let distanceMiles: number | null = null
     if (userLocation) {
       const courtName = normalizePlaceName(session.court)
       const courtTokens = new Set(
         courtName.split(/[^a-z0-9]+/).filter(token => token.length >= 6 && !COURT_NAME_STOPWORDS.has(token)),
       )
-      const match = (options.knownCourts ?? []).find(known => {
+      const area = normalizePlaceName(session.location)
+      const candidates = (options.knownCourts ?? []).filter(known => {
+        const locality = known.locality && normalizePlaceName(known.locality)
+        if (locality && (!area || (!area.includes(locality) && !locality.includes(area)))) return false
         const knownName = normalizePlaceName(known.name)
         if (knownName.length < 6 || courtName.length < 6) return knownName === courtName
         if (knownName.includes(courtName) || courtName.includes(knownName)) return true
         const knownTokens = knownName.split(/[^a-z0-9]+/).filter(token => token.length >= 6 && !COURT_NAME_STOPWORDS.has(token))
         return knownTokens.some(token => courtTokens.has(token))
       })
-      if (match) distanceMiles = haversineMiles(userLocation, { lat: match.lat, lng: match.lng })
+      const exact = candidates.filter(known => normalizePlaceName(known.name) === courtName)
+      const matches = exact.length ? exact : candidates
+      const [match] = matches
+      if (match && matches.every(court => court.lat === match.lat && court.lng === match.lng)) {
+        distanceMiles = haversineMiles(userLocation, { lat: match.lat, lng: match.lng })
+      }
     }
     if (
       filters.maxDistanceMiles !== undefined &&
@@ -190,4 +195,16 @@ export function gameStatusLabel(game: AnnotatedGame): string {
   if (game.past) return 'Past session'
   if (game.status === 'full') return 'Full · waitlist available'
   return game.status === 'target-reached' ? 'Target reached' : 'Needs players'
+}
+
+export type DiscoveryAction = 'rsvp' | 'joinWaitlist'
+
+export function discoveryAction(
+  game: Pick<AnnotatedGame, 'cancelled' | 'past' | 'status' | 'session'>,
+  userId: string | null | undefined,
+  going: boolean,
+  waiting: boolean,
+): DiscoveryAction | null {
+  if (!userId || game.cancelled || game.past || game.session.hostId === userId || going || waiting) return null
+  return game.status === 'full' ? 'joinWaitlist' : 'rsvp'
 }

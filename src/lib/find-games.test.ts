@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { filterGames, gameStatusLabel, type KnownCourtLocation } from './find-games'
+import { discoveryAction, filterGames, gameStatusLabel, type KnownCourtLocation } from './find-games'
 import type { RallyRSVP, RallySession } from './rally'
 
 const NOW = Date.parse('2026-11-20T12:00:00Z')
@@ -151,4 +151,30 @@ it('filters availability using capacity instead of the planning target', () => {
   const cancelled = session({ recordId: 'cancelled', status: 'cancelled', capacity: 2 })
   expect(filterGames([capped, open, cancelled], rsvps, { availability: 'waitlist', showCancelled: true }, baseOpts).map(game => game.recordId)).toEqual(['s6'])
   expect(filterGames([capped, open, cancelled], rsvps, { availability: 'spots', showCancelled: true }, baseOpts).map(game => game.recordId)).toEqual(['open'])
+})
+
+it('only offers inline attendance actions for eligible upcoming games', () => {
+  const [game] = filterGames([session({ recordId: 's6', capacity: 2 })], rsvps, {}, baseOpts)
+  expect(discoveryAction(game, 'visitor', false, false)).toBe('joinWaitlist')
+  expect(discoveryAction({ ...game, status: 'needs-players' }, 'visitor', false, false)).toBe('rsvp')
+  expect(discoveryAction(game, 'host-1', false, false)).toBeNull()
+  expect(discoveryAction(game, 'visitor', true, false)).toBeNull()
+  expect(discoveryAction(game, 'visitor', false, true)).toBeNull()
+  expect(discoveryAction(game, null, false, false)).toBeNull()
+  expect(discoveryAction({ ...game, past: true }, 'visitor', false, false)).toBeNull()
+  expect(discoveryAction({ ...game, cancelled: true }, 'visitor', false, false)).toBeNull()
+})
+
+it('does not assign the first distance when multiple cities have a court with the same name', () => {
+  const first = { name: 'Riverside Tennis Courts', locality: 'Boston', lat: 42.36, lng: -71.06 }
+  const second = { name: first.name, locality: 'Pittsburgh', lat: 40.44, lng: -79.99 }
+  const options = { now: NOW, userLocation: second, knownCourts: [first, second] }
+  const localRow = session({ recordId: 'local', court: first.name, location: 'Pittsburgh, PA' })
+  const unknownRow = session({ recordId: 'unknown', court: first.name, location: 'Chicago' })
+  const [local, unknown] = filterGames([localRow, unknownRow], [], {}, options)
+  expect(local.distanceMiles).toBe(0)
+  expect(unknown.distanceMiles).toBeNull()
+  expect(filterGames([localRow], [], {}, {
+    ...options, knownCourts: [{ ...first, locality: undefined }, { ...second, locality: undefined }],
+  })[0].distanceMiles).toBeNull()
 })

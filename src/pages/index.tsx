@@ -30,6 +30,7 @@ export default function Home() {
           <div className="tennis-actions">
             <a className="tennis-primary" href="/games">Find a game <ArrowRight size={19} aria-hidden /></a>
             <a className="tennis-secondary" href="/rallies?create=1"><Plus size={18} aria-hidden /> Create a rally</a>
+            <a className="tennis-secondary" href="/courts"><MapPin size={18} aria-hidden /> Explore courts</a>
           </div>
         </div>
         <div className="tennis-art" aria-hidden="true">
@@ -55,6 +56,13 @@ export default function Home() {
         </ul>
       </section>
 
+      <section className="tennis-frame tennis-matchday" aria-labelledby="tennis-matchday-heading">
+        <div>
+          <h2 id="tennis-matchday-heading">Stay with the match.</h2>
+          <p>Keep the singles or doubles score as you play. After the match, recorded players can confirm or dispute the result, and it appears in their match history.</p>
+        </div>
+        <a className="tennis-secondary" href="/dashboard">Open match history <ArrowRight size={18} aria-hidden /></a>
+      </section>
       <footer className="tennis-frame tennis-footer">
         <a href="/" className="tennis-wordmark">RallyCircle</a>
         <a href="#how-it-works">How it works</a>
