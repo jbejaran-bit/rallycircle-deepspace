@@ -110,3 +110,26 @@ test('New York local input rejects the skipped hour at the spring DST change', (
     else process.env.TZ = previousZone
   }
 })
+
+// validateSession typeof guards — same defect class as F7, mirrors PR #25
+// @ 254f865. A non-string title/court/location must return a validation
+// error, never throw a TypeError. Valid strings still pass (covered by the
+// 'valid session passes input validation' test above).
+test('non-string title returns a validation error instead of throwing', () => {
+  for (const bad of [42, null, undefined, {}, ['Saturday doubles'], true]) {
+    assert.doesNotThrow(() => validate({ ...base, title: bad }))
+    assert.match(validate({ ...base, title: bad }), /title/)
+  }
+})
+test('non-string court returns a validation error instead of throwing', () => {
+  for (const bad of [42, null, undefined, {}, ['Schenley Park']]) {
+    assert.doesNotThrow(() => validate({ ...base, court: bad }))
+    assert.match(validate({ ...base, court: bad }), /court/)
+  }
+})
+test('non-string location returns a validation error instead of throwing', () => {
+  for (const bad of [42, null, undefined, {}, ['Pittsburgh, PA']]) {
+    assert.doesNotThrow(() => validate({ ...base, location: bad }))
+    assert.match(validate({ ...base, location: bad }), /location/)
+  }
+})
