@@ -337,6 +337,170 @@ behavior or permissions.
 
 ---
 
+## 10. Follow-up — matrix regressions fixed (2026-11-21 ~15:49–21:10 EST, user-authorized 15:41 EST)
+
+Fixes the confirmed regressions from the security + concurrency matrix
+re-run on `e1e0d57` (`fullstack/pr22-combined-verify/SECURITY_MATRIX.md`
+§6). All fixes test-first; the ported matrix suites were re-run in the
+`fullstack/pr22-matrix/` worktree (detached, ported files untracked
+there) against the new tip. New tip: `674311f` (was `e1e0d57`).
+
+### 10.1 Final-row verification on read — stats optimistic window + corrupt-data handling (commit `1bb7d17`)
+
+`loadVerifiedResults` (`src/server/profile-actions.ts`) trusted stored
+`'final'` rows with zero session GETs, which made two behaviours
+observable that PR #22's session-deriving read masked:
+
+- **Stats optimistic window (ADAPT S1/S3):** finalization writes the row
+  `'final'` before the session score commits, so a failed commit left
+  stats counting an outcome the scoreboard had not confirmed until the
+  retry landed.
+- **Corrupt-data handling in history (ADAPT D1/F6, R-D1/F6):** a corrupt
+  stored `sets` value hid a finalized result, while a corrupt session
+  score with valid stored sets showed it unverified.
+
+Fix: history verifies EVERY final row against the committed session
+(session exists, not cancelled, final score at exactly the row's
+revision; one GET each, bounded by the history limit — 50 GETs for 50
+entries at N=50/200, the perf-suite bound). When stored sets are
+unparseable the outcome is derived from the verified session score.
+Statistics verifies only recently finalized rows (10-minute window:
+covers prompt retries and the ~5-minute bounded DO alarm-recovery
+window); older rows stay trusted with zero GETs, so stats N=50/200/500
+stay at 0 GETs. A failed commit unretried past the window starts
+counting again — a documented trade-off, not a silent one.
+Future-dated `finalizedAt` values are never "recent" (production rows
+are written with real now, so a future value marks a fixture/legacy
+row, which stays trusted — migration 5d: an orphaned complete row
+still counts in statistics), and an unparseable `finalizedAt` is
+trusted the same way.
+
+Measured perf impact: stats N=50/200/500 still 0 GETs; history N=50
+and N=200 now cost 50 GETs for 50 entries (was 0; the perf test
+asserts ≤50, still green). The §12-era claim "history N=200 is 0
+GETs when all rows are final" is therefore stale — the cost is the
+deliberate price of verifying history rows.
+
+Tests: 6 new native tests in `pr22-stats-aggregation.test.ts` (5 failed
+before the fix; the window trade-off test passed before by design).
+Ported ADAPT S1/S3, ADAPT D1/F6, R-D1/F6 now pass in the matrix
+re-run. Five pre-existing tests pinned the old behaviour and were
+updated (see §10.4).
+
+### 10.2 K05 × validation error fidelity (commit `310b097`)
+
+A >64 KB series command body trips the room's K05 bound before
+validation, and both action wrappers mapped any non-OK room response
+to the generic "temporarily unavailable" message — fail-closed, but
+the message invites a retry that can never succeed.
+
+- `rallyCommandAction` + `schedulingAction` now surface the room's own
+  400 body error (`'Invalid rally command request.'`) via the new
+  `roomFailureFromResponse` helper, falling back to the generic message
+  only when the body is not a well-formed room failure.
+- `schedulingAction` pre-validates `createSeries` templates with
+  `validateSeries` (the same validator the room uses) before the room
+  hop, so oversized fields get the specific validation error (1 MB
+  title → `'Use a title between 1 and 72 characters.'`). `editSeries`
+  is NOT pre-validated: the room's host/active checks keep their error
+  precedence there, and the 400 surfacing covers its oversized-body
+  case. `createRallyAction` already pre-validates with zod +
+  `validateSession`, so its room 400 is unreachable; untouched.
+
+Tests: 2 new native tests in `rally-scheduling-command.test.ts` (both
+failed before the fix). The ported adv-inputs oversized-title test now
+passes in the matrix re-run.
+
+### 10.3 Adversarial ports — poll option id cap + uniform markRead error (commit `87ff445`)
+
+Both fixed on the PR #20 adversarial branch (`fb00b6d`, commit
+`7a0d645`) but never ported to the PR #22 line:
+
+- `validatePollOptions` now rejects non-string option ids and ids over
+  200 chars (`POLL_MAX_OPTION_ID_LENGTH`) with the existing 'unique
+  id' error, before any write; schema `maxLength` 2000/2000/200 on
+  `polls.options`/`tally`/`finalizedOptionId` and 200 on
+  `pollVotes.optionId` as the record-layer second line. A 10 KB option
+  id is now rejected; the 100 KB case already was (at a different
+  bound).
+- `markRead` returns `'Notification not found.'` for both a nonexistent
+  notification and another user's notification, closing the
+  existence/ownership oracle (low severity; record ids are
+  unguessable). The owner path is unchanged.
+
+Tests: native unit test for the 200/201-char boundary plus 1 MB and
+non-string ids (`src/lib/polls.test.ts`), native oracle test
+(`notification-actions.test.ts`) — both failed before the fix. The
+ported adv-inputs option-id ×2 and markRead tests now pass in the
+matrix re-run.
+
+### 10.4 Stale assertions updated (commit `674311f`)
+
+The loader verification (§10.1) and the uniform markRead error (§10.3)
+intentionally changed five pinned numbers and one error string; the
+underlying entries/totals are unchanged:
+
+- History now verifies every final row (1 GET each): the pending-row
+  test goes 1 → 3 GETs, the disputed-rows test 0 → 1, the lifecycle
+  final history read 1 → 4 total.
+- Statistics now verifies freshly finalized rows: the lifecycle tests
+  go 0 → 1 GET after a live finalization/re-finalization.
+- Corrupt stored sets no longer drop the row from history: the entry
+  is derived from the verified session score (ADAPT D1/F6).
+- Migration 7c: a legacy markRead without `recipientId` now reports
+  the uniform `'Notification not found.'` instead of the ownership
+  string; the fail-closed behaviour (success false, `readAt`
+  untouched) is unchanged.
+
+### 10.5 Gate and matrix re-run (new tip `674311f`)
+
+- Full gate, branch worktree: Vitest **366/366** (was 356/356; +10 new
+  tests), tsc clean, eslint clean, vite build clean, node --test
+  **34/34** (`tests/rally.test.mjs` + `tests/courts-games.test.mjs`).
+- Matrix re-run, `fullstack/pr22-matrix/` worktree at detached
+  `674311f` (ported files untracked, nothing committed there): full
+  run **465 passed / 35 failed (500)** — 42 native files all pass; the
+  5 failed files are all ported. Unique ported failures **24/110**
+  (was 31/110): pr19-races 11 (unchanged, all harness drift),
+  pr22-reconcile ADAPT 1/10 (F4/S4 only — visible-pending, owner
+  decision), pr20-reconcile 2/10 (R-F4 visible-pending, R-S8 harness
+  artifact), adv-inputs 4/38 (2 F7-decision, 2 drift), adv-bounds 6/28
+  (unchanged, all expected/fix-working). Zero class-(a) defects remain
+  in the ported suites. Logs: `fullstack/pr22-combined-verify/
+  MATRIX-RERUN-{pr19-races,pr22-reconcile,pr20-reconcile,pr20-adv-inputs,pr20-adv-bounds,full}.log`.
+
+### 10.6 Deliverables and caveats
+
+- Branch: `feature/muse-pr22-combined-fixes` @ `674311f` (was `e1e0d57`).
+  New commits: `1bb7d17` loader verification, `310b097` K05 fidelity,
+  `87ff445` adversarial ports, `674311f` stale-assertion updates.
+- Bundle: `fullstack/pr22-combined-fixes.bundle` — SHA-256
+  `3072c7343d1383e90bdce0f1e2532cb0973b6a90ca6841b7da1ab0e77d03e5cb`,
+  `git bundle verify` OK (complete history, head `674311f`) as reported
+  by the creation call. **Caveat:** that creation result failed an
+  execution-risk check, so the bundle was NOT re-processed afterwards —
+  no independent re-verify, no fresh-clone import, no patch-apply check
+  of this bundle. Those remain with the blocked fresh-clone
+  verification (SPRINT_HANDOFF.md §15). The old bundle (`69e83ea9…`,
+  tip `e1e0d57`) and old patches are now stale.
+- Patches: `fullstack/pr22-combined-fixes-patches/` — 31 files
+  (0001–0031), regenerated cleanly from `e6ff2d9..HEAD`; 34 commits in
+  range, 3 are merges (skipped by `format-patch`, as before).
+- Deliberately left as-is: the stats window trade-off (§10.1 — a failed
+  commit unretried past 10 minutes starts counting; the alternative,
+  reordering the finalization writes, would have required changing the
+  early-return repair path and the notification emission, and risked
+  the S3a repair behaviour — not worth it for a transient, self-healing
+  window); the history GET cost (50 for 50 entries — the perf bound,
+  not a regression); `editSeries` pre-validation (error precedence,
+  §10.2).
+
+Nothing was merged, deployed, pushed, or submitted; PR #21, PR #25,
+and main untouched; no production data or credentials touched. No
+GitHub push attempted (no credentials).
+
+---
+
 # Branch logs merged into this branch (appended at merge time)
 
 # PR #22 Port Fixes — Implementation Log
