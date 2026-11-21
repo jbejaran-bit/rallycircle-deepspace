@@ -251,6 +251,12 @@ describe('getPlayerStats and getMatchHistory privacy gates', () => {
     await expect(harness.call(getResultAuditAction, 'bob', { sessionId: committed })).resolves.toMatchObject({
       success: true, data: { entries: [{ kind: 'finalized', resultRevision: 2 }] },
     })
+    const row = harness.collections.get('sessions')!.get(committed)!
+    const score = JSON.parse(String(row.data.matchScore))
+    row.data.matchScore = JSON.stringify({ ...score, approvals: ['alice'] })
+    await expect(harness.call(getResultAuditAction, 'bob', { sessionId: committed })).resolves.toMatchObject({
+      success: true, data: { entries: [] },
+    })
   })
 
   it('returns newest-first history with the limit clamped to 1..50', async () => {

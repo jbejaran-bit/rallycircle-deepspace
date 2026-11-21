@@ -263,7 +263,13 @@ export const getResultAuditAction: ActionHandler<Env> = async ({ userId, params,
   const rows = await tools.query('resultAudits', { where: { sessionId }, orderBy: 'createdAt', orderDir: 'desc', limit: 50 })
   if (!rows.success) return failure('audit_unavailable', 'The result audit is unavailable.')
   return { success: true, data: { entries: rows.data.records
-    .filter(row => typeof row.data.resultRevision === 'number' && row.data.resultRevision <= score.revision)
+    .filter(({ data }) => {
+      if (typeof data.resultRevision !== 'number' || data.resultRevision > score.revision) return false
+      if (data.resultRevision < score.revision) return true
+      if (data.kind === 'finalized') return isEligibleForStats(score)
+      if (data.kind === 'disputed') return score.disputed
+      return data.kind === 'corrected' && score.correctionCount > 0
+    })
     .map(row => ({ kind: row.data.kind, detail: row.data.detail, resultRevision: row.data.resultRevision })) } }
 }
 

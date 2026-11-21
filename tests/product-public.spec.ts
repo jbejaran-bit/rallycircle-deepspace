@@ -50,6 +50,7 @@ test('mobile navigation closes on Escape and restores focus', async ({ page }) =
 
 test('landing lets keyboard users skip the navigation', async ({ page }) => {
   await page.goto('/')
+  await expect(page.getByTestId('static-landing')).toBeVisible()
   await page.keyboard.press('Tab')
   await expect(page.getByRole('link', { name: 'Skip to content' })).toBeFocused()
   await page.keyboard.press('Enter')
