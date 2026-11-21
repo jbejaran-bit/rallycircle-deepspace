@@ -48,7 +48,9 @@ export function validateSession(input: Omit<RallySession, 'hostId' | 'chatChanne
   if (!Number.isInteger(input.targetPlayers) || input.targetPlayers < 2 || input.targetPlayers > 12) return 'Choose 2–12 target players.'
   if (input.capacity != null && input.targetPlayers > input.capacity) return 'The planning target cannot exceed the maximum.'
   if (!['All levels', 'Beginner', 'Intermediate', 'Advanced'].includes(input.level)) return 'Select a skill level.'
-  if (input.notes.length > 400) return 'Keep notes under 400 characters.'
+  // Stored pre-field templates may lack `notes` entirely; treat a missing
+  // value as empty instead of crashing (F7).
+  if ((input.notes ?? '').length > 400) return 'Keep notes under 400 characters.'
   return null
 }
 

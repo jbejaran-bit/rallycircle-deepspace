@@ -63,6 +63,7 @@ export const exampleHistory: MatchHistoryEntry[] = [
     sets: [[6, 4], [6, 3]],
     finalizedAt: '2026-11-18T18:00:00.000Z',
     resultRevision: 12,
+    status: 'final',
   },
   {
     sessionId: 'session-1',
@@ -71,6 +72,7 @@ export const exampleHistory: MatchHistoryEntry[] = [
     sets: [[4, 6], [6, 7]],
     finalizedAt: '2026-11-11T18:00:00.000Z',
     resultRevision: 9,
+    status: 'final',
   },
 ]
 

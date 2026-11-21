@@ -103,6 +103,31 @@ interface RecoveryHooks {
   result(command: ResultRecovery): Promise<void>
 }
 const RECOVERY_DELAY_MS = 30_000
+/**
+ * A recovery that can never succeed (deleted record, permanently invalid
+ * command) must not alarm every 30s forever. After this many failed alarm
+ * ticks the key is dropped and the alarm stops; the user can still retry
+ * the original operation manually, which is the path the error messages
+ * already describe.
+ */
+const MAX_RECOVERY_ATTEMPTS = 10
+
+interface RecoveryEntry<T> {
+  command: T
+  attempts: number
+}
+
+/** Read a stored recovery entry. Accepts the legacy bare-command shape. */
+function readRecoveryEntry<T>(value: unknown): RecoveryEntry<T> | null {
+  if (!isRecord(value)) return null
+  if (typeof value.operation === 'string') {
+    return { command: value as unknown as T, attempts: 0 }
+  }
+  if (isRecord(value.command) && typeof value.attempts === 'number') {
+    return { command: value.command as unknown as T, attempts: value.attempts }
+  }
+  return null
+}
 
 async function applyCommand(command: RallyCommand, tool: RecordTool, recovery: RecoveryHooks): Promise<RallyCommandResult> {
   const sessionResult = await tool<GetActionData<RallySession>>(
@@ -117,14 +142,21 @@ async function applyCommand(command: RallyCommand, tool: RecordTool, recovery: R
     if (session.hostId !== command.userId) return failure('Only the session host can cancel it.')
     if (session.status === 'cancelled') return { success: true, data: { recordId: command.sessionId } }
     if (session.status !== 'open') return failure('Only an open session can be cancelled.')
-    if (session.pendingResult) return failure('Complete the pending result update before cancelling.')
+    // A failed finalization leaves pendingResult set; cancelling must
+    // still be possible, otherwise the session is frozen until the exact
+    // retry succeeds. Cancelling clears the marker — the unfinalized
+    // result stays unfinalized. On this architecture the history rows a
+    // partial finalization already wrote are inert: loadVerifiedResults
+    // only counts rows whose session score is final at the same revision,
+    // and a cancelled session's score can never become final, so the rows
+    // remain as storage-level provenance and never count.
     const activePoll = await checkPendingPoll(tool, command.sessionId, command.userId)
     if (activePoll !== false) return failure('The session schedule must finish updating before cancellation.')
 
 
     const result = await tool<MutateActionData>(
       'records.update',
-      { collection: 'sessions', recordId: command.sessionId, data: { status: 'cancelled' } },
+      { collection: 'sessions', recordId: command.sessionId, data: { status: 'cancelled', pendingResult: '' } },
       command.userId,
     )
     if (!result.success) return failure('The session could not be cancelled.')
@@ -151,6 +183,27 @@ async function applyCommand(command: RallyCommand, tool: RecordTool, recovery: R
   return failure('Invalid rally command.')
 }
 
+/** Read every RSVP row for a session, paging past the 100-row read cap. */
+async function queryAllSessionRsvps(
+  tool: RecordTool,
+  sessionId: string,
+  userId: string,
+): Promise<Array<{ data: RallyRSVP }> | null> {
+  const all: Array<{ data: RallyRSVP }> = []
+  let offset = 0
+  for (;;) {
+    const page = await tool<QueryActionData<RallyRSVP>>(
+      'records.query',
+      { collection: 'rsvps', where: { sessionId }, limit: 100, offset },
+      userId,
+    )
+    if (!page.success) return null
+    all.push(...page.data.records)
+    if (page.data.records.length < 100) return all
+    offset += page.data.records.length
+  }
+}
+
 /** Notify every RSVP holder (going/maybe) except `excludeUserId`. Best-effort: never throws. */
 async function notifyRsvpHolders(
   tool: RecordTool,
@@ -158,13 +211,9 @@ async function notifyRsvpHolders(
   excludeUserId: string,
   makeInput: (recipientId: string) => Omit<EmitNotificationInput, 'recipientId'>,
 ): Promise<void> {
-  const found = await tool<QueryActionData<RallyRSVP>>(
-    'records.query',
-    { collection: 'rsvps', where: { sessionId }, limit: 100 },
-    excludeUserId,
-  )
-  if (!found.success) return
-  for (const record of found.data.records) {
+  const found = await queryAllSessionRsvps(tool, sessionId, excludeUserId)
+  if (!found) return
+  for (const record of found) {
     const recipientId = record.data.userId
     if (recipientId === excludeUserId) continue
     await emitNotification(tool, { recipientId, ...makeInput(recipientId) })
@@ -348,16 +397,30 @@ async function isSessionParticipant(
 }
 
 async function refreshPollTally(tool: RecordTool, pollId: string, userId: string): Promise<void> {
-  const votes = await tool<QueryActionData<RallyPollVote>>(
-    'records.query',
-    { collection: 'pollVotes', where: { pollId }, limit: 500 },
-    userId,
-  )
-  if (!votes.success) return
-  const tally = tallyVotes(votes.data.records.map(record => ({
-    optionId: record.data.optionId,
-    userId: record.data.userId,
-  })))
+  // Page past the 500-row read cap: a single capped query silently
+  // dropped the oldest votes from the tally. A page that adds no new
+  // recordId stops the scan, so a store that ignores `offset` cannot
+  // loop forever (and cannot double-count).
+  const pageSize = 500
+  const seen = new Set<string>()
+  const votes: Array<{ optionId: string; userId: string }> = []
+  let offset = 0
+  for (let page = 0; page < 200; page++) {
+    const result = await tool<QueryActionData<RallyPollVote>>(
+      'records.query',
+      { collection: 'pollVotes', where: { pollId }, limit: pageSize, offset },
+      userId,
+    )
+    if (!result.success) return
+    const fresh = result.data.records.filter(record => !seen.has(record.recordId))
+    for (const record of fresh) {
+      seen.add(record.recordId)
+      votes.push({ optionId: record.data.optionId, userId: record.data.userId })
+    }
+    if (result.data.records.length < pageSize || fresh.length === 0) break
+    offset += result.data.records.length
+  }
+  const tally = tallyVotes(votes)
   await tool<MutateActionData>(
     'records.update',
     { collection: 'polls', recordId: pollId, data: { tally: serializePollTally(tally) } },
@@ -514,6 +577,16 @@ async function applyPollCommand(
       Date.parse(session.startsAt) !== Date.parse(chosen.startsAt) &&
       (Date.parse(session.startsAt) !== Date.parse(pollData.preparedStartsAt) ||
         (session.scheduleRevision ?? 0) !== pollData.preparedRevision)) {
+    // The finalize is abandoned — the edit wins — but the poll must not
+    // stay 'finalizing' forever: that bricks the poll (it can neither be
+    // finalized, cancelled, nor replaced) and blocks session cancellation,
+    // while the recovery alarm replays this same failure every 30s.
+    // Reopen the poll so the host can cancel it; the next alarm tick then
+    // sees the poll is no longer outstanding and clears the recovery key.
+    // A later finalize still fails honestly at the baseStartsAt check.
+    await tool<MutateActionData>('records.update', {
+      collection: 'polls', recordId: command.pollId, data: { status: 'open' },
+    }, userId)
     return failure('The session was edited during poll finalization. Its time was preserved.')
   }
   // A retry after the session write may find the chosen time already persisted.
@@ -690,7 +763,22 @@ export class RallyCommandRoom {
   ) {}
 
   fetch(request: Request): Promise<Response> {
-    if (request.method === 'POST' && new URL(request.url).pathname === '/geocode') {
+    // K01 (N-03): the room trusts no caller by default. Only the verified
+    // in-app actions call this object, and they stamp every fetch with the
+    // internal X-App-Action marker. A direct fetch without the marker — e.g.
+    // a forged body claiming userId 'host' — is rejected here, before the
+    // command is queued or parsed. This is defense in depth, not
+    // authentication: the action's Bearer <redacted> remains the only auth
+    // boundary, and no route exposes this object today. The marker itself
+    // is not a secret.
+    const pathname = new URL(request.url).pathname
+    if (request.method === 'POST' && (pathname === '/rally-command' || pathname === '/geocode')
+      && request.headers.get('X-App-Action') !== 'true') {
+      return Promise.resolve(pathname === '/geocode'
+        ? Response.json({ error: 'Invalid place name.' }, { status: 400 })
+        : Response.json(failure('Invalid rally command request.'), { status: 400 }))
+    }
+    if (request.method === 'POST' && pathname === '/geocode') {
       return this.geocode(request)
     }
     const result = this.queue.then(() => this.handle(request))
@@ -751,6 +839,7 @@ export class RallyCommandRoom {
         const id = this.env.RALLY_COMMAND_ROOMS.idFromName(`rally:${this.env.DEEPSPACE_APP_ID}:${sessionId}`)
         const response = await this.env.RALLY_COMMAND_ROOMS.get(id).fetch(new Request('https://internal/rally-command', {
           method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-App-Action': 'true' },
           body: JSON.stringify({ operation: 'cancel', sessionId, userId }),
         }))
         return (await response.json() as RallyCommandResult).success
@@ -790,24 +879,62 @@ export class RallyCommandRoom {
 
   private async armRecovery(key: string, command: PollFinalization | ResultRecovery) {
     await this.state.storage.setAlarm(Date.now() + RECOVERY_DELAY_MS)
-    await this.state.storage.put(key, command)
+    await this.state.storage.put(key, { command, attempts: 0 })
   }
 
   async alarm(): Promise<void> {
     const recovery = this.queue.then(() => this.recover())
     this.queue = recovery.then(() => undefined, () => undefined)
-    await recovery
+    try {
+      await recovery
+    } catch (error) {
+      // A throw before recover() persisted the next alarm (for example a
+      // storage read failed) would otherwise leave the recovery with no
+      // future alarm once the platform's retry budget is spent. Re-arm
+      // best-effort, then rethrow so the platform retries still apply;
+      // the replays are idempotent, so a duplicate delivery is safe.
+      await this.state.storage.setAlarm(Date.now() + RECOVERY_DELAY_MS).catch(() => undefined)
+      throw error
+    }
   }
 
   private async recover(): Promise<void> {
     const storage = this.state.storage
-    const pollCommand = await storage.get<PollFinalization>('pollRecovery')
-    const resultCommand = await storage.get<ResultRecovery>('resultRecovery')
-    if (!pollCommand && !resultCommand) return
+    const pollRaw = await storage.get('pollRecovery')
+    const resultRaw = await storage.get('resultRecovery')
+    let pollEntry = pollRaw === undefined ? null : readRecoveryEntry<PollFinalization>(pollRaw)
+    let resultEntry = resultRaw === undefined ? null : readRecoveryEntry<ResultRecovery>(resultRaw)
+    // A stored value that cannot be interpreted can never succeed: drop
+    // it instead of alarming on it forever.
+    if (pollRaw !== undefined && !pollEntry) await storage.delete('pollRecovery')
+    if (resultRaw !== undefined && !resultEntry) await storage.delete('resultRecovery')
+    if (!pollEntry && !resultEntry) return
+    // Drop entries that have exhausted the retry budget.
+    if (pollEntry && pollEntry.attempts >= MAX_RECOVERY_ATTEMPTS) {
+      await storage.delete('pollRecovery')
+      pollEntry = null
+    }
+    if (resultEntry && resultEntry.attempts >= MAX_RECOVERY_ATTEMPTS) {
+      await storage.delete('resultRecovery')
+      resultEntry = null
+    }
+    if (!pollEntry && !resultEntry) {
+      await storage.deleteAlarm()
+      return
+    }
     // The next alarm is persisted before network writes so eviction is safe.
     await storage.setAlarm(Date.now() + RECOVERY_DELAY_MS)
+    // Count this tick against the budget before replaying, so a crash
+    // mid-replay still consumes an attempt.
+    if (pollEntry) {
+      await storage.put('pollRecovery', { command: pollEntry.command, attempts: pollEntry.attempts + 1 })
+    }
+    if (resultEntry) {
+      await storage.put('resultRecovery', { command: resultEntry.command, attempts: resultEntry.attempts + 1 })
+    }
     const tool = this.recordTool()
-    if (pollCommand) {
+    if (pollEntry) {
+      const pollCommand = pollEntry.command
       const poll = await tool<GetActionData<RallyPoll>>('records.get', {
         collection: 'polls', recordId: pollCommand.pollId,
       }, pollCommand.userId)
@@ -819,7 +946,8 @@ export class RallyCommandRoom {
         }
       }
     }
-    if (resultCommand) {
+    if (resultEntry) {
+      const resultCommand = resultEntry.command
       const session = await tool<GetActionData<RallySession>>('records.get', {
         collection: 'sessions', recordId: resultCommand.sessionId,
       }, resultCommand.userId)
@@ -862,7 +990,7 @@ export const rallyCommandAction: ActionHandler<Env> = async ({ userId, params, t
     const response = await room.fetch(
       new Request('https://internal/rally-command', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-App-Action': 'true' },
         body: JSON.stringify(command),
       }),
     )
@@ -1088,7 +1216,7 @@ export const schedulingAction: ActionHandler<Env> = async ({ userId, params, env
     const response = await room.fetch(
       new Request('https://internal/rally-command', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-App-Action': 'true' },
         body: JSON.stringify(command),
       }),
     )
