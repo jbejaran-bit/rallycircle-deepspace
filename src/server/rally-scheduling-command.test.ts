@@ -445,6 +445,19 @@ describe('Scheduling polls', () => {
       .resolves.toMatchObject({ success: false })
   })
 
+  it('keeps the calendar revision when retrying after only the session time was saved', async () => {
+    const harness = createHarness()
+    const pollId = await openPoll(harness)
+    const session = harness.sessions.get('poll-session')!.data
+    session.startsAt = '2030-01-05T18:00:00.000Z'
+    session.scheduleRevision = 1
+    await expect(harness.command('host', { operation: 'finalizePoll', sessionId: 'poll-session', pollId, optionId: 'sat' }))
+      .resolves.toMatchObject({ success: true })
+    expect(session.scheduleRevision).toBe(1)
+    expect(harness.polls.get(pollId)!.data.status).toBe('finalized')
+    expect([...harness.notifications.values()].filter(row => row.data.type === 'schedule_changed')).toHaveLength(2)
+  })
+
   it('rejects finalising a time that is no longer in the future', async () => {
     const harness = createHarness()
     const pollId = await openPoll(harness)

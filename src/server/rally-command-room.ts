@@ -469,16 +469,19 @@ async function applyPollCommand(
   if (Date.parse(chosen.startsAt) <= Date.now()) return failure('The proposed time is no longer in the future.')
   const guard = finalizePoll(session.hostId, userId, command.optionId, optionIds)
   if ('error' in guard) return failure(guard.error)
-  const updatedSession = await tool<MutateActionData>(
-    'records.update',
-    {
-      collection: 'sessions',
-      recordId: sessionId,
-      data: { startsAt: chosen.startsAt, scheduleRevision: (session.scheduleRevision ?? 0) + 1 },
-    },
-    userId,
-  )
-  if (!updatedSession.success) return failure('The session time could not be updated.')
+  // A retry after the session write may find the chosen time already persisted.
+  if (Date.parse(session.startsAt) !== Date.parse(chosen.startsAt)) {
+    const updatedSession = await tool<MutateActionData>(
+      'records.update',
+      {
+        collection: 'sessions',
+        recordId: sessionId,
+        data: { startsAt: chosen.startsAt, scheduleRevision: (session.scheduleRevision ?? 0) + 1 },
+      },
+      userId,
+    )
+    if (!updatedSession.success) return failure('The session time could not be updated.')
+  }
   const updatedPoll = await tool<MutateActionData>(
     'records.update',
     { collection: 'polls', recordId: command.pollId, data: { status: 'finalized', finalizedOptionId: command.optionId } },
