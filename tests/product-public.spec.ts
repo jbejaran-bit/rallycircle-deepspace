@@ -61,3 +61,17 @@ test('rally creation rejects anonymous requests', async ({ request }) => {
   const response = await request.post('/api/actions/createRally', { data: {} })
   expect(response.status()).toBe(401)
 })
+
+test('advanced profile and inbox controls stay behind sign-in on narrow screens', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 760 })
+  for (const { path, reason, privateHeading } of [
+    { path: '/settings', reason: /manage your player profile/, privateHeading: 'Match history' },
+    { path: '/notifications', reason: /see your rally updates/, privateHeading: 'Notifications' },
+  ]) {
+    await page.goto(path)
+    await expect(page.getByRole('heading', { name: 'Sign in to continue' })).toBeVisible()
+    await expect(page.getByText(reason)).toBeVisible()
+    await expect(page.getByRole('heading', { name: privateHeading, exact: true })).toHaveCount(0)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320)
+  }
+})
