@@ -201,7 +201,7 @@ function createHarness() {
       if (tool === 'records.create' && params.collection === 'sessions') {
         const data = params.data as Omit<RallySession, 'hostId'>
         const userId = request.headers.get('X-User-Id') ?? ''
-        const recordId = `session-${++nextRecordId}`
+        const recordId = typeof params.recordId === 'string' ? params.recordId : `session-${++nextRecordId}`
         sessions.set(recordId, {
           recordId,
           createdBy: userId,
@@ -298,12 +298,13 @@ function createHarness() {
     get: async (key: string) => store.get(key),
     delete: async (key: string) => store.delete(key),
   } } as unknown as DurableObjectState
-  let room = new RallyCommandRoom(state, env)
   const commandNamespace = {
     idFromName: (name: string) => name,
-    get: () => ({ fetch: (request: Request) => room.fetch(request) }),
+    get: (id: string) => ({ fetch: (request: Request) => (id.includes(':series:') ? seriesRoom : room).fetch(request) }),
   }
   const actionEnv = { ...env, RALLY_COMMAND_ROOMS: commandNamespace } as unknown as Env
+  let room = new RallyCommandRoom(state, actionEnv)
+  const seriesRoom = new RallyCommandRoom(state, actionEnv)
 
   function addSession(recordId: string, hostId: string, status: RallySession['status'] = 'open') {
     sessions.set(recordId, {
@@ -377,7 +378,7 @@ function createHarness() {
   return {
     addSession, command, scheduleCommand, notificationCommand,
     failMutation: (index: number) => { mutationsUntilFailure = index },
-    restart: () => { room = new RallyCommandRoom(state, env) },
+    restart: () => { room = new RallyCommandRoom(state, actionEnv) },
     alarm: () => room.alarm(),
     rsvps, sessions, waitlists, polls, pollVotes, notifications, notificationPreferences, recurringSeries,
     interruptQueueCleanup: (times = 1) => { failQueueDeletes = times },
@@ -519,6 +520,17 @@ describe('Scheduling polls', () => {
     expect([...harness.notifications.values()].filter(row => row.data.type === 'schedule_changed')).toHaveLength(103)
   })
 
+  it('preserves a direct time edit made after a poll opens', async () => {
+    const harness = createHarness()
+    const pollId = await openPoll(harness)
+    const session = harness.sessions.get('poll-session')!.data
+    session.startsAt = '2030-01-02T18:00:00.000Z'
+    await expect(harness.command('host', { operation: 'finalizePoll', sessionId: 'poll-session', pollId, optionId: 'sat' }))
+      .resolves.toMatchObject({ success: false, error: 'The session time changed after this poll opened.' })
+    expect(session.startsAt).toBe('2030-01-02T18:00:00.000Z')
+    expect(harness.polls.get(pollId)?.data.status).toBe('open')
+  })
+
   it('rejects finalising a time that is no longer in the future', async () => {
     const harness = createHarness()
     const pollId = await openPoll(harness)
@@ -576,7 +588,26 @@ describe('Recurring series', () => {
     expect(instances.every(row => row.data.status === 'open')).toBe(true)
     expect([...harness.rsvps.values()].filter(row => row.data.userId === 'host')).toHaveLength(3)
     await expect(harness.scheduleCommand('host', { operation: 'generateOccurrences', seriesId }))
-      .resolves.toMatchObject({ success: false, error: 'All occurrences have already been generated.' })
+      .resolves.toMatchObject({ success: true })
+  })
+
+  it('replays draft creation safely, edits only unpublished series, and repairs interrupted publication', async () => {
+    const harness = createHarness()
+    const draft = { operation: 'createSeries', seriesId: 'test-replay', template,
+      startStartsAt: '2030-01-05T18:00:00.000Z', intervalWeeks: 1, count: 3 }
+    await expect(harness.scheduleCommand('host', draft)).resolves.toMatchObject({ success: true })
+    await expect(harness.scheduleCommand('host', draft)).resolves.toMatchObject({ success: true })
+    await expect(harness.scheduleCommand('alice', draft)).resolves.toMatchObject({ success: false })
+    const edit = { ...draft, operation: 'editSeries', count: 2 }
+    await expect(harness.scheduleCommand('alice', edit)).resolves.toMatchObject({ success: false })
+    await expect(harness.scheduleCommand('host', edit)).resolves.toMatchObject({ success: true })
+    const publish = { operation: 'generateOccurrences', seriesId: draft.seriesId }
+    harness.failMutation(2)
+    await expect(harness.scheduleCommand('host', publish)).resolves.toMatchObject({ success: false })
+    await expect(harness.scheduleCommand('host', edit)).resolves.toMatchObject({ success: false })
+    await expect(harness.scheduleCommand('host', publish)).resolves.toMatchObject({ success: true })
+    expect(harness.sessions.size).toBe(2)
+    expect(harness.rsvps.size).toBe(2)
   })
 
   it('cancels only future open instances and leaves the series record cancelled', async () => {

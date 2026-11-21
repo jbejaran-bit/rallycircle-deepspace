@@ -746,7 +746,16 @@ export class RallyCommandRoom {
     if (command) {
       return Response.json(await applyCommand(command, tool, this.recoveryHooks))
     }
-    if (seriesCommand) return Response.json(await applySeriesCommand(seriesCommand, tool))
+    if (seriesCommand) {
+      return Response.json(await applySeriesCommand(seriesCommand, tool, async (sessionId, userId) => {
+        const id = this.env.RALLY_COMMAND_ROOMS.idFromName(`rally:${this.env.DEEPSPACE_APP_ID}:${sessionId}`)
+        const response = await this.env.RALLY_COMMAND_ROOMS.get(id).fetch(new Request('https://internal/rally-command', {
+          method: 'POST',
+          body: JSON.stringify({ operation: 'cancel', sessionId, userId }),
+        }))
+        return (await response.json() as RallyCommandResult).success
+      }))
+    }
     return Response.json(failure('Invalid rally command.'), { status: 400 })
   }
 
@@ -873,19 +882,20 @@ export const rallyCommandAction: ActionHandler<Env> = async ({ userId, params, t
 }
 
 type SeriesCommand =
-  | { operation: 'createSeries'; userId: string; seriesId: string; template: SeriesTemplate; startStartsAt: string; intervalWeeks: number; count: number }
+  | { operation: 'createSeries' | 'editSeries'; userId: string; seriesId: string; template: SeriesTemplate; startStartsAt: string; intervalWeeks: number; count: number }
   | { operation: 'generateOccurrences'; userId: string; seriesId: string }
   | { operation: 'cancelSeries'; userId: string; seriesId: string }
 
 function parseSeriesCommand(value: unknown): SeriesCommand | null {
-  if (!isRecord(value) || typeof value.userId !== 'string' || !value.userId) return null
-  if (value.operation === 'createSeries' &&
+  if (!isRecord(value) || typeof value.userId !== 'string' || !value.userId ||
+      typeof value.seriesId !== 'string' || !/^[a-z0-9_-]{1,100}$/i.test(value.seriesId)) return null
+  if ((value.operation === 'createSeries' || value.operation === 'editSeries') &&
       typeof value.seriesId === 'string' && value.seriesId &&
       typeof value.startStartsAt === 'string' &&
       typeof value.intervalWeeks === 'number' && typeof value.count === 'number' &&
       isRecord(value.template)) {
     return {
-      operation: 'createSeries',
+      operation: value.operation,
       userId: value.userId,
       seriesId: value.seriesId,
       template: value.template as unknown as SeriesTemplate,
@@ -901,8 +911,24 @@ function parseSeriesCommand(value: unknown): SeriesCommand | null {
   return null
 }
 
-async function applySeriesCommand(command: SeriesCommand, tool: RecordTool): Promise<RallyCommandResult> {
+async function applySeriesCommand(
+  command: SeriesCommand, tool: RecordTool,
+  cancelSession: (sessionId: string, userId: string) => Promise<boolean>,
+): Promise<RallyCommandResult> {
   if (command.operation === 'createSeries') {
+    const existing = await tool<GetActionData<RecurringSeriesRecord>>('records.get', {
+      collection: 'recurringSeries', recordId: command.seriesId,
+    }, command.userId)
+    if (existing.success) {
+      const series = existing.data.record.data
+      if (series.hostId === command.userId && series.template === serializeSeriesTemplate(command.template) &&
+          Date.parse(series.startStartsAt) === Date.parse(command.startStartsAt) &&
+          series.intervalWeeks === command.intervalWeeks && series.count === command.count) {
+        return { success: true, data: { recordId: command.seriesId } }
+      }
+      return failure('This series is unavailable.')
+    }
+    if (existing.error !== 'Record not found') return failure('The series could not be checked.')
     const problem = validateSeries({
       template: command.template,
       startStartsAt: command.startStartsAt,
@@ -940,29 +966,68 @@ async function applySeriesCommand(command: SeriesCommand, tool: RecordTool): Pro
   const series = found.data.record.data
   if (series.hostId !== command.userId) return failure('Only the series host can change it.')
 
+  if (command.operation === 'editSeries') {
+    if (series.status !== 'active') return failure('This series is not active.')
+    const instances = await tool<QueryActionData<RallySession>>('records.query', {
+      collection: 'sessions', where: { seriesId: command.seriesId }, limit: 1,
+    }, command.userId)
+    if (!instances.success) return failure('Published sessions could not be checked.')
+    if (series.generatedCount || instances.data.records.length) return failure('A published series cannot be edited.')
+    const problem = validateSeries(command)
+    if (problem) return failure(problem)
+    const updated = await tool<MutateActionData>('records.update', {
+      collection: 'recurringSeries', recordId: command.seriesId,
+      data: { template: serializeSeriesTemplate(command.template), startStartsAt: new Date(command.startStartsAt).toISOString(),
+        intervalWeeks: command.intervalWeeks, count: command.count },
+    }, command.userId)
+    return updated.success
+      ? { success: true, data: { recordId: command.seriesId } }
+      : failure('The series could not be updated.')
+  }
+
   if (command.operation === 'generateOccurrences') {
     if (series.status !== 'active') return failure('This series is not active.')
-    if (series.generatedCount >= series.count) return failure('All occurrences have already been generated.')
+    if (series.generatedCount >= series.count) return { success: true, data: { recordId: command.seriesId } }
     const template = parseSeriesTemplate(series.template)
     if (!template) return failure('This series is unavailable.')
     for (let index = series.generatedCount; index < series.count; index++) {
       const startsAt = occurrenceStartsAt(series.startStartsAt, index, series.intervalWeeks)
-      if (Date.parse(startsAt) <= Date.now()) return failure('A series occurrence is no longer in the future.')
-      const created = await tool<MutateActionData>(
-        'records.create',
-        {
-          collection: 'sessions',
+      const occurrenceId = `series-${command.seriesId}-${index}`
+      const indexed = await tool<GetActionData<RallySession>>('records.get', {
+        collection: 'sessions', recordId: occurrenceId,
+      }, command.userId)
+      if (indexed.success && (indexed.data.record.data.seriesId !== command.seriesId ||
+          indexed.data.record.data.hostId !== command.userId)) {
+        return failure('The series session is unavailable.')
+      }
+      if (!indexed.success && indexed.error !== 'Record not found') return failure('The series session could not be checked.')
+      let recordId = indexed.success ? occurrenceId : undefined
+      if (!recordId) {
+        const legacy = await tool<QueryActionData<RallySession>>('records.query', {
+          collection: 'sessions', where: { seriesId: command.seriesId, hostId: command.userId, startsAt }, limit: 1,
+        }, command.userId)
+        if (!legacy.success) return failure('The series session could not be checked.')
+        recordId = legacy.data.records[0]?.recordId
+      }
+      if (!recordId) {
+        if (Date.parse(startsAt) <= Date.now()) return failure('A series occurrence is no longer in the future.')
+        const created = await tool<MutateActionData>('records.create', {
+          collection: 'sessions', recordId: occurrenceId,
           data: { ...template, startsAt, seriesId: command.seriesId, chatChannelId: '', status: 'open' },
-        },
-        command.userId,
-      )
-      if (!created.success) return failure('A series session could not be created.')
-      const rsvp = await tool<MutateActionData>(
-        'records.create',
-        { collection: 'rsvps', data: { sessionId: created.data.recordId, status: 'going' } },
-        command.userId,
-      )
-      if (!rsvp.success) return failure('The host RSVP could not be saved.')
+        }, command.userId)
+        if (!created.success) return failure('A series session could not be created.')
+        recordId = created.data.recordId
+      }
+      const existingRsvp = await tool<QueryActionData<RallyRSVP>>('records.query', {
+        collection: 'rsvps', where: { sessionId: recordId, userId: command.userId }, limit: 1,
+      }, command.userId)
+      if (!existingRsvp.success) return failure('The host RSVP could not be checked.')
+      if (existingRsvp.data.records.length === 0) {
+        const rsvp = await tool<MutateActionData>('records.create', {
+          collection: 'rsvps', data: { sessionId: recordId, status: 'going' },
+        }, command.userId)
+        if (!rsvp.success) return failure('The host RSVP could not be saved.')
+      }
     }
     const updated = await tool<MutateActionData>(
       'records.update',
@@ -975,6 +1040,7 @@ async function applySeriesCommand(command: SeriesCommand, tool: RecordTool): Pro
   }
 
   // cancelSeries
+  if (command.operation !== 'cancelSeries') return failure('Invalid scheduling command.')
   if (series.status !== 'active') return failure('This series is already cancelled.')
   const instances = await tool<QueryActionData<RallySession>>(
     'records.query',
@@ -990,13 +1056,9 @@ async function applySeriesCommand(command: SeriesCommand, tool: RecordTool): Pro
     }
   }
   for (const instance of future) {
-    const cancelled = await tool<MutateActionData>(
-      'records.update',
-      { collection: 'sessions', recordId: instance.recordId, data: { status: 'cancelled' } },
-      command.userId,
-    )
-    if (!cancelled.success) return failure('A series session could not be cancelled. Try again.')
-    await notifySessionCancelled(tool, instance.data, instance.recordId, command.userId)
+    if (!await cancelSession(instance.recordId, command.userId)) {
+      return failure('A series session could not be cancelled. Try again.')
+    }
   }
   const updated = await tool<MutateActionData>(
     'records.update',
@@ -1019,9 +1081,7 @@ export const schedulingAction: ActionHandler<Env> = async ({ userId, params, env
     userId,
   })
   if (!command) return failure('Invalid scheduling command.')
-  const roomName = command.operation === 'createSeries'
-    ? `rally:${env.DEEPSPACE_APP_ID}:series-create:${userId}`
-    : `rally:${env.DEEPSPACE_APP_ID}:series:${command.seriesId}`
+  const roomName = `rally:${env.DEEPSPACE_APP_ID}:series:${command.seriesId}`
   const room = env.RALLY_COMMAND_ROOMS.get(env.RALLY_COMMAND_ROOMS.idFromName(roomName))
   let result: unknown
   try {

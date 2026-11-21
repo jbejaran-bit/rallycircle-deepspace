@@ -64,6 +64,7 @@ export default function DashboardPage() {
           </div>
           <div className="flex flex-wrap gap-2">
             <Link to="/notifications" className={outline}>Notifications</Link>
+            <Link to="/series" className={outline}>Recurring rallies</Link>
             <Link to="/games" className={outline}>Find a game</Link>
             <Link to="/rallies?create=1" className={`${button} bg-[#d7fc83] text-[#152015] hover:bg-[#ecffb0]`}><Plus size={16} aria-hidden /> Create a rally</Link>
           </div>
