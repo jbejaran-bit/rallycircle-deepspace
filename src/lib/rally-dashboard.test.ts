@@ -139,3 +139,28 @@ it('ignores malformed waitlist identifiers without hiding community openings', (
   expect(filterAgenda(dashboard.entries, 'waitlisted')).toEqual([])
   expect(dashboard.gamesNeedingPlayers.map(game => game.recordId)).toEqual(['open'])
 })
+
+it('does not advertise a precise opening count for malformed legacy session limits', () => {
+  const invalid = [
+    { targetPlayers: 0 },
+    { targetPlayers: NaN },
+    { targetPlayers: 2.5 },
+    { targetPlayers: 13 },
+    { targetPlayers: 4, capacity: 2 },
+    { targetPlayers: 2, capacity: -1 },
+    { targetPlayers: 2, capacity: Infinity },
+    { targetPlayers: 2, capacity: 2.5 },
+  ] as Partial<RallySession>[]
+  const sessions = [
+    ...invalid.map((patch, index) => row(`invalid-${index}`, patch)),
+    row('valid-capped', { targetPlayers: 4, capacity: 4 }),
+    row('valid-uncapped', { targetPlayers: 2 }),
+  ]
+  const dashboard = buildDashboard(sessions, [], [], 'me', now)
+  expect(dashboard.gamesNeedingPlayers.map(({ recordId, needed }) => ({ recordId, needed })))
+    .toEqual([{ recordId: 'valid-capped', needed: 4 }, { recordId: 'valid-uncapped', needed: 2 }])
+  // Do not hide a user's own historical session simply because its limits
+  // are malformed; only public availability recommendations are suppressed.
+  expect(buildDashboard([row('mine', { hostId: 'me', targetPlayers: NaN })], [], [], 'me', now).entries)
+    .toHaveLength(1)
+})
