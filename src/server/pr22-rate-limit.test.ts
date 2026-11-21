@@ -388,7 +388,9 @@ function createHarness(clock: () => number = Date.now) {
   async function rawFetch(body: string | Record<string, unknown>) {
     return room.fetch(new Request('https://internal/rally-command', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      // The combined branch's K01 marker check runs before parsing: these
+      // in-app test fetches stamp the marker, exactly like the real actions.
+      headers: { 'Content-Type': 'application/json', 'X-App-Action': 'true' },
       body: typeof body === 'string' ? body : JSON.stringify(body),
     }))
   }
@@ -396,7 +398,7 @@ function createHarness(clock: () => number = Date.now) {
   async function geocodeFetch(query: string) {
     return room.fetch(new Request('https://internal/geocode', {
       method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
+      headers: { 'Content-Type': 'text/plain', 'X-App-Action': 'true' },
       body: query,
     }))
   }
