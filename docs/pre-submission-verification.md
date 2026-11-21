@@ -1,5 +1,7 @@
 # RallyCircle submission review
 
+This is the historical review for PR #20 and stabilization commit `d7270b1`. Follow the [current release checklist](final-release-checklist.md) and [reviewer demo](reviewer-demo.md) for the integrated candidate.
+
 **Decision:** Hold production deployment and submission. The stable review path starts from the stabilization commit `d7270b1`. Rehearse it with authorized accounts in a disposable DeepSpace app before deciding whether to deploy. PR #20 at `f492736` remains the advanced review path. Deadline is November 23, 2026 at 11:59 PM Eastern unless the program confirms an extension.
 
 ## Verification matrix

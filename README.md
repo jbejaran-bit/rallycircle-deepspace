@@ -1,25 +1,23 @@
 # RallyCircle
 
-RallyCircle helps tennis players organize practice sessions. A host publishes a session and shares a direct link. Players can RSVP, see the group update live, and use the session chat to coordinate.
+RallyCircle helps tennis players find a court, organize a rally, and play a match. Hosts share one link for RSVPs, waitlists, chat, Courtboard, and scoring.
 
-## Court finder
+I built RallyCircle to answer the question that gets lost in group chats: do we have enough players to play? In a doubles rally, the attendance panel shows **Doubles ready!** when it counts four distinct confirmed players.
 
-The Courts tab maps three Pittsburgh tennis venues. Players can optionally sort by straight-line distance using their browser location, open the official Pittsburgh RecDesk booking portal in a new tab, and start a Rally with the selected court already filled in. RecDesk supplies permit availability and completes bookings. RallyCircle does not infer walk-on occupancy or create a reservation.
+![RallyCircle landing page on desktop, captured from the running app](docs/screenshots/landing-desktop.jpg)
 
-Map data © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright). Court locations are based on the [City of Pittsburgh Courts and Rinks dataset](https://data.wprdc.org/dataset/city-of-pittsburgh-courts).
+## Experience the core workflow
 
-## DeepSpace features
+Follow the [60-second reviewer demo](docs/reviewer-demo.md) to discover a court, create a doubles rally, watch the fourth confirmation, and score a point. The live walkthrough requires an approved disposable DeepSpace app and four test accounts. The signed-out landing and sign-in gate can be explored locally.
 
-| Feature | What RallyCircle uses it for |
-| --- | --- |
-| Authentication | Sign in with GitHub or Google to open the session board. |
-| Synced records | Save sessions and RSVPs in SQLite-backed Durable Objects and update both browsers through record subscriptions. |
-| Channel messaging | Give each session a separate group conversation using the built-in messaging schemas and subscription hook. |
-| Presence | Show how many distinct users are viewing a session. |
+## How it works
 
-The target group size helps players plan. Each account gets one RSVP per session through the database uniqueness rule. Sessions and chat are visible to signed-in members. Host cancellation is a record update. If chat setup fails, the session remains available for RSVPs. Input limits and session-state checks at the UI are distinct from the server's identity, permission and uniqueness checks.
+- React and Vite render the app. A Hono router on Cloudflare Workers handles HTTP, and DeepSpace supplies OAuth, record subscriptions, messaging, and presence.
+- Attendance commands use verified identity and serialize writes per rally. Capacity counts distinct players, and a freed seat goes to the next eligible player in the waitlist. The attendance panel derives readiness from the same RSVP subscription that feeds the roster.
+- Match scores use revisions to detect stale writes. Player statistics count confirmed results and exclude disputed or pending results.
+- Court search combines OpenStreetMap discovery with curated venues. [OpenStreetMap attribution](https://www.openstreetmap.org/copyright)
 
-## Local setup
+## Run the public checks
 
 Use Node 24 and npm 11.6 or newer.
 
@@ -27,23 +25,12 @@ Use Node 24 and npm 11.6 or newer.
 npm ci
 npm run validate
 npm run lint
-node --test tests/rally.test.mjs
-```
-
-For a first-time deploy, sign in to DeepSpace and confirm the account with `npx deepspace auth whoami`. Run `npx deepspace app init` to register the app and write its app ID into `wrangler.toml`. Set the GitHub origin before deploying so DeepSpace records GitHub as the source. Commit and push the registered configuration. Keep `.dev.vars`, CLI login state and test credentials out of Git.
-
-```sh
+node --test tests/*.test.mjs
 npm run build
-npx deepspace test run
-npx deepspace test run tests/rally-collab.spec.ts
-npx deepspace deploy
+npx playwright install chromium
+npm run test:public
 ```
 
-The collaboration test needs two usable SDK test accounts. Use `npx deepspace test accounts list --usable` to check the local account pool. See the [DeepSpace testing guide](https://docs.deep.space/guides/testing) if it has fewer than two accounts. Set the absolute `DEEPSPACE_TEST_BROWSER_EXECUTABLE_PATH` when using system Chromium. By default Playwright runs a local server. To check the production URL, set `RALLYCIRCLE_TEST_URL` to the confirmed deployment and run `npx playwright test -c tests/playwright.config.ts tests/rally-collab.spec.ts`. The test creates a clearly labeled session and cancels it at the end.
+For a signed-out preview, run `npm exec -- vite --host 127.0.0.1` and open the local URL it prints. For authenticated verification, use the [release checklist](docs/final-release-checklist.md) and the [official DeepSpace testing guide](https://docs.deep.space/guides/testing). Keep CLI state, local variables, and account files out of Git.
 
-## Code map
-
-- `src/pages/(app)/(protected)/rallies.tsx` contains session creation, attendance, chat and link navigation.
-- `src/schemas/rally-schema.ts` defines data and access rules.
-- `src/server/http-routes.ts` carries the selected session through the platform OAuth redirect.
-- `tests/rally-collab.spec.ts` checks mobile invite access, RSVP updates, presence and chat across two accounts.
+The public browser suite and local command tests cover different layers. Live multi-account behavior remains a release gate. The [review notes](docs/reviewer-demo.md#verification) record the evidence and its limits.
