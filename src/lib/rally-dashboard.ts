@@ -12,8 +12,17 @@ export function buildDashboard(
   now: number,
   communityResponses: RallyRSVP[] | null = responses,
 ) {
-  const myResponses = new Map(responses.filter(row => row.userId === userId).map(row => [row.sessionId, row.status]))
-  const myWaitlist = new Set(waitlist.filter(row => row.userId === userId).map(row => row.sessionId))
+  // Keep the first valid membership per session, matching Find Games and
+  // rally detail. A later malformed or duplicate legacy row must not turn a
+  // confirmed RSVP into a tentative one or hide a joinable game.
+  const myResponses = new Map<string, RallyRSVP['status']>()
+  for (const response of responses) {
+    if (response.userId !== userId || typeof response.sessionId !== 'string' || !response.sessionId ||
+        (response.status !== 'going' && response.status !== 'maybe') || myResponses.has(response.sessionId)) continue
+    myResponses.set(response.sessionId, response.status)
+  }
+  const myWaitlist = new Set(waitlist.filter(row => row.userId === userId &&
+    typeof row.sessionId === 'string' && row.sessionId).map(row => row.sessionId))
   const entries = sessions.flatMap(({ recordId, data }) => {
     const score = readMatchScore(data.matchScore)
     const side = score?.teams.findIndex(team => team.includes(userId)) ?? -1
