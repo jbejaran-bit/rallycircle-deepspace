@@ -1,5 +1,6 @@
 import { recordPages } from './record-pages.js'
 import type { ActionHandler, ActionResult, GetActionData, MutateActionData, QueryActionData } from 'deepspace/worker'
+import { BodyTooLargeError, readBoundedBodyText } from 'deepspace/worker'
 import { validCapacity, type RallyRSVP, type RallySession, type RallyWaitlist, type RSVPStatus } from '../lib/rally.js'
 import { awardPoint, correctResult, createMatchScore, isFinalTransition, readMatchScore, resultStatus, reviewResult, scoreEditSchema, validateCorrectedSets } from '../lib/rally-score.js'
 import { castVote, parsePollOptions, parsePollTally, serializePollOptions, serializePollTally, tallyVotes, validatePollOptions, type PollOptionInput } from '../lib/polls.js'
@@ -10,6 +11,20 @@ import type { z } from 'zod'
 import { applyFinalization, writeAudit } from './result-finalization.js'
 import { fetchGeocodedPlaces, GEOCODER_MIN_GAP_MS } from './court-discovery.js'
 import type { Env } from '../../worker.js'
+
+/** Largest command body the room will read (K05). Commands are small JSON; anything larger is rejected, never parsed. */
+const MAX_COMMAND_BODY_BYTES = 64 * 1024
+
+/** Per-user, per-session, per-class rate limits (K03), fixed 60 s windows, kept in memory on the DO instance. */
+const RATE_LIMIT_WINDOW_MS = 60_000
+const RATE_LIMITS = { attendance: 30, score: 120, cancel: 5 } as const
+type RateLimitClass = keyof typeof RATE_LIMITS
+
+function rateLimitClass(operation: string): RateLimitClass {
+  if (operation === 'cancel' || operation === 'cancelSeries') return 'cancel'
+  if (operation === 'startMatch' || operation === 'scorePoint' || operation === 'reviewResult') return 'score'
+  return 'attendance'
+}
 
 type ScoreEdit = z.infer<typeof scoreEditSchema> & { sessionId: string; userId: string }
 
@@ -756,11 +771,18 @@ async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: R
 
 export class RallyCommandRoom {
   private queue: Promise<void> = Promise.resolve()
+  private rateLimits = new Map<string, { count: number; windowStart: number }>()
+  private clock: () => number
 
   constructor(
     private readonly state: DurableObjectState,
     private readonly env: Env,
-  ) {}
+    // Injectable clock for tests (defaults to Date.now). The platform
+    // constructs DOs with (state, env); the third argument is optional.
+    clock: () => number = Date.now,
+  ) {
+    this.clock = clock
+  }
 
   fetch(request: Request): Promise<Response> {
     // K01 (N-03): the room trusts no caller by default. Only the verified
@@ -779,11 +801,43 @@ export class RallyCommandRoom {
         : Response.json(failure('Invalid rally command request.'), { status: 400 }))
     }
     if (request.method === 'POST' && pathname === '/geocode') {
-      return this.geocode(request)
+      // K05: an unexpected throw in geocoding answers 502, never a bare 500.
+      return this.geocode(request).catch(() =>
+        Response.json({ error: 'Place search is unavailable.' }, { status: 502 }),
+      )
     }
-    const result = this.queue.then(() => this.handle(request))
+    // K05: an unexpected throw inside the queued handler answers with the
+    // same generic failure the action returns when the room is unreachable,
+    // and the queue keeps processing the next command.
+    const result = this.queue.then(() => this.handle(request).catch(() =>
+      Response.json(failure('The session service is temporarily unavailable. Try again.')),
+    ))
     this.queue = result.then(() => undefined, () => undefined)
     return result
+  }
+
+  /**
+   * K03: fixed-window per-user, per-session rate limit. Returns true when
+   * the command may proceed. Budgets are deliberately generous for
+   * legitimate use (a fast match scores well under 120 points/minute; a
+   * user toggling RSVP 30 times a minute is flapping). Counters live in
+   * memory on this DO instance: object eviction resets them, which is
+   * acceptable for abuse mitigation — the action's Bearer verification
+   * remains the auth boundary. Malformed commands never reach this check,
+   * so garbage cannot consume another user's budget.
+   */
+  private checkRateLimit(userId: string, sessionId: string, operation: string): boolean {
+    const rateClass = rateLimitClass(operation)
+    const key = `${userId}:${sessionId}:${rateClass}`
+    const now = this.clock()
+    const entry = this.rateLimits.get(key)
+    if (!entry || now - entry.windowStart >= RATE_LIMIT_WINDOW_MS) {
+      this.rateLimits.set(key, { count: 1, windowStart: now })
+      return true
+    }
+    if (entry.count >= RATE_LIMITS[rateClass]) return false
+    entry.count++
+    return true
   }
 
   private async geocode(request: Request): Promise<Response> {
@@ -817,18 +871,39 @@ export class RallyCommandRoom {
       return Response.json(failure('Invalid rally command request.'), { status: 400 })
     }
 
-    let body: unknown
+    // K05: bounded body read — an oversized body is rejected before parsing,
+    // never buffered unboundedly. Malformed JSON gets the same generic body.
+    let text: string
     try {
-      body = await request.json()
+      text = await readBoundedBodyText(request, MAX_COMMAND_BODY_BYTES)
     } catch (cause) {
-      if (cause instanceof SyntaxError) {
+      if (cause instanceof BodyTooLargeError) {
         return Response.json(failure('Invalid rally command request.'), { status: 400 })
       }
       throw cause
     }
+    let body: unknown
+    try {
+      body = JSON.parse(text)
+    } catch {
+      return Response.json(failure('Invalid rally command request.'), { status: 400 })
+    }
 
     const command = parseCommand(body)
     const seriesCommand = command ? null : parseSeriesCommand(body)
+
+    // K03: HTTP 200 here is deliberate — the action maps any non-2xx room
+    // response to its generic "temporarily unavailable" failure, which would
+    // hide the rate-limit message from the client. The JSON body carries it.
+    // Series commands are limited per user + series id, never per session:
+    // they carry seriesId, not sessionId, so keying them on the session
+    // would dereference a null parse and throttle nothing.
+    if (command && !this.checkRateLimit(command.userId, command.sessionId, command.operation)) {
+      return Response.json(failure('Too many requests. Try again shortly.'))
+    }
+    if (seriesCommand && !this.checkRateLimit(seriesCommand.userId, seriesCommand.seriesId, seriesCommand.operation)) {
+      return Response.json(failure('Too many requests. Try again shortly.'))
+    }
 
     const tool = this.recordTool()
     if (command) {
