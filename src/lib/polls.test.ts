@@ -29,6 +29,25 @@ describe('validatePollOptions', () => {
     expect(validatePollOptions([{ id: 'a', startsAt: 'not-a-date' }, OPTIONS[1]], NOW)).toMatch(/in the future/)
   })
 
+  it('rejects option ids over 200 characters (storage-bloat bound, ported from the PR #20 adversarial branch)', () => {
+    expect(validatePollOptions([
+      { id: 'x'.repeat(200), startsAt: '2026-10-26T18:00:00.000Z' },
+      { id: 'b', startsAt: '2026-10-27T18:00:00.000Z' },
+    ], NOW)).toBeNull()
+    expect(validatePollOptions([
+      { id: 'x'.repeat(201), startsAt: '2026-10-26T18:00:00.000Z' },
+      { id: 'b', startsAt: '2026-10-27T18:00:00.000Z' },
+    ], NOW)).toMatch(/unique id/)
+    expect(validatePollOptions([
+      { id: 'x'.repeat(1024 * 1024), startsAt: '2026-10-26T18:00:00.000Z' },
+      { id: 'b', startsAt: '2026-10-27T18:00:00.000Z' },
+    ], NOW)).toMatch(/unique id/)
+    expect(validatePollOptions([
+      { id: 123 as unknown as string, startsAt: '2026-10-26T18:00:00.000Z' },
+      { id: 'b', startsAt: '2026-10-27T18:00:00.000Z' },
+    ], NOW)).toMatch(/unique id/)
+  })
+
   it('treats a DST fall-back instant as one unambiguous instant', () => {
     // 2026-11-01 is the US fall-back day: 01:30 local happens twice.
     // As a UTC instant it is unambiguous, and it stays in the future.

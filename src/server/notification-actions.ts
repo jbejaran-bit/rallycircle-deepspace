@@ -40,7 +40,12 @@ export const notificationsAction: ActionHandler<Env> = async ({ userId, params, 
     const found = await tools.get('notifications', params.recordId)
     if (!found.success) return failure('Notification not found.')
     const record = found.data.record as unknown as { data: NotificationRow }
-    if (record.data.recipientId !== userId) return failure('You can only update your own notifications.')
+    // Same message as the not-found case: distinguishing "exists but not
+    // yours" from "does not exist" is an existence/ownership oracle
+    // (PR #20 adv-inputs item 2, ported to the PR #22 line). Record ids
+    // are unguessable, so this was low severity, but the uniform string
+    // costs nothing.
+    if (record.data.recipientId !== userId) return failure('Notification not found.')
     if (record.data.readAt) return { success: true, data: { recordId: params.recordId } }
     const updated = await tools.update('notifications', params.recordId, { readAt: now })
     return updated.success

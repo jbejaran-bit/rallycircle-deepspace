@@ -65,3 +65,21 @@ describe('notificationsAction preferences', () => {
       .resolves.toMatchObject({ success: false })
   })
 })
+
+describe('notificationsAction markRead', () => {
+  it('returns the same error for a nonexistent notification and another user\'s notification (no existence/ownership oracle)', async () => {
+    const { notes, tools, setUser } = stubTools()
+    notes.set('n1', { recordId: 'n1', data: { recipientId: 'alice', readAt: '' } })
+    const call = (userId: string, params: Record<string, unknown>) => {
+      setUser(userId)
+      return notificationsAction({ userId, params, tools, env: {} as never, callerJwt: 'test-token' })
+    }
+    const missing = await call('alice', { operation: 'markRead', recordId: 'no-such-notification' })
+    const others = await call('bob', { operation: 'markRead', recordId: 'n1' })
+    expect(missing).toMatchObject({ success: false, error: 'Notification not found.' })
+    expect(others).toMatchObject({ success: false, error: 'Notification not found.' })
+    expect((missing as { error: string }).error).toBe((others as { error: string }).error)
+    await expect(call('alice', { operation: 'markRead', recordId: 'n1' }))
+      .resolves.toMatchObject({ success: true })
+  })
+})

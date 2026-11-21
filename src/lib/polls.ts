@@ -34,6 +34,10 @@ export interface PollVote {
 
 export const POLL_MIN_OPTIONS = 2
 export const POLL_MAX_OPTIONS = 5
+/** Option ids are stored verbatim in the poll row and its tally, so they
+ * need a length bound like every other stored id (PR #20 adv-inputs B,
+ * ported to the PR #22 line). */
+export const POLL_MAX_OPTION_ID_LENGTH = 200
 
 /** Validate the options a host proposes. Returns an error string or null. */
 export function validatePollOptions(options: PollOptionInput[], now = Date.now()): string | null {
@@ -42,7 +46,7 @@ export function validatePollOptions(options: PollOptionInput[], now = Date.now()
   const ids = new Set<string>()
   const times = new Set<number>()
   for (const option of options) {
-    if (!option.id.trim() || ids.has(option.id)) return 'Each proposed time needs a unique id.'
+    if (typeof option.id !== 'string' || !option.id.trim() || option.id.length > POLL_MAX_OPTION_ID_LENGTH || ids.has(option.id)) return 'Each proposed time needs a unique id.'
     ids.add(option.id)
     const time = Date.parse(option.startsAt)
     if (!Number.isFinite(time) || time <= now) return 'Each proposed time must be in the future.'
