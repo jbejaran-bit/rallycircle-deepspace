@@ -30,9 +30,17 @@ export function buildDashboard(
     }]
   }).sort((a, b) => Number(b.scheduled) - Number(a.scheduled) || (a.start - b.start || 0))
 
+  // Community reads may contain duplicate or malformed legacy RSVPs. Count each
+  // player once per session so dashboard openings agree with Find Games.
   const confirmedCounts = new Map<string, number>()
+  const seenPlayers = new Set<string>()
   for (const response of communityResponses ?? []) {
-    if (response.status === 'going') confirmedCounts.set(response.sessionId, (confirmedCounts.get(response.sessionId) ?? 0) + 1)
+    if (response.status !== 'going' || typeof response.sessionId !== 'string' || !response.sessionId ||
+        typeof response.userId !== 'string' || !response.userId) continue
+    const key = JSON.stringify([response.sessionId, response.userId])
+    if (seenPlayers.has(key)) continue
+    seenPlayers.add(key)
+    confirmedCounts.set(response.sessionId, (confirmedCounts.get(response.sessionId) ?? 0) + 1)
   }
   const gamesNeedingPlayers = communityResponses === null ? [] : sessions
     .filter(({ recordId, data }) => data.status === 'open' && Date.parse(data.startsAt) > now &&
