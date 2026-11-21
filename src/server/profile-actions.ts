@@ -115,17 +115,27 @@ async function syncOwnedVisibility(
   userId: string,
   visibility: PlayerProfile['visibility'],
 ): Promise<void> {
+  // Page through every owned row: a single capped query (the old limit: 100)
+  // left rows past the cap at their previous visibility, so a profile
+  // deletion could leave match history publicly readable in storage.
+  const pageSize = 100
   for (const collection of ['playerStats', 'matchResults'] as const) {
-    const result = await tools.query<{ visibility: PlayerProfile['visibility'] }>(collection, {
-      where: { userId },
-      limit: 100,
-    })
-    if (!result.success) continue
-    const records = (result.data as unknown as { records?: Array<{ recordId: string; data: { visibility: string } }> }).records ?? []
-    for (const record of records) {
-      if (record.data.visibility !== visibility) {
-        await tools.update(collection, record.recordId, { visibility })
+    let offset = 0
+    for (;;) {
+      const result = await tools.query<{ visibility: PlayerProfile['visibility'] }>(collection, {
+        where: { userId },
+        limit: pageSize,
+        offset,
+      })
+      if (!result.success) break
+      const records = (result.data as unknown as { records?: Array<{ recordId: string; data: { visibility: string } }> }).records ?? []
+      for (const record of records) {
+        if (record.data.visibility !== visibility) {
+          await tools.update(collection, record.recordId, { visibility })
+        }
       }
+      if (records.length < pageSize) break
+      offset += records.length
     }
   }
 }
