@@ -114,8 +114,11 @@ export function filterGames(
   const annotated: AnnotatedGame[] = []
   for (const { recordId, data: session } of sessions) {
     const startMs = Date.parse(session.startsAt)
+    // Invalid/legacy timestamps must never appear as upcoming, date-filtered,
+    // or joinable sessions. They cannot be ordered or safely scheduled.
+    if (!Number.isFinite(startMs)) continue
     const cancelled = session.status === 'cancelled'
-    const past = Number.isFinite(startMs) && startMs <= now
+    const past = startMs <= now
     if (cancelled && !filters.showCancelled) continue
     if (past && !filters.showPast) continue
     if (filters.area && !matchesArea(`${session.court} ${session.location}`, filters.area)) continue
