@@ -102,6 +102,12 @@ export default function CourtDiscoveryMap<T extends CourtPoint>({ courts, locati
         if (element) {
           element.setAttribute('aria-label', `Select ${court.name}`)
           element.setAttribute('aria-pressed', String(court.id === activeId.current))
+          element.addEventListener('keydown', event => {
+            if (event.key !== 'Enter' && event.key !== ' ') return
+            event.preventDefault()
+            event.stopPropagation()
+            onSelect(court)
+          })
           elements.set(court.id, element)
         }
       })

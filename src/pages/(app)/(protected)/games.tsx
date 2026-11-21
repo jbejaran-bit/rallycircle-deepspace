@@ -58,6 +58,7 @@ export function GamesDiscovery({
   waitlist: DiscoveryRecords<RallyWaitlist>
 }) {
   const searchField = useRef<HTMLInputElement>(null)
+  const locateButton = useRef<HTMLButtonElement>(null)
   const myConfirmedSessions = useMemo(() => new Set(rsvps.filter(row => row.data.userId === userId && row.data.status === 'going').map(row => row.data.sessionId)), [rsvps, userId])
   const queuedSessions = useMemo(() => new Set(waitlist.records.map(row => row.data.sessionId)), [waitlist.records])
   const [knownCourts] = useState<KnownCourtLocation[]>(() => [...pittsburghCourts.map(court => ({ ...court, locality: 'Pittsburgh' })), ...loadDiscoveredCourts()])
@@ -116,6 +117,7 @@ export function GamesDiscovery({
   }
 
   function clearLocation() {
+    locateButton.current?.focus()
     setLocation(null)
     setMaxDistance(null)
     setSort('soonest')
@@ -180,7 +182,7 @@ export function GamesDiscovery({
             </label>
           </div>
           <div className="mt-4 flex flex-wrap items-end gap-3">
-            <button type="button" disabled={locating} onClick={() => void locate()} className={button}>
+            <button ref={locateButton} type="button" disabled={locating} onClick={() => void locate()} className={button}>
               <LocateFixed size={16} aria-hidden /> {locating ? 'Finding location…' : location ? 'Update my location' : 'Use my location'}
             </button>
             {location && <button type="button" disabled={locating} onClick={clearLocation} className={button}>Clear location</button>}

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowUpRight, LocateFixed, MapPin } from 'lucide-react'
 import { courts, distanceMiles, matchesCourt, type Court } from '@/lib/courts'
@@ -12,6 +12,7 @@ export default function PittsburghCourts({ active = true }: { active?: boolean }
   const [location, setLocation] = useState<LatLng>()
   const [locationStatus, setLocationStatus] = useState('')
   const [locating, setLocating] = useState(false)
+  const locateButton = useRef<HTMLButtonElement>(null)
   const visibleCourts = useMemo(() => courts
     .map((court, index) => ({ ...court, pinNumber: index + 1 }))
     .filter(court => matchesCourt(court, query)), [query])
@@ -34,6 +35,12 @@ export default function PittsburghCourts({ active = true }: { active?: boolean }
     }
   }
 
+  function clearLocation() {
+    locateButton.current?.focus()
+    setLocation(undefined)
+    setLocationStatus('Location cleared.')
+  }
+
   return (
     <div className="space-y-5">
       <header className="flex flex-wrap items-start justify-between gap-4">
@@ -42,11 +49,11 @@ export default function PittsburghCourts({ active = true }: { active?: boolean }
           <p className="mt-2 text-white/70">Explore Pittsburgh courts and check schedules with the city.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button type="button" disabled={locating} onClick={() => void locate()} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-white/25 px-4 py-2 text-sm font-semibold focus-visible:outline-2">
+          <button ref={locateButton} type="button" disabled={locating} onClick={() => void locate()} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-white/25 px-4 py-2 text-sm font-semibold focus-visible:outline-2">
             <LocateFixed size={18} aria-hidden /> {locating ? 'Finding location…' : location ? 'Update my location' : 'Use my location'}
           </button>
           {location && (
-            <button type="button" disabled={locating} onClick={() => { setLocation(undefined); setLocationStatus('Location cleared.') }} className="min-h-11 rounded-xl border border-white/25 px-4 py-2 text-sm font-semibold focus-visible:outline-2">Clear location</button>
+            <button type="button" disabled={locating} onClick={clearLocation} className="min-h-11 rounded-xl border border-white/25 px-4 py-2 text-sm font-semibold focus-visible:outline-2">Clear location</button>
           )}
         </div>
       </header>
