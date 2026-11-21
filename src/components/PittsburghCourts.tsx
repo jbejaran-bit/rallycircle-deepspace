@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowUpRight, LocateFixed, MapPin } from 'lucide-react'
-import { courts, distanceMiles, matchesCourt, type Court } from '@/lib/courts'
+import { courts, matchesCourt, rankCourts, type Court } from '@/lib/courts'
 import CourtDiscoveryMap, { CourtMapLayout } from '@/components/CourtDiscoveryMap'
 import { requestOneShotLocation } from '@/lib/location'
 import { formatDistanceMiles, type LatLng } from '@/lib/geo'
@@ -13,14 +13,13 @@ export default function PittsburghCourts({ active = true }: { active?: boolean }
   const [locationStatus, setLocationStatus] = useState('')
   const [locating, setLocating] = useState(false)
   const locateButton = useRef<HTMLButtonElement>(null)
-  const visibleCourts = useMemo(() => courts
-    .map((court, index) => ({ ...court, pinNumber: index + 1 }))
-    .filter(court => matchesCourt(court, query)), [query])
-  const listed = visibleCourts.map(court => ({
-    court, distance: location ? distanceMiles(location, court) : undefined,
-  })).sort((a, b) => (a.distance ?? 0) - (b.distance ?? 0))
-
-  const selected = visibleCourts.find(court => court.id === selection?.id) ?? listed[0]?.court
+  const visibleCourts = useMemo(() => courts.filter(court => matchesCourt(court, query)), [query])
+  const listed = useMemo(() => rankCourts(visibleCourts, location).map(({ court, distance }, index) => ({
+    court: { ...court, pinNumber: index + 1 },
+    distance,
+  })), [visibleCourts, location])
+  const mapCourts = useMemo(() => listed.map(({ court }) => court), [listed])
+  const selected = mapCourts.find(court => court.id === selection?.id) ?? mapCourts[0]
 
   async function locate() {
     setLocating(true)
@@ -67,7 +66,7 @@ export default function PittsburghCourts({ active = true }: { active?: boolean }
           <p role="status">No Pittsburgh courts match that search.</p>
           <button type="button" className="mt-3 min-h-11 underline underline-offset-4" onClick={() => setQuery('')}>Clear search</button>
         </div>
-      ) : <CourtMapLayout map={active && <CourtDiscoveryMap courts={visibleCourts} label="Pittsburgh tennis court map" selectedId={selected.id} onSelect={setSelected} />}
+      ) : <CourtMapLayout map={active && <CourtDiscoveryMap courts={mapCourts} label="Pittsburgh tennis court map" selectedId={selected.id} onSelect={setSelected} />}
         details={
           <section className="rounded-2xl border border-white/15 bg-[#141b1a] p-5" aria-label="Selected court">
             <h3 className="break-words text-xl font-bold">{selected.name}</h3>
