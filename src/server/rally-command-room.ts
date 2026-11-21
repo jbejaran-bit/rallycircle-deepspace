@@ -80,8 +80,11 @@ async function applyAttendance(command: AttendanceCommand, session: RallySession
     return failure('This session is not open for responses.')
   }
   const owns = { sessionId, userId }
-  const capacity = session.capacity
-  if (capacity != null && !validCapacity(capacity)) return failure('This session has an invalid capacity.')
+  const configuredCapacity = session.capacity
+  const capacity = configuredCapacity != null && validCapacity(configuredCapacity) ? configuredCapacity : null
+  if (configuredCapacity != null && capacity === null && operation !== 'leaveWaitlist' && operation !== 'withdraw') {
+    return failure('This session has an invalid capacity.')
+  }
 
   const query = <T>(collection: string, where: Record<string, unknown>, limit = 1, oldest = false) =>
     tool<QueryActionData<T>>('records.query', {
@@ -121,7 +124,7 @@ async function applyAttendance(command: AttendanceCommand, session: RallySession
   }
 
   if (operation === 'leaveWaitlist' || operation === 'withdraw') {
-    if (capacity != null) {
+    if (configuredCapacity != null) {
       const response = await query<RallyWaitlist>('waitlists', owns)
       if (!response.success) return failure('Your waitlist entry could not be checked.')
       const waiting = response.data.records[0]

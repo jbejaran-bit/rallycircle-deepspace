@@ -367,6 +367,29 @@ describe('RallyCircle server-side session and RSVP rules', () => {
     expect([...harness.rsvps.values()].filter(record => record.data.status === 'going')).toHaveLength(2)
   })
 
+  it('allows withdrawal and waitlist cleanup when stored capacity is invalid without promoting', async () => {
+    const harness = createHarness()
+    const sessionId = 'legacy-capacity'
+    harness.addSession(sessionId, 'host')
+    const session = harness.sessions.get(sessionId)!.data
+    session.capacity = 2
+    for (const user of ['host', 'player']) {
+      await expect(harness.command(user, { operation: 'rsvp', sessionId, status: 'going' }))
+        .resolves.toMatchObject({ success: true })
+    }
+    await expect(harness.command('queued', { operation: 'joinWaitlist', sessionId }))
+      .resolves.toMatchObject({ success: true })
+    session.capacity = 0
+    await expect(harness.command('player', { operation: 'withdraw', sessionId }))
+      .resolves.toMatchObject({ success: true })
+    expect([...harness.rsvps.values()].map(row => row.data.userId)).toEqual(['host'])
+    await expect(harness.command('other', { operation: 'rsvp', sessionId, status: 'going' }))
+      .resolves.toMatchObject({ success: false })
+    await expect(harness.command('queued', { operation: 'leaveWaitlist', sessionId }))
+      .resolves.toMatchObject({ success: true })
+    expect(harness.waitlists.size).toBe(0)
+  })
+
   it('promotes in queue order, upgrades a tentative RSVP and stops on cancellation', async () => {
     const harness = createHarness()
     const sessionId = 'queue'

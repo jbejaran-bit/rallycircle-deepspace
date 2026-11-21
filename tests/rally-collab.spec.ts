@@ -11,6 +11,7 @@ test('shared link and live readiness update across two accounts', async ({ users
   const title = `__test-${Date.now()}__ doubles`
   let created = false
   let bobReady = false
+  let bobConfirmed = false
   let sessionId = ''
   // Simulate the browser permission denial without requesting real coordinates.
   await alice.page.addInitScript(() => {
@@ -183,6 +184,7 @@ test('shared link and live readiness update across two accounts', async ({ users
     await expect(alice.page.getByRole('button', { name: 'Maybe ✓' })).toBeVisible()
     await expect(bob.page.getByRole('button', { name: /Going/ })).toBeVisible()
     await expect(alice.page.getByTestId('readiness-count')).toHaveText('1 / 3 confirmed', { timeout: 30_000 })
+    bobConfirmed = true
   } finally {
     // Cancel rather than pretending the user can erase other players' records.
     if (created) {
@@ -201,6 +203,11 @@ test('shared link and live readiness update across two accounts', async ({ users
           success: false,
           error: 'This session is not open for responses.',
         })
+        if (bobConfirmed) {
+          const withdraw = bob.page.getByRole('button', { name: 'Withdraw RSVP', exact: true })
+          await withdraw.click()
+          await expect(withdraw).toHaveCount(0)
+        }
       }
     }
   }

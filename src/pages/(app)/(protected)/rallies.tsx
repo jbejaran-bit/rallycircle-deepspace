@@ -297,6 +297,7 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
   const { getName } = useUserLookup()
   const { records: waitlist, status: waitlistStatus } = useQuery<RallyWaitlist>('waitlists', { where: { sessionId, userId } })
   const waiting = waitlist.length > 0
+  const updatingAttendance = useRef(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
@@ -305,7 +306,8 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
   const {going, maybe} = summarizeAttendance(people.map(r=>r.data), sessionId)
   const cancelled = session.status === 'cancelled'
   const full = session.capacity != null && going >= session.capacity
-  const canChangeRsvp = rsvpStatus === 'ready' && !busy && !cancelled
+  const canWithdraw = rsvpStatus === 'ready' && !busy
+  const canChangeRsvp = canWithdraw && !cancelled
 
   const inviteUrl = buildSessionUrl(window.location.origin, sessionId)
   const calendarEvent = canDownloadCalendar(session, userId, myRSVP?.data.status)
@@ -322,20 +324,23 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
   }
 
   async function respond(status: RSVPStatus | 'withdraw' | 'joinWaitlist' | 'leaveWaitlist') {
-    if (!canChangeRsvp) return
+    if (updatingAttendance.current) return
+    if (status === 'withdraw' ? !canWithdraw : status === 'leaveWaitlist' ? waitlistStatus !== 'ready' : !canChangeRsvp) return
+    updatingAttendance.current = true
     setBusy(true); setError(null)
     try {
       if (status === 'going' || status === 'maybe') await runRallyCommand({ operation: 'rsvp', sessionId, status })
       else await runRallyCommand({ operation: status, sessionId })
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'RSVP did not save.') }
-    finally { setBusy(false) }
+    finally { updatingAttendance.current = false; setBusy(false) }
   }
   async function cancelSession() {
-    if (busy || !window.confirm('Cancel this session for everyone?')) return
+    if (updatingAttendance.current || !window.confirm('Cancel this session for everyone?')) return
+    updatingAttendance.current = true
     setBusy(true); setError(null)
     try { await runRallyCommand({ operation: 'cancel', sessionId }) }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not cancel.') }
-    finally { setBusy(false) }
+    finally { updatingAttendance.current = false; setBusy(false) }
   }
 
   return <div className={`${surface} overflow-hidden`}>
@@ -390,6 +395,12 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
         <button type="button" disabled={!canChangeRsvp} onClick={()=>void respond('maybe')} className="rounded-xl border border-white/15 px-4 py-3 text-sm font-semibold text-white/85 hover:bg-white/10 disabled:opacity-50">{myRSVP?.data.status==='maybe'?'Maybe ✓':'Maybe'}</button>
         {myRSVP&&<button type="button" disabled={!canChangeRsvp} onClick={()=>void respond('withdraw')} className="rounded-xl px-3 py-3 text-sm text-white/50 hover:bg-white/10 hover:text-white">Withdraw</button>}
       </div>}
+      {cancelled && (myRSVP || waiting) && (
+        <div className="flex flex-wrap gap-2">
+          {myRSVP && <button type="button" disabled={!canWithdraw} onClick={() => void respond('withdraw')} className="min-h-11 rounded-lg border border-white/25 px-3 text-sm">Withdraw RSVP</button>}
+          {waiting && <button type="button" disabled={busy || waitlistStatus !== 'ready'} onClick={() => void respond('leaveWaitlist')} className="min-h-11 rounded-lg border border-white/25 px-3 text-sm">Leave waitlist</button>}
+        </div>
+      )}
       {session.capacity != null && !cancelled && myRSVP?.data.status !== 'going' && (waiting || full) && (
         <div className="space-y-2">
           {waiting && <p role="status">You’re on the waitlist. You’ll be confirmed automatically when a place opens.</p>}
