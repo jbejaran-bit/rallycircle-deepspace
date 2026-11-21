@@ -11,9 +11,15 @@ function createHarness() {
   const sessions = new Map<string, { recordId: string; createdBy: string; data: RallySession }>()
   const rsvps = new Map<string, { recordId: string; createdBy: string; createdAt: number; data: RallyRSVP }>()
   const waitlists = new Map<string, { recordId: string; createdAt: number; data: RallyWaitlist }>()
+  const resultCollections = new Map(
+    ['profiles', 'matchResults', 'playerStats', 'resultAudits'].map(name =>
+      [name, new Map<string, { recordId: string; createdAt: number; data: Record<string, unknown> }>()] as const,
+    ),
+  )
   let nextRecordId = 0
   let nextCreatedAt = 0
   let failQueueDeletes = 0
+  let failScoreWrite = false
 
   // The real RecordRoom honours orderBy/orderDir/limit (SDK worker.js
   // orderColumn maps createdAt to _created_at). The harness must do the
@@ -33,6 +39,29 @@ function createHarness() {
         params: Record<string, unknown>
       }
       await new Promise(resolve => setTimeout(resolve, 1))
+
+      const resultRecords = resultCollections.get(String(params.collection))
+      if (resultRecords && tool === 'records.query') {
+        const filters = Object.entries(params.where ?? {})
+        const records = applyQueryOrder(
+          [...resultRecords.values()].filter(record => filters.every(([key, value]) => record.data[key] === value)),
+          params,
+        )
+        return Response.json({ success: true, data: { records, count: records.length } })
+      }
+      if (resultRecords && tool === 'records.create') {
+        const recordId = `result-${++nextRecordId}`
+        const data = { ...params.data as Record<string, unknown>, userId: request.headers.get('X-User-Id') }
+        resultRecords.set(recordId, { recordId, createdAt: ++nextCreatedAt, data })
+        return Response.json({ success: true, data: { recordId } })
+      }
+      if (resultRecords && tool === 'records.update') {
+        const recordId = String(params.recordId)
+        const record = resultRecords.get(recordId)
+        if (!record) return Response.json({ success: false, error: 'Record not found' })
+        Object.assign(record.data, params.data)
+        return Response.json({ success: true, data: { recordId } })
+      }
 
       if (tool === 'records.get' && params.collection === 'sessions') {
         const record = sessions.get(String(params.recordId))
@@ -100,6 +129,10 @@ function createHarness() {
         const recordId = String(params.recordId)
         const patch = params.data as Record<string, unknown>
         if (collection === 'sessions') {
+          if (failScoreWrite && 'matchScore' in patch) {
+            failScoreWrite = false
+            return Response.json({ success: false, error: 'Injected score write failure' })
+          }
           const record = sessions.get(recordId)
           if (!record) return Response.json({ success: false, error: 'Record not found' })
           Object.assign(record.data, patch)
@@ -124,7 +157,7 @@ function createHarness() {
       get: () => recordRoom,
     },
   } as unknown as Env
-  const room = new RallyCommandRoom({} as DurableObjectState, env)
+  let room = new RallyCommandRoom({} as DurableObjectState, env)
   const commandNamespace = {
     idFromName: (name: string) => name,
     get: () => ({ fetch: (request: Request) => room.fetch(request) }),
@@ -172,7 +205,9 @@ function createHarness() {
   }
 
   return {
-    addSession, command, rsvps, sessions, waitlists,
+    addSession, command, rsvps, sessions, waitlists, resultCollections,
+    interruptScoreSave: () => { failScoreWrite = true },
+    restart: () => { room = new RallyCommandRoom({} as DurableObjectState, env) },
     interruptQueueCleanup: (times = 1) => { failQueueDeletes = times },
   }
 }
@@ -500,6 +535,10 @@ describe('RallyCircle server-side session and RSVP rules', () => {
     expect(checkFieldPermissions(sessionsSchema, 'member', { status: 'open' })).toContain('status')
     expect(checkFieldPermissions(sessionsSchema, 'member', { matchScore: '{}' })).toContain('matchScore')
     expect(checkFieldPermissions(sessionsSchema, 'admin', { matchScore: '{}' })).toContain('matchScore')
+    for (const role of ['member', 'admin']) {
+      expect(checkFieldPermissions(sessionsSchema, role, { pendingResult: '' })).toContain('pendingResult')
+      expect(checkFieldPermissions(sessionsSchema, role, { scheduleRevision: 9 })).toContain('scheduleRevision')
+    }
     expect(canUpdate(sessionsSchema, 'member', {
       data: { hostId: 'host' },
       createdBy: 'host',
@@ -860,6 +899,38 @@ describe('Track A regression suite — waitlist, scoring and authorization', () 
     }
     expect(resultStatus(readMatchScore(cleanSession.matchScore)!)).toBe('final')
     expect(isEligibleForStats(readMatchScore(cleanSession.matchScore)!)).toBe(true)
+  })
+
+  it('resumes a correction after a failed completion and rejects unauthorized and stale corrections', async () => {
+    const harness = createHarness()
+    const session = await startSingles(harness, 'correction', ['alice', 'bob'])
+    let score = readMatchScore(session.matchScore)!
+    for (let point = 0; point < 48; point++) score = awardPoint(score, 0)
+    session.matchScore = JSON.stringify(score)
+    await harness.command('alice', { operation: 'reviewResult', sessionId: 'correction', decision: 'dispute' })
+    const revision = readMatchScore(session.matchScore)!.revision
+    const correction = { operation: 'correctResult' as const, sessionId: 'correction', revision, winner: 1, sets: [[3, 6], [4, 6]] }
+    await expect(harness.command('bob', correction)).resolves.toMatchObject({ success: false })
+    await expect(harness.command('host', { ...correction, revision: revision - 1 })).resolves.toMatchObject({ success: false })
+    harness.interruptScoreSave()
+    await expect(harness.command('host', correction)).resolves.toMatchObject({ success: false })
+    expect(session.pendingResult).toBeTruthy()
+    expect(resultStatus(readMatchScore(session.matchScore)!)).toBe('disputed')
+    harness.restart()
+    await expect(harness.command('host', { ...correction, sets: [[0, 6], [0, 6]] })).resolves.toMatchObject({ success: false })
+    await expect(harness.command('host', correction)).resolves.toMatchObject({ success: true })
+    expect(session.pendingResult).toBe('')
+    expect(resultStatus(readMatchScore(session.matchScore)!)).toBe('corrected')
+    await expect(harness.command('alice', { operation: 'reviewResult', sessionId: 'correction', decision: 'approve', revision }))
+      .resolves.toMatchObject({ success: false })
+    const latestRevision = readMatchScore(session.matchScore)!.revision
+    const approval = { operation: 'reviewResult', sessionId: 'correction', decision: 'approve', revision: latestRevision }
+    for (const result of await Promise.all([harness.command('alice', approval), harness.command('alice', approval)])) {
+      expect(result.success).toBe(true)
+    }
+    expect(readMatchScore(session.matchScore)!.approvals).toEqual(['alice'])
+
+    expect([...harness.resultCollections.get('resultAudits')!.values()].filter(row => row.data.kind === 'corrected')).toHaveLength(1)
   })
 
   it('A15: legacy sessions without format, capacity or matchScore keep working', async () => {

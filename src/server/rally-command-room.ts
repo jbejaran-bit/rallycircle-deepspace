@@ -1,7 +1,12 @@
 import type { ActionHandler, ActionResult, GetActionData, MutateActionData, QueryActionData } from 'deepspace/worker'
 import { validCapacity, type RallyRSVP, type RallySession, type RallyWaitlist, type RSVPStatus } from '../lib/rally.js'
-import { awardPoint, createMatchScore, readMatchScore, reviewResult, scoreEditSchema } from '../lib/rally-score.js'
+import { awardPoint, correctResult, createMatchScore, isFinalTransition, readMatchScore, resultStatus, reviewResult, scoreEditSchema, validateCorrectedSets } from '../lib/rally-score.js'
+import { castVote, parsePollOptions, parsePollTally, serializePollOptions, serializePollTally, tallyVotes, validatePollOptions, type PollOptionInput } from '../lib/polls.js'
+import { occurrenceStartsAt, parseSeriesTemplate, serializeSeriesTemplate, validateSeries, type SeriesTemplate } from '../lib/recurrence.js'
+import { pollCreatedKey, resultConfirmedKey, resultDisputedKey, scheduleChangedKey, sessionCancelledKey, waitlistPromotedKey } from '../lib/rally-notifications.js'
+import { emitNotification, type EmitNotificationInput } from './notifications.js'
 import type { z } from 'zod'
+import { applyFinalization, reverseFinalization, writeAudit } from './result-finalization.js'
 import { fetchGeocodedPlaces, GEOCODER_MIN_GAP_MS } from './court-discovery.js'
 import type { Env } from '../../worker.js'
 
@@ -12,6 +17,35 @@ type RallyCommand =
   | { operation: 'rsvp'; sessionId: string; status: RSVPStatus; userId: string }
   | { operation: 'withdraw' | 'joinWaitlist' | 'leaveWaitlist'; sessionId: string; userId: string }
   | { operation: 'cancel'; sessionId: string; userId: string }
+  | { operation: 'createPoll'; sessionId: string; userId: string; options: PollOptionInput[] }
+  | { operation: 'castVote' | 'withdrawVote'; sessionId: string; userId: string; pollId: string; optionId: string }
+  | { operation: 'cancelPoll'; sessionId: string; userId: string; pollId: string }
+  | { operation: 'finalizePoll'; sessionId: string; userId: string; pollId: string; optionId: string }
+
+export interface RallyPoll {
+  sessionId: string
+  hostId: string
+  options: string
+  status: 'open' | 'finalizing' | 'finalized' | 'cancelled'
+  finalizedOptionId: string
+  tally: string
+}
+
+export interface RallyPollVote {
+  pollId: string
+  optionId: string
+  userId: string
+}
+
+export interface RecurringSeriesRecord {
+  hostId: string
+  template: string
+  startStartsAt: string
+  intervalWeeks: number
+  count: number
+  status: 'active' | 'cancelled'
+  generatedCount: number
+}
 
 type RallyCommandResult = ActionResult<{ recordId: string }>
 type RecordTool = <T>(tool: string, params: Record<string, unknown>, userId: string) => Promise<ActionResult<T>>
@@ -32,6 +66,23 @@ function parseCommand(value: unknown): RallyCommand | null {
   }
   if (value.operation === 'rsvp' && (value.status === 'going' || value.status === 'maybe')) {
     return { operation: value.operation, sessionId: value.sessionId, status: value.status, userId: value.userId }
+  }
+  if (value.operation === 'createPoll' && Array.isArray(value.options)) {
+    // Option shape is validated in applyPollCommand; parse only checks it is a list.
+    return { operation: 'createPoll', sessionId: value.sessionId, userId: value.userId, options: value.options as PollOptionInput[] }
+  }
+  if ((value.operation === 'castVote' || value.operation === 'withdrawVote') &&
+      typeof value.pollId === 'string' && value.pollId &&
+      typeof value.optionId === 'string' && value.optionId) {
+    return { operation: value.operation, sessionId: value.sessionId, userId: value.userId, pollId: value.pollId, optionId: value.optionId }
+  }
+  if (value.operation === 'cancelPoll' && typeof value.pollId === 'string' && value.pollId) {
+    return { operation: 'cancelPoll', sessionId: value.sessionId, userId: value.userId, pollId: value.pollId }
+  }
+  if (value.operation === 'finalizePoll' &&
+      typeof value.pollId === 'string' && value.pollId &&
+      typeof value.optionId === 'string' && value.optionId) {
+    return { operation: 'finalizePoll', sessionId: value.sessionId, userId: value.userId, pollId: value.pollId, optionId: value.optionId }
   }
   const scoreEdit = scoreEditSchema.safeParse(value)
   return scoreEdit.success ? { ...scoreEdit.data, sessionId: value.sessionId, userId: value.userId } : null
@@ -54,22 +105,71 @@ async function applyCommand(command: RallyCommand, tool: RecordTool): Promise<Ra
     if (session.hostId !== command.userId) return failure('Only the session host can cancel it.')
     if (session.status === 'cancelled') return { success: true, data: { recordId: command.sessionId } }
     if (session.status !== 'open') return failure('Only an open session can be cancelled.')
+    if (session.pendingResult) return failure('Complete the pending result update before cancelling.')
 
     const result = await tool<MutateActionData>(
       'records.update',
       { collection: 'sessions', recordId: command.sessionId, data: { status: 'cancelled' } },
       command.userId,
     )
-    return result.success
-      ? { success: true, data: { recordId: command.sessionId } }
-      : failure('The session could not be cancelled.')
+    if (!result.success) return failure('The session could not be cancelled.')
+    // Best-effort: a notification failure never un-cancels the session.
+    await notifySessionCancelled(tool, session, command.sessionId, command.userId)
+    return { success: true, data: { recordId: command.sessionId } }
   }
 
-  if (command.operation === 'startMatch' || command.operation === 'scorePoint' || command.operation === 'reviewResult') {
+  if (command.operation === 'startMatch' || command.operation === 'scorePoint' || command.operation === 'reviewResult' || command.operation === 'correctResult') {
     return applyScoreEdit(command, session, tool)
   }
 
-  return applyAttendance(command, session, tool)
+  if (command.operation === 'createPoll' || command.operation === 'castVote' ||
+      command.operation === 'withdrawVote' || command.operation === 'cancelPoll' ||
+      command.operation === 'finalizePoll') {
+    return applyPollCommand(command, session, tool)
+  }
+
+  if (command.operation === 'rsvp' || command.operation === 'withdraw' ||
+      command.operation === 'joinWaitlist' || command.operation === 'leaveWaitlist') {
+    return applyAttendance(command, session, tool)
+  }
+
+  return failure('Invalid rally command.')
+}
+
+/** Notify every RSVP holder (going/maybe) except `excludeUserId`. Best-effort: never throws. */
+async function notifyRsvpHolders(
+  tool: RecordTool,
+  sessionId: string,
+  excludeUserId: string,
+  makeInput: (recipientId: string) => Omit<EmitNotificationInput, 'recipientId'>,
+): Promise<void> {
+  const found = await tool<QueryActionData<RallyRSVP>>(
+    'records.query',
+    { collection: 'rsvps', where: { sessionId }, limit: 100 },
+    excludeUserId,
+  )
+  if (!found.success) return
+  for (const record of found.data.records) {
+    const recipientId = record.data.userId
+    if (recipientId === excludeUserId) continue
+    await emitNotification(tool, { recipientId, ...makeInput(recipientId) })
+  }
+}
+
+async function notifySessionCancelled(
+  tool: RecordTool,
+  session: RallySession,
+  sessionId: string,
+  hostId: string,
+): Promise<void> {
+  await notifyRsvpHolders(tool, sessionId, hostId, recipientId => ({
+    type: 'session_cancelled',
+    sessionId,
+    title: `Cancelled: ${session.title}`,
+    body: `${session.title} was cancelled by its organizer.`,
+    link: `/rallies?session=${sessionId}`,
+    idempotencyKey: sessionCancelledKey(sessionId, recipientId),
+  }))
 }
 
 type AttendanceCommand = Extract<RallyCommand, { operation: 'rsvp' | 'withdraw' | 'joinWaitlist' | 'leaveWaitlist' }>
@@ -100,13 +200,18 @@ async function applyAttendance(command: AttendanceCommand, session: RallySession
 
   // Persist the RSVP before deleting the queue entry. The next command can
   // repair that intermediate state without consuming a second place.
-  // A single retry of the queue delete happens inside this same command, so
-  // one transient storage failure does not block the caller's own command
-  // and does not leave a stale row behind. If the retry also fails, the
-  // command returns null and the next attendance command repairs the row
-  // (fillVacancies skips a waitlisted user who already holds a going RSVP).
-  async function fillVacancies(): Promise<number | null> {
-    if (capacity == null || session.status !== 'open') return 0
+  // A single retry of the queue delete happens inside this same command
+  // (Track A D1), so one transient storage failure does not block the
+  // caller's own command. If the retry also fails, the command returns
+  // null and the next attendance command repairs the row.
+  // Returns the confirmed count plus the RSVP record ids that were newly
+  // confirmed in this call, so callers can notify promoted players. The
+  // promotion notice is emitted here, right after the queue-row delete
+  // succeeds, because at that point the promotion is durable; the
+  // idempotency key (the RSVP record id) makes a repair re-run a no-op.
+  async function fillVacancies(): Promise<{ count: number; promoted: string[] } | null> {
+    if (capacity == null || session.status !== 'open') return { count: 0, promoted: [] }
+    const promoted: string[] = []
     for (let attempt = 0; attempt < 32; attempt++) {
       const confirmed = await query<RallyRSVP>('rsvps', { sessionId, status: 'going' }, capacity)
       if (!confirmed.success) return null
@@ -114,18 +219,37 @@ async function applyAttendance(command: AttendanceCommand, session: RallySession
       const queued = await query<RallyWaitlist>('waitlists', { sessionId }, 1, true)
       if (!queued.success) return null
       const first = queued.data.records[0]
-      if (!first) return count
+      if (!first) return { count, promoted }
       const player = first.data.userId
       const response = await query<RallyRSVP>('rsvps', { sessionId, userId: player })
       if (!response.success) return null
       const rsvp = response.data.records[0]
+      let promotedRecordId: string | null = null
       if (rsvp?.data.status !== 'going') {
-        if (count >= capacity) return count
-        if (!(await save(player, 'going', rsvp?.recordId)).success) return null
+        if (count >= capacity) return { count, promoted }
+        const saved = await save(player, 'going', rsvp?.recordId)
+        if (!saved.success) return null
+        promotedRecordId = saved.data.recordId
+      } else {
+        // Interrupted-cleanup repair: the player already holds a going
+        // RSVP and only the stale queue row remains.
+        promotedRecordId = rsvp.recordId
       }
       const deleted = (await remove('waitlists', first.recordId)).success ||
         (await remove('waitlists', first.recordId)).success
       if (!deleted) return null
+      if (promotedRecordId) {
+        promoted.push(promotedRecordId)
+        await emitNotification(tool, {
+          recipientId: player,
+          type: 'waitlist_promoted',
+          sessionId,
+          title: `You're in: ${session.title}`,
+          body: `A place opened up for ${session.title}. You're confirmed.`,
+          link: `/rallies?session=${sessionId}`,
+          idempotencyKey: waitlistPromotedKey(promotedRecordId),
+        })
+      }
     }
     return null
   }
@@ -148,7 +272,8 @@ async function applyAttendance(command: AttendanceCommand, session: RallySession
   }
 
   if (capacity == null && operation === 'joinWaitlist') return failure('This session has no waitlist.')
-  const filled = capacity != null ? await fillVacancies() : 0
+  const vacancy = capacity != null ? await fillVacancies() : { count: 0, promoted: [] }
+  const filled = vacancy === null ? null : vacancy.count
   const response = await query<RallyRSVP>('rsvps', owns)
   if (!response.success) return failure('Your existing RSVP could not be checked.')
   const existing = response.data.records[0]
@@ -180,11 +305,241 @@ async function applyAttendance(command: AttendanceCommand, session: RallySession
   return success(result.data.recordId)
 }
 
+type PollCommand = Extract<RallyCommand, { operation: 'createPoll' | 'castVote' | 'withdrawVote' | 'cancelPoll' | 'finalizePoll' }>
+
+async function loadPoll(tool: RecordTool, pollId: string, userId: string) {
+  const result = await tool<GetActionData<RallyPoll>>(
+    'records.get',
+    { collection: 'polls', recordId: pollId },
+    userId,
+  )
+  return result.success ? result.data.record : null
+}
+
+async function isSessionParticipant(
+  tool: RecordTool,
+  sessionId: string,
+  userId: string,
+  hostId: string,
+): Promise<boolean | null> {
+  if (userId === hostId) return true
+  const result = await tool<QueryActionData<RallyRSVP>>(
+    'records.query',
+    { collection: 'rsvps', where: { sessionId, userId }, limit: 1 },
+    userId,
+  )
+  if (!result.success) return null
+  return result.data.records.length > 0
+}
+
+async function refreshPollTally(tool: RecordTool, pollId: string, userId: string): Promise<void> {
+  const votes = await tool<QueryActionData<RallyPollVote>>(
+    'records.query',
+    { collection: 'pollVotes', where: { pollId }, limit: 500 },
+    userId,
+  )
+  if (!votes.success) return
+  const tally = tallyVotes(votes.data.records.map(record => ({
+    optionId: record.data.optionId,
+    userId: record.data.userId,
+  })))
+  await tool<MutateActionData>(
+    'records.update',
+    { collection: 'polls', recordId: pollId, data: { tally: serializePollTally(tally) } },
+    userId,
+  )
+}
+
+async function applyPollCommand(
+  command: PollCommand,
+  session: RallySession,
+  tool: RecordTool,
+): Promise<RallyCommandResult> {
+  const { sessionId, userId, operation } = command
+  if (session.status !== 'open' && operation !== 'withdrawVote' && operation !== 'cancelPoll') {
+    return failure('This session is not open for responses.')
+  }
+
+  if (operation === 'createPoll') {
+    if (session.hostId !== userId) return failure('Only the session host can create a poll.')
+    const options = command.options
+    if (!Array.isArray(options) || options.some(option =>
+      typeof option !== 'object' || option === null ||
+      typeof (option as { id: unknown }).id !== 'string' ||
+      typeof (option as { startsAt: unknown }).startsAt !== 'string')) {
+      return failure('Each proposed time needs a unique id.')
+    }
+    const problem = validatePollOptions(options)
+    if (problem) return failure(problem)
+    const existing = await tool<QueryActionData<RallyPoll>>(
+      'records.query',
+      { collection: 'polls', where: { sessionId }, limit: 1 },
+      userId,
+    )
+    if (!existing.success) return failure('Existing polls could not be checked.')
+    if (existing.data.records.length > 0) return failure('This session already has a poll.')
+    const created = await tool<MutateActionData>(
+      'records.create',
+      {
+        collection: 'polls',
+        data: { sessionId, options: serializePollOptions(options), status: 'open', finalizedOptionId: '', tally: '{}' },
+      },
+      userId,
+    )
+    if (!created.success) return failure('The poll could not be created.')
+    const pollId = created.data.recordId
+    await notifyRsvpHolders(tool, sessionId, userId, recipientId => ({
+      type: 'poll_created',
+      sessionId,
+      title: `New time poll: ${session.title}`,
+      body: `The host proposed new times for ${session.title}. Cast your vote.`,
+      link: `/rallies?session=${sessionId}`,
+      idempotencyKey: pollCreatedKey(pollId, recipientId),
+    }))
+    return { success: true, data: { recordId: pollId } }
+  }
+
+  const poll = await loadPoll(tool, command.pollId, userId)
+  if (!poll || poll.data.sessionId !== sessionId) return failure('This poll is unavailable.')
+  const pollData = poll.data
+  const options = parsePollOptions(pollData.options)
+  if (!options) return failure('This poll is unavailable.')
+  const optionIds = options.map(option => option.id)
+
+  if (operation === 'castVote') {
+    if (pollData.status !== 'open') return failure('This poll is not open for voting.')
+    const participant = await isSessionParticipant(tool, sessionId, userId, session.hostId)
+    if (participant === null) return failure('Your participation could not be checked.')
+    if (!participant) return failure('Only session participants can vote.')
+    if (!optionIds.includes(command.optionId)) return failure('That time is not part of this poll.')
+    const existing = await tool<QueryActionData<RallyPollVote>>(
+      'records.query',
+      { collection: 'pollVotes', where: { pollId: command.pollId, optionId: command.optionId, userId }, limit: 1 },
+      userId,
+    )
+    if (!existing.success) return failure('Your vote could not be checked.')
+    if (existing.data.records[0]) return { success: true, data: { recordId: existing.data.records[0].recordId } }
+    const created = await tool<MutateActionData>(
+      'records.create',
+      { collection: 'pollVotes', data: { pollId: command.pollId, optionId: command.optionId } },
+      userId,
+    )
+    if (!created.success) return failure('Your vote could not be saved.')
+    await refreshPollTally(tool, command.pollId, userId)
+    return { success: true, data: { recordId: created.data.recordId } }
+  }
+
+  if (operation === 'withdrawVote') {
+    if (pollData.status === 'finalized' || pollData.status === 'finalizing') return failure('This poll is closed.')
+    const existing = await tool<QueryActionData<RallyPollVote>>(
+      'records.query',
+      { collection: 'pollVotes', where: { pollId: command.pollId, optionId: command.optionId, userId }, limit: 1 },
+      userId,
+    )
+    if (!existing.success) return failure('Your vote could not be checked.')
+    const vote = existing.data.records[0]
+    if (vote) {
+      const removed = await tool<MutateActionData>(
+        'records.delete',
+        { collection: 'pollVotes', recordId: vote.recordId },
+        userId,
+      )
+      if (!removed.success) return failure('Your vote could not be withdrawn.')
+      await refreshPollTally(tool, command.pollId, userId)
+    }
+    return { success: true, data: { recordId: command.pollId } }
+  }
+
+  if (operation === 'cancelPoll') {
+    if (session.hostId !== userId) return failure('Only the session host can cancel the poll.')
+    if (pollData.status !== 'open') return failure('This poll is already closed.')
+    const updated = await tool<MutateActionData>(
+      'records.update',
+      { collection: 'polls', recordId: command.pollId, data: { status: 'cancelled' } },
+      userId,
+    )
+    return updated.success
+      ? { success: true, data: { recordId: command.pollId } }
+      : failure('The poll could not be cancelled.')
+  }
+
+  // finalizePoll
+  if (session.hostId !== userId) return failure('Only the session host can finalise a poll.')
+  if (pollData.status === 'finalized' && pollData.finalizedOptionId === command.optionId) {
+    return { success: true, data: { recordId: sessionId } }
+  }
+  if (pollData.status !== 'open' && pollData.status !== 'finalizing') return failure('This poll is not open.')
+  const chosen = options.find(option => option.id === command.optionId)
+  if (!chosen) return failure('That time is not part of this poll.')
+  if (pollData.status === 'open') {
+    if (Date.parse(chosen.startsAt) <= Date.now()) return failure('The proposed time is no longer in the future.')
+    const prepared = await tool<MutateActionData>('records.update', {
+      collection: 'polls', recordId: command.pollId,
+      data: { status: 'finalizing', finalizedOptionId: command.optionId },
+    }, userId)
+    if (!prepared.success) return failure('The poll could not start finalizing. Try again.')
+  } else if (pollData.finalizedOptionId !== command.optionId) {
+    return failure('Another time is already being confirmed.')
+  }
+  // A retry after the session write may find the chosen time already persisted.
+  if (Date.parse(session.startsAt) !== Date.parse(chosen.startsAt)) {
+    const updatedSession = await tool<MutateActionData>(
+      'records.update',
+      {
+        collection: 'sessions',
+        recordId: sessionId,
+        data: { startsAt: chosen.startsAt, scheduleRevision: (session.scheduleRevision ?? 0) + 1 },
+      },
+      userId,
+    )
+    if (!updatedSession.success) return failure('The session time could not be updated.')
+  }
+  const recipients = await tool<QueryActionData<RallyRSVP>>(
+    'records.query', { collection: 'rsvps', where: { sessionId }, limit: 100 }, userId,
+  )
+  if (!recipients.success) return failure('Participants could not be notified. Retry the same time.')
+  for (const { data: { userId: recipientId } } of recipients.data.records) {
+    if (recipientId === userId) continue
+    const emitted = await emitNotification(tool, {
+      recipientId,
+      type: 'schedule_changed',
+      sessionId,
+      title: `New time: ${session.title}`,
+      body: `${session.title} moved to ${chosen.startsAt}. Your RSVP carries over.`,
+      link: `/rallies?session=${sessionId}`,
+      idempotencyKey: scheduleChangedKey(sessionId, chosen.startsAt, recipientId),
+    })
+    if (emitted === 'failed') return failure('Participants could not be notified. Retry the same time.')
+  }
+  const updatedPoll = await tool<MutateActionData>(
+    'records.update',
+    { collection: 'polls', recordId: command.pollId, data: { status: 'finalized' } },
+    userId,
+  )
+  if (!updatedPoll.success) return failure('The poll could not be finalised. Retry the same time.')
+  return { success: true, data: { recordId: sessionId } }
+}
+
 async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: RecordTool): Promise<RallyCommandResult> {
   if (command.operation !== 'reviewResult' && session.hostId !== command.userId) return failure('Only the session host can edit the score.')
   if (session.status !== 'open') return failure('This session is closed.')
 
   const current = readMatchScore(session.matchScore)
+  const operationKey = command.operation === 'reviewResult' || command.operation === 'correctResult'
+    ? JSON.stringify([command.operation, command.userId, current?.revision,
+      command.operation === 'reviewResult' ? command.decision : [command.winner, command.sets]])
+    : ''
+  if (session.pendingResult && session.pendingResult !== operationKey) {
+    return failure('Another result update is pending. Retry the original update.')
+  }
+  async function prepareResult(): Promise<boolean> {
+    if (session.pendingResult) return true
+    const prepared = await tool<MutateActionData>('records.update', {
+      collection: 'sessions', recordId: command.sessionId, data: { pendingResult: operationKey },
+    }, command.userId)
+    return prepared.success
+  }
+
   let next
   if (command.operation === 'startMatch') {
     if (session.matchScore) return failure('This session already has a scoreboard.')
@@ -205,8 +560,47 @@ async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: R
     }
     next = createMatchScore(command.teams)
   } else if (command.operation === 'reviewResult') {
+    if (command.revision !== undefined && current?.revision !== command.revision) {
+      return failure('The score changed. Check the latest score before trying again.')
+    }
+    if (command.decision === 'approve' && !current?.disputed && current?.approvals.includes(command.userId)) {
+      return { success: true, data: { recordId: command.sessionId } }
+    }
     next = current && reviewResult(current, command.userId, command.decision)
     if (!next) return failure('This result is closed or unavailable for your review.')
+    if (current && isFinalTransition(current, next)) {
+      if (!await prepareResult()) return failure('The result update could not be started. Try again.')
+      const finalized = await applyFinalization(tool, session, command.sessionId, next, command.userId)
+      if (!finalized.ok) return failure('The result could not be finalized. Retry your approval.')
+    }
+    if (next.disputed && !current?.disputed) {
+      if (!await prepareResult()) return failure('The dispute could not be started. Try again.')
+      const audited = await writeAudit(tool, command.sessionId, command.userId, 'disputed', {
+        sets: next.sets, winner: next.winner, revision: next.revision,
+      }, next.revision)
+      if (!audited) return failure('The dispute could not be audited. Retry your dispute.')
+    }
+  } else if (command.operation === 'correctResult') {
+    if (!current) return failure('There is no result to correct.')
+    if (current.revision !== command.revision) return failure('The score changed. Check the latest score before trying again.')
+    const previousStatus = resultStatus(current)
+    if (previousStatus !== 'final' && previousStatus !== 'disputed') {
+      return failure('Only a finalized or disputed result can be corrected.')
+    }
+    const invalid = validateCorrectedSets(command.sets, command.winner)
+    if (invalid) return failure(invalid)
+    next = correctResult(current, command.sets, command.winner)
+    if (!next) return failure('This result cannot be corrected.')
+    if (!await prepareResult()) return failure('The correction could not be started. Try again.')
+    if (previousStatus === 'final') {
+      const reversed = await reverseFinalization(tool, command.sessionId, command.userId, session, current)
+      if (!reversed) return failure('The previous result could not be reversed. Try again.')
+    }
+    const audited = await writeAudit(tool, command.sessionId, command.userId, 'corrected', {
+      previousSets: current.sets, previousWinner: current.winner, previousRevision: current.revision,
+      sets: next.sets, winner: next.winner, revision: next.revision,
+    }, next.revision)
+    if (!audited) return failure('The correction could not be audited. Retry the same correction.')
   } else {
     if (!current || current.winner !== null) return failure('There is no active scoreboard.')
     if (current.revision !== command.revision) return failure('The score changed. Check the latest score before trying again.')
@@ -216,11 +610,35 @@ async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: R
   const result = await tool<MutateActionData>('records.update', {
     collection: 'sessions',
     recordId: command.sessionId,
-    data: { matchScore: JSON.stringify(next) },
+    data: { matchScore: JSON.stringify(next), pendingResult: '' },
   }, command.userId)
-  return result.success
-    ? { success: true, data: { recordId: command.sessionId } }
-    : failure('The score could not be saved.')
+  if (!result.success) return failure('The score could not be saved.')
+  if (command.operation === 'reviewResult') {
+    const players = [...new Set(next.teams.flat())]
+    const type = next.disputed
+      ? 'result_disputed' as const
+      : resultStatus(next) === 'final'
+        ? 'result_confirmed' as const
+        : null
+    if (type) {
+      for (const recipientId of players) {
+        await emitNotification(tool, {
+          recipientId,
+          type,
+          sessionId: command.sessionId,
+          title: next.disputed ? `Result disputed: ${session.title}` : `Result confirmed: ${session.title}`,
+          body: next.disputed
+            ? `A player disputed the result of ${session.title}. It is on hold until resolved.`
+            : `Every participant approved the result of ${session.title}. It is now final.`,
+          link: `/rallies?session=${command.sessionId}`,
+          idempotencyKey: next.disputed
+            ? resultDisputedKey(command.sessionId, next.revision, recipientId)
+            : resultConfirmedKey(command.sessionId, next.revision, recipientId),
+        })
+      }
+    }
+  }
+  return { success: true, data: { recordId: command.sessionId } }
 }
 
 export class RallyCommandRoom {
@@ -282,7 +700,7 @@ export class RallyCommandRoom {
     }
 
     const command = parseCommand(body)
-    if (!command) return Response.json(failure('Invalid rally command.'), { status: 400 })
+    const seriesCommand = command ? null : parseSeriesCommand(body)
 
     const recordRoom = this.env.RECORD_ROOMS.get(
       this.env.RECORD_ROOMS.idFromName(`app:${this.env.DEEPSPACE_APP_ID}`),
@@ -306,7 +724,9 @@ export class RallyCommandRoom {
       return await response.json() as ActionResult<T>
     }
 
-    return Response.json(await applyCommand(command, tool))
+    if (command) return Response.json(await applyCommand(command, tool))
+    if (seriesCommand) return Response.json(await applySeriesCommand(seriesCommand, tool))
+    return Response.json(failure('Invalid rally command.'), { status: 400 })
   }
 }
 
@@ -319,6 +739,11 @@ export const rallyCommandAction: ActionHandler<Env> = async ({ userId, params, t
     side: params.side,
     revision: params.revision,
     decision: params.decision,
+    sets: params.sets,
+    winner: params.winner,
+    options: params.options,
+    pollId: params.pollId,
+    optionId: params.optionId,
     userId,
   })
   if (!command) return failure('Invalid rally command.')
@@ -329,6 +754,177 @@ export const rallyCommandAction: ActionHandler<Env> = async ({ userId, params, t
   const room = env.RALLY_COMMAND_ROOMS.get(
     env.RALLY_COMMAND_ROOMS.idFromName(`rally:${env.DEEPSPACE_APP_ID}:${command.sessionId}`),
   )
+  let result: unknown
+  try {
+    const response = await room.fetch(
+      new Request('https://internal/rally-command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(command),
+      }),
+    )
+    if (!response.ok) return failure('The session service is temporarily unavailable. Try again.')
+    result = await response.json()
+  } catch {
+    return failure('The session service is temporarily unavailable. Try again.')
+  }
+  if (
+    isRecord(result) &&
+    ((result.success === true && isRecord(result.data) && typeof result.data.recordId === 'string') ||
+      (result.success === false && typeof result.error === 'string'))
+  ) {
+    return result as RallyCommandResult
+  }
+  return failure('The rally command returned an invalid response.')
+}
+
+type SeriesCommand =
+  | { operation: 'createSeries'; userId: string; seriesId: string; template: SeriesTemplate; startStartsAt: string; intervalWeeks: number; count: number }
+  | { operation: 'generateOccurrences'; userId: string; seriesId: string }
+  | { operation: 'cancelSeries'; userId: string; seriesId: string }
+
+function parseSeriesCommand(value: unknown): SeriesCommand | null {
+  if (!isRecord(value) || typeof value.userId !== 'string' || !value.userId) return null
+  if (value.operation === 'createSeries' &&
+      typeof value.seriesId === 'string' && value.seriesId &&
+      typeof value.startStartsAt === 'string' &&
+      typeof value.intervalWeeks === 'number' && typeof value.count === 'number' &&
+      isRecord(value.template)) {
+    return {
+      operation: 'createSeries',
+      userId: value.userId,
+      seriesId: value.seriesId,
+      template: value.template as unknown as SeriesTemplate,
+      startStartsAt: value.startStartsAt,
+      intervalWeeks: value.intervalWeeks,
+      count: value.count,
+    }
+  }
+  if ((value.operation === 'generateOccurrences' || value.operation === 'cancelSeries') &&
+      typeof value.seriesId === 'string' && value.seriesId) {
+    return { operation: value.operation, userId: value.userId, seriesId: value.seriesId }
+  }
+  return null
+}
+
+async function applySeriesCommand(command: SeriesCommand, tool: RecordTool): Promise<RallyCommandResult> {
+  if (command.operation === 'createSeries') {
+    const problem = validateSeries({
+      template: command.template,
+      startStartsAt: command.startStartsAt,
+      intervalWeeks: command.intervalWeeks,
+      count: command.count,
+    })
+    if (problem) return failure(problem)
+    const created = await tool<MutateActionData>(
+      'records.create',
+      {
+        collection: 'recurringSeries',
+        data: {
+          template: serializeSeriesTemplate(command.template),
+          startStartsAt: new Date(Date.parse(command.startStartsAt)).toISOString(),
+          intervalWeeks: command.intervalWeeks,
+          count: command.count,
+          status: 'active',
+          generatedCount: 0,
+        },
+        recordId: command.seriesId,
+      },
+      command.userId,
+    )
+    return created.success
+      ? { success: true, data: { recordId: command.seriesId } }
+      : failure('The series could not be created.')
+  }
+
+  const found = await tool<GetActionData<RecurringSeriesRecord>>(
+    'records.get',
+    { collection: 'recurringSeries', recordId: command.seriesId },
+    command.userId,
+  )
+  if (!found.success) return failure('This series is unavailable.')
+  const series = found.data.record.data
+  if (series.hostId !== command.userId) return failure('Only the series host can change it.')
+
+  if (command.operation === 'generateOccurrences') {
+    if (series.status !== 'active') return failure('This series is not active.')
+    if (series.generatedCount >= series.count) return failure('All occurrences have already been generated.')
+    const template = parseSeriesTemplate(series.template)
+    if (!template) return failure('This series is unavailable.')
+    for (let index = series.generatedCount; index < series.count; index++) {
+      const startsAt = occurrenceStartsAt(series.startStartsAt, index, series.intervalWeeks)
+      if (Date.parse(startsAt) <= Date.now()) return failure('A series occurrence is no longer in the future.')
+      const created = await tool<MutateActionData>(
+        'records.create',
+        {
+          collection: 'sessions',
+          data: { ...template, startsAt, seriesId: command.seriesId, chatChannelId: '', status: 'open' },
+        },
+        command.userId,
+      )
+      if (!created.success) return failure('A series session could not be created.')
+      const rsvp = await tool<MutateActionData>(
+        'records.create',
+        { collection: 'rsvps', data: { sessionId: created.data.recordId, status: 'going' } },
+        command.userId,
+      )
+      if (!rsvp.success) return failure('The host RSVP could not be saved.')
+    }
+    const updated = await tool<MutateActionData>(
+      'records.update',
+      { collection: 'recurringSeries', recordId: command.seriesId, data: { generatedCount: series.count } },
+      command.userId,
+    )
+    return updated.success
+      ? { success: true, data: { recordId: command.seriesId } }
+      : failure('The series could not be updated.')
+  }
+
+  // cancelSeries
+  if (series.status !== 'active') return failure('This series is already cancelled.')
+  const instances = await tool<QueryActionData<RallySession>>(
+    'records.query',
+    { collection: 'sessions', where: { seriesId: command.seriesId, status: 'open' }, limit: 50 },
+    command.userId,
+  )
+  if (!instances.success) return failure('Series sessions could not be checked.')
+  const now = Date.now()
+  for (const instance of instances.data.records) {
+    if (Date.parse(instance.data.startsAt) <= now) continue
+    const cancelled = await tool<MutateActionData>(
+      'records.update',
+      { collection: 'sessions', recordId: instance.recordId, data: { status: 'cancelled' } },
+      command.userId,
+    )
+    if (cancelled.success) {
+      await notifySessionCancelled(tool, instance.data, instance.recordId, command.userId)
+    }
+  }
+  const updated = await tool<MutateActionData>(
+    'records.update',
+    { collection: 'recurringSeries', recordId: command.seriesId, data: { status: 'cancelled' } },
+    command.userId,
+  )
+  return updated.success
+    ? { success: true, data: { recordId: command.seriesId } }
+    : failure('The series could not be cancelled.')
+}
+
+export const schedulingAction: ActionHandler<Env> = async ({ userId, params, env }) => {
+  const command = parseSeriesCommand({
+    operation: params.operation,
+    seriesId: params.seriesId ?? (params.operation === 'createSeries' ? crypto.randomUUID() : undefined),
+    template: params.template,
+    startStartsAt: params.startStartsAt,
+    intervalWeeks: params.intervalWeeks,
+    count: params.count,
+    userId,
+  })
+  if (!command) return failure('Invalid scheduling command.')
+  const roomName = command.operation === 'createSeries'
+    ? `rally:${env.DEEPSPACE_APP_ID}:series-create:${userId}`
+    : `rally:${env.DEEPSPACE_APP_ID}:series:${command.seriesId}`
+  const room = env.RALLY_COMMAND_ROOMS.get(env.RALLY_COMMAND_ROOMS.idFromName(roomName))
   let result: unknown
   try {
     const response = await room.fetch(

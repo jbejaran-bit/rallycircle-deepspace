@@ -9,6 +9,7 @@ import { buildSessionUrl, formatSessionTime, groupSessionRsvps, parseLocalSessio
 import { runRallyCommand } from '@/lib/rally-actions'
 import { readMatchScore } from '@/lib/rally-score'
 import { buildCalendarEvent, canDownloadCalendar } from '@/lib/rally-calendar'
+import RallySchedulingPoll from '@/components/RallySchedulingPoll'
 import RallyScoreboard from '@/components/RallyScoreboard'
 import LiveCourtboard from '@/components/LiveCourtboard'
 
@@ -312,7 +313,9 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
   const inviteUrl = buildSessionUrl(window.location.origin, sessionId)
   const calendarEvent = canDownloadCalendar(session, userId, myRSVP?.data.status)
     ? buildCalendarEvent(session, inviteUrl)
-    : null
+    : cancelled && (session.hostId === userId || myRSVP?.data.status === 'going')
+      ? buildCalendarEvent(session, inviteUrl, undefined, { method: 'CANCEL' })
+      : null
 
   async function shareSession() {
     try {
@@ -350,8 +353,8 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
         <div className="mb-5 flex items-center justify-between gap-3"><span className="inline-flex items-center gap-1.5 rounded-full bg-[#d7fc83]/15 px-3 py-1 text-xs font-bold uppercase tracking-wider text-[#d7fc83]"><Radio size={12}/> {cancelled?'Cancelled':'Session details'}</span><span className="text-xs text-white/65">{[session.format, session.level].filter(Boolean).join(' · ')}</span></div>
         <button type="button" onClick={() => void shareSession()} className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/25 bg-black/15 px-3 py-2 text-xs font-semibold text-white hover:border-[#d7fc83]"><Share2 size={14}/>{copyState === 'copied' ? 'Link copied!' : 'Share this session'}{copyState === 'copied' && <Copy size={13}/>}</button>
         {calendarEvent && (
-          <a download="rallycircle-session.ics" href={`data:text/calendar;charset=utf-8,${encodeURIComponent(calendarEvent)}`} className="mb-4 ml-2 inline-flex items-center gap-2 rounded-full border border-white/25 px-3 py-2 text-xs font-semibold text-white hover:border-[#d7fc83]">
-            <CalendarDays size={14} aria-hidden /> Add to calendar
+          <a download={cancelled ? 'rallycircle-cancellation.ics' : 'rallycircle-session.ics'} href={`data:text/calendar;charset=utf-8,${encodeURIComponent(calendarEvent)}`} className="mb-4 ml-2 inline-flex items-center gap-2 rounded-full border border-white/25 px-3 py-2 text-xs font-semibold text-white hover:border-[#d7fc83]">
+            <CalendarDays size={14} aria-hidden /> {cancelled ? 'Download calendar cancellation' : 'Add to calendar'}
           </a>
         )}
         {copyState === 'copied' && <span role="status" className="sr-only">Session invitation copied.</span>}
@@ -411,6 +414,9 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
       )}
       {!cancelled&&session.hostId===userId&&<button type="button" disabled={busy} onClick={()=>void cancelSession()} className="text-xs text-rose-300/75 underline underline-offset-4 hover:text-rose-200">Cancel my session</button>}
       <ErrorMessage message={error}/>
+      {!cancelled && (session.hostId === userId || myRSVP) && (
+        <RallySchedulingPoll key={sessionId} sessionId={sessionId} userId={userId} isHost={session.hostId === userId} />
+      )}
       <div id="rally-match" tabIndex={-1} className="scroll-mt-4">
       <RallyScoreboard
         userId={userId}
