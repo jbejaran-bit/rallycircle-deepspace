@@ -262,6 +262,79 @@ orphaned rows) are closed.
   session revision count as final, and orphaned complete final rows count;
   both are closed by the backfill sweep in §6.
 
+## 9. Follow-up — validateSession typeof guards + C1 contract-doc correction
+(2026-11-21 ~13:31 EST, user-authorized next-defect fix; commits `f5fb346`,
+`cf1b609` on this branch)
+
+### 9.1 validateSession typeof guards (confirmed defect, same class as F7)
+
+PR #25 @ `254f865` additionally `typeof`-guards `title`/`court`/`location`
+in `validateSession`; the combined branch still called `input.title.trim()`
+unguarded, so a non-string title (or court/location) threw a `TypeError`
+instead of returning a validation error. Test-first: three new tests in
+`tests/rally.test.mjs` (non-string title/court/location across number,
+`null`, `undefined`, object, array, boolean) — all three failed on unfixed
+code with `TypeError: input.<field>.trim is not a function` (node --test
+21 pass / 3 fail). Fix (`cf1b609`, `src/lib/rally.ts`) mirrors PR #25
+exactly: `typeof input.title !== 'string' || ...` (same for court and
+location), keeping the branch's existing error strings. F7 notes behavior
+unchanged: missing/null notes read as `''`, present non-string rejected
+(`'Notes must be text.'`). Gate after the fix: Vitest **356/356**
+(42 files), tsc clean, eslint clean, vite build clean, node --test
+**34/34** (`tests/courts-games.test.mjs` + `tests/rally.test.mjs`;
+rally alone 24/24 = 21 baseline + 3 new).
+
+### 9.2 C1 contract-doc correction (docs-only, no code change)
+
+`RALLYCIRCLE_BACKEND_CONTRACTS.md` (§§175, 838, 1101 in the task brief)
+was checked against the combined branch's `src/schemas/profiles-schema.ts`
+before editing. Two of the three named sections are CORRECT as written
+and were left unchanged:
+- §175 (`profiles`): member read `'published'`, admin read true — matches
+  the code. Profiles are the one collection where published-read applies.
+- §838 (groups privacy model): describes the experimental Track I+J
+  groups design, which is not in this branch. Left unchanged so the doc
+  does not misrepresent that track.
+
+The actually-stale claims were elsewhere, and those were corrected in
+`~/workspace/deepspace-interview-prep/RALLYCIRCLE_BACKEND_CONTRACTS.md`
+(the doc lives at the prep root, outside the app repo — it is NOT in this
+worktree, so the correction is not committable on this branch and is
+recorded here and in `SPRINT_HANDOFF.md` §12 instead; the doc was not
+forced into the app repo):
+- `playerStats` §3.1: now states member AND admin read `false`, reads
+  action-only via `getPlayerStatsAction`, and that totals are derived on
+  read from `matchResults` rows — finalization maintains no stored row on
+  this line.
+- `matchResults` §3.1: the table gains the `status` column
+  (`final`/`pending`/`disputed`/`cancelled`, default `'final'`, additive —
+  missing counts as `'final'`), and the permissions now state member AND
+  admin read `false`, action-only via `getMatchHistoryAction` /
+  `getPlayerStatsAction` (the old "`visibilityField` as above" implied
+  published-read).
+- `resultAudits` §3.1: the old "`member` read `true`" is withdrawn —
+  member AND admin read `false`, action-only via `getResultAuditAction`
+  (host/participant-only).
+- §10 Privacy model: the first bullet now states `read: 'published'` +
+  `visibilityField` applies to `profiles` only (and group rows on the
+  I+J line), and that stats/results/audits are `read: false` for `*`,
+  `member`, AND `admin`, with the action layer as the read contract; it
+  records the secure recommendation — do NOT restore `'published'`,
+  because the SDK predicate cannot express the row `status` vocabulary
+  (a pending row on a public profile and every audit row would become
+  directly readable) and the stored `visibility` flag is data, not an
+  enforcement boundary (the X4 class proved it fallible). The "Honest
+  boundary" bullet now says the hiding for stats/results/audits is at
+  the action layer only.
+
+Remaining `'published'` mentions in the doc after the correction are all
+correct for their collections (profiles §175, groups §838, corrected §10).
+Follow-up (not taken here): the `playerStatsSchema` header comment still
+says rows are "incrementally maintained... updated only by the
+RallyCommandRoom when a result finalizes", which is stale relative to
+derive-on-read — a comment-only fix for a later pass; it does not affect
+behavior or permissions.
+
 ---
 
 # Branch logs merged into this branch (appended at merge time)
