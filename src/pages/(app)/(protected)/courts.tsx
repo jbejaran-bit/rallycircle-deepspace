@@ -351,12 +351,12 @@ export default function CourtsPage() {
             { id: 'nearby', label: 'Courts near me' },
             { id: 'pittsburgh', label: 'Pittsburgh courts' },
           ] as const).map(({ id, label }) => (
-            <button key={id} type="button" role="tab" id={`court-tab-${id}`} aria-controls={`court-source-panel-${id}`} tabIndex={tab === id ? 0 : -1} aria-selected={tab === id} onClick={() => setTab(id)} className={`min-h-11 rounded-full px-4 py-2 focus-visible:outline-2 text-xs font-bold ${tab === id ? 'bg-[#d7fc83] text-[#0e180f]' : 'bg-white/5 text-white/55 hover:bg-white/10'}`}>
+            <button key={id} type="button" role="tab" id={`court-tab-${id}`} aria-controls="court-source-panel" tabIndex={tab === id ? 0 : -1} aria-selected={tab === id} onClick={() => setTab(id)} className={`min-h-11 rounded-full px-4 py-2 focus-visible:outline-2 text-xs font-bold ${tab === id ? 'bg-[#d7fc83] text-[#0e180f]' : 'bg-white/5 text-white/55 hover:bg-white/10'}`}>
               {label}
             </button>
           ))}
         </div>
-        <div role="tabpanel" id={`court-source-panel-${tab}`} aria-labelledby={`court-tab-${tab}`}>
+        <div role="tabpanel" id="court-source-panel" aria-labelledby={`court-tab-${tab}`}>
           {tab === 'nearby' ? <NearbyCourts /> : <PittsburghCourts />}
         </div>
       </div>
