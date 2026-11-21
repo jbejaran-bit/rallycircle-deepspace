@@ -112,3 +112,30 @@ it('does not invent full games from duplicate or malformed community RSVPs', () 
   ])
   expect(separate.gamesNeedingPlayers.map(game => game.recordId)).toEqual(['opening', 'other'])
 })
+
+
+it('uses the first valid personal RSVP when legacy duplicates conflict', () => {
+  const sessions = [row('joined'), row('tentative'), row('available')]
+  const responses = [
+    { sessionId: 'joined', userId: 'me', status: 'going' },
+    { sessionId: 'joined', userId: 'me', status: 'maybe' },
+    { sessionId: 'tentative', userId: 'me', status: 'unknown' },
+    { sessionId: 'tentative', userId: 'me', status: 'maybe' },
+    { sessionId: 'available', userId: 'me', status: 'unknown' },
+    { sessionId: '', userId: 'me', status: 'going' },
+  ] as unknown as Parameters<typeof buildDashboard>[1]
+  const dashboard = buildDashboard(sessions, responses, [], 'me', now)
+  expect(dashboard.nextRally?.recordId).toBe('joined')
+  expect(filterAgenda(dashboard.entries, 'participating').map(entry => [entry.recordId, entry.response]))
+    .toEqual([['joined', 'going'], ['tentative', 'maybe']])
+  expect(dashboard.gamesNeedingPlayers.map(game => game.recordId)).toEqual(['available'])
+})
+
+it('ignores malformed waitlist identifiers without hiding community openings', () => {
+  const dashboard = buildDashboard([row('open')], [], [
+    { sessionId: '', userId: 'me' },
+    { sessionId: null, userId: 'me' },
+  ] as unknown as Parameters<typeof buildDashboard>[2], 'me', now)
+  expect(filterAgenda(dashboard.entries, 'waitlisted')).toEqual([])
+  expect(dashboard.gamesNeedingPlayers.map(game => game.recordId)).toEqual(['open'])
+})
