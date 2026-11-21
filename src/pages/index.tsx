@@ -13,6 +13,7 @@ export default function Home() {
   return (
     <main className="tennis-landing" data-testid="static-landing">
       <Seo {...seo} path="/" />
+      <a className="tennis-skip" href="#tennis-heading">Skip to content</a>
       <header className="tennis-frame tennis-header">
         <a href="/" className="tennis-wordmark" aria-label="RallyCircle home">
           <span className="tennis-mark" aria-hidden="true" /> RallyCircle
@@ -25,7 +26,7 @@ export default function Home() {
 
       <section className="tennis-frame tennis-hero" aria-labelledby="tennis-heading">
         <div className="tennis-intro">
-          <h1 id="tennis-heading">Make time<br />for tennis.</h1>
+          <h1 id="tennis-heading" tabIndex={-1}>Make time<br />for tennis.</h1>
           <p>Find local games, invite your hitting partners, and keep score together.</p>
           <div className="tennis-actions">
             <a className="tennis-primary" href="/games">Find a game <ArrowRight size={19} aria-hidden /></a>

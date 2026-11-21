@@ -17,6 +17,7 @@ import type { Env } from '../../worker.js'
 import {
   deleteProfileAction,
   getMatchHistoryAction,
+  getResultAuditAction,
   getPlayerStatsAction,
   updateProfileAction,
 } from './profile-actions.js'
@@ -236,6 +237,19 @@ describe('getPlayerStats and getMatchHistory privacy gates', () => {
     for (let i = 0; i < 501; i++) harness.seedResult(true, 1, '2026-11-01T18:00:00.000Z')
     await expect(harness.call(getPlayerStatsAction, 'alice', { userId: 'alice' })).resolves.toMatchObject({
       success: true, data: { stats: { singles: { wins: 501, matchesPlayed: 501 } } },
+    })
+  })
+
+  it('limits result audit reads to the host and participants and hides pending changes', async () => {
+    const harness = createToolsHarness()
+    const committed = harness.seedResult(true, 2, '2026-11-01T18:00:00.000Z')
+    const pending = harness.seedResult(true, 2, '2026-11-01T18:00:00.000Z', 'pending')
+    harness.seed('resultAudits', { sessionId: committed, kind: 'finalized', resultRevision: 2 }, 'alice')
+    harness.seed('resultAudits', { sessionId: committed, kind: 'corrected', resultRevision: 3 }, 'alice')
+    await expect(harness.call(getResultAuditAction, 'outsider', { sessionId: committed })).resolves.toMatchObject({ success: false })
+    await expect(harness.call(getResultAuditAction, 'alice', { sessionId: pending })).resolves.toMatchObject({ success: false, code: 'audit_pending' })
+    await expect(harness.call(getResultAuditAction, 'bob', { sessionId: committed })).resolves.toMatchObject({
+      success: true, data: { entries: [{ kind: 'finalized', resultRevision: 2 }] },
     })
   })
 
