@@ -5,16 +5,26 @@
  * Additive only. No existing collection is changed. All four collections are
  * written by server actions / the RallyCommandRoom only — direct client
  * create/update/delete is closed for every role, exactly like `rsvps` and
- * `waitlists`. Reads use the SDK's own permission model:
+ * `waitlists`. Reads are action-only (C1 decision, combined branch):
  *
- * - `profiles`, `playerStats`, `matchResults`: member `read: 'published'`
- *   with `visibilityField: { field: 'visibility', value: 'public' }`
- *   (verified in deepspace@0.44.2, worker.js: `published` = owner OR a row
- *   whose visibility field equals 'public'). A private row is readable
- *   only by its owner. Signed-out users (`*`) read nothing.
- * - `resultAudits`: member `read: true`, because audit rows describe
- *   sessions that are already member-readable; the detail payload contains
- *   only sets/winner/revision, never private data.
+ * - `profiles`: member `read: 'published'` with
+ *   `visibilityField: { field: 'visibility', value: 'public' }` (verified in
+ *   deepspace@0.44.2, worker.js: `published` = owner OR a row whose
+ *   visibility field equals 'public'). A private row is readable only by
+ *   its owner. Signed-out users (`*`) read nothing.
+ * - `playerStats`, `matchResults`, `resultAudits`: member AND admin
+ *   `read: false`. No direct reads for anyone. The read contract is the
+ *   action layer — getPlayerStatsAction / getMatchHistoryAction /
+ *   getResultAuditAction — which enforces owner-vs-public visibility, the
+ *   host/participant audit gate, the 50-entry history cap, and the
+ *   verified-only derivation. Do NOT "restore" `read: 'published'` here:
+ *   the SDK predicate cannot express the row `status` vocabulary
+ *   (final/pending/disputed/cancelled), so a pending row on a public
+ *   profile and every audit row would become directly readable, and a
+ *   stale `visibility` flag (the X4 class of bug: rows past a read cap
+ *   keeping a stale 'public' value after the profile went private) would
+ *   be the sole enforcement. The stored visibility flag is data, not an
+ *   enforcement boundary. See the combined-branch implementation log §C1.
  *
  * `formats` on profiles uses the `json` column interpretation (a JS array),
  * the same pattern the scoreboard uses for set scores. `won` on

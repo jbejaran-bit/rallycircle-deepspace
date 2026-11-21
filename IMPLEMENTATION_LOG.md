@@ -1,3 +1,270 @@
+# PR #22 combined fixes — implementation log
+
+**Branch:** `feature/muse-pr22-combined-fixes` (isolated development branch, off PR #22
+`review/rallycircle-serialized-session-time` @ `e6ff2d9`)
+**Authorization:** user, 2026-11-21 ~13:14 EST — combine the three reviewed PR #22 fix
+branches, then reconcile the additional verified branches; local integration, conflict
+resolution, regression testing, commits, and publishing an isolated draft review branch
+only. NOT authorized: merging a GitHub PR into main, deployment, production migration,
+application submission.
+**Worktree:** `~/workspace/deepspace-interview-prep/fullstack/pr22-combined-fixes/`
+
+## 1. Merge sequence
+
+| Step | Commit | Gate after |
+|---|---|---|
+| Merge `feature/muse-pr22-port-fixes` @ `9c44dd4` (K01, X4, F3-cancel, F6-poll, S5, F7, F4 visible-pending, DO resilience) | `6f78482` | clean merge, no conflicts |
+| Merge `feature/muse-pr22-rate-limit-fixes` @ `b66d8eb` (K03, K05) | `78f6009` | 2 conflicts, resolved by union (below) |
+| Merge `feature/muse-pr22-dup-create-fixes` @ `d1ab8d0` (per-user room hop + exact-draft dedup) | `eb4b42c` | 1 imports conflict, resolved by union |
+| Stamp `X-App-Action` in rate-limit test helpers | `0c90f8f` | Vitest **298/298** (38 files), tsc clean, eslint clean, vite build clean, node --test 31/31 |
+| Reconcile stats-aggregation + migration + perf | `5b7528d` | Vitest 355/356 — 1 failure (perf poll tally, harness artifact; fixed next commit) |
+| Fix perf harness pollVotes query to honor offset | `58dbfa7` | Vitest **356/356** (42 files), tsc clean, eslint clean, vite build clean, node --test 31/31 |
+
+### Conflict resolutions
+
+- **Rate-limit merge, `rally-command-room.ts` `fetch()`:** kept the port branch's K01
+  marker check first, then the rate-limit branch's geocode `.catch()` (502) and handler
+  `.catch()` (generic failure). The K01 comment block was preserved verbatim.
+- **Rate-limit merge, `IMPLEMENTATION_LOG.md`:** add/add — concatenated both logs.
+- **Dup-create merge, imports:** union — kept the rate-limit branch's
+  `BodyTooLargeError`/`readBoundedBodyText` import AND the dup-create branch's
+  `validateSession` import in the `rally.js` import line. (The trial-merge recipe's
+  note about the `validateSession` import referred to this hunk.)
+- **Dup-create merge, `IMPLEMENTATION_LOG.md`:** add/add — concatenated.
+- **Rate-limit test helpers:** `rawFetch`/`geocodeFetch` in `pr22-rate-limit.test.ts`
+  stamp `X-App-Action: 'true'`, exactly like the real in-app actions — otherwise the
+  K01 gate rejects them with 400 before the handler runs (3 tests). Test-only change.
+
+## 2. Reconciliation — what was ported, what was adapted, what was not
+
+### Stats aggregation (`bc1fc68`) — ported, `loadVerifiedResults` replaced
+
+The stats branch's `loadVerifiedResults` **replaces** the port branch's version, per the
+combiner recipe. The port branch's read-side loader fetched every session (N results =
+N session GETs); the stats loader trusts stored final rows (0 GETs) because the
+serialized room maintains a write-side `status` on every row. Kept from the port
+branch: the **paged `syncOwnedVisibility`** (the stats copy of `profile-actions.ts`
+still had the single `limit: 100` query — porting that would have reintroduced X4),
+the `getMatchHistoryAction` comment, and the F4 visible-pending semantics (the `status`
+vocabulary is identical, so the port branch's flip code merges cleanly). Ported from
+the stats branch: `match-stats.ts` (`MatchResultStatus`, `normalizeResultStatus`,
+`parseStoredSets`, final-only `summarizePlayerStats`), the additive `status` column
+in `profiles-schema.ts`, `result-finalization.ts` (`status: 'final'` on finalization
+writes + `markSessionResults`), the dispute/correction flips in `applyScoreEdit`
+(flip to `'disputed'`/`'pending'` **before** the session score commits — fail closed,
+retry idempotent), and the stats-aggregation test suite (13 tests) plus the
+`profile-actions.test.ts` seed changes (complete seeded rows, as finalization writes
+them). No stored `playerStats` row reintroduced — F2/S10 + F5/S2 stay closed.
+
+### Migration (`3e485de`) — ported, F4 in write-side form
+
+- **F1/F2/F3 (pre-`notes` templates):** `validateSession` already had the port
+  branch's `(input.notes ?? '')` guard; ported the `parseSeriesTemplate` fix
+  (missing notes parses as `''`; non-string still rejected) and the
+  `create-rally-action.ts` fix (notes optional in zod, normalized to `''` in the
+  draft — including the draft forwarded to the per-user room, so the stored
+  session is complete). F7 decision applied (see §3).
+- **F4 (cancelled-session counting):** the migration branch's check lived in the
+  read-side loader (drop rows whose session status is `'cancelled'`). That check
+  cannot survive the stats loader, which never fetches the session for final
+  rows. Re-implemented write-side: a fourth row status, `'cancelled'`, added to
+  the vocabulary (type, schema options, `normalizeResultStatus`); the room flips
+  a session's rows to `'cancelled'` in the cancel path, **after** the session
+  commit (a failed flip can never un-cancel the session; it only leaves rows
+  counted until a maintenance sweep flips them). `loadVerifiedResults` drops
+  `'cancelled'` rows from both statistics and history. The S5 comment in the
+  cancel path was corrected: partial-finalization rows are NOT inert on this
+  architecture (the port loader's assumption) — the flip is what excludes them.
+- **F5 (cancelPoll):** unknown-status polls are now cancellable — only
+  `finalized`/`finalizing`/`cancelled` refuse. Re-polling after cancellation
+  stays impossible by design (`uniqueOn: ['sessionId']`).
+- **F6 (markAllRead):** query by `recipientId` only, skip already-read rows in
+  code (legacy rows without `readAt` were never matched by the `readAt: ''`
+  filter).
+- **Tests:** ported `pr22-migration.test.ts` (28 tests + 1 new) with adaptations
+  to the write-side architecture (see §5).
+
+### Perf (`a4f8a44`) — ported, bounds now pass
+
+- The 3-line history page slice is in the combined `loadVerifiedResults`
+  (slice each page to the rows still needed before checking; no-op for stats).
+- The five former `it.fails` bounds are ordinary passing `it` tests here:
+  stats N=50/200/500 at 0 GETs, poll tally 600 votes at exactly 300/300,
+  cancel fan-out 150 holders at exactly 150 notices.
+- **Harness finding fixed in this branch (`58dbfa7`):** the perf harness's
+  `pollVotes` query sliced from 0 and **ignored `offset`**, so the port
+  branch's paged `refreshPollTally` re-read the same first 500 votes on page
+  2 and the tally stopped at 300/200. The real SDK honors offset (every
+  other query path in the same harness does too); the mock was the outlier.
+  Fixed the harness to honor offset; product code unchanged. The port
+  branch's dedup guard (stop when a page adds no new recordId) remains as
+  the defense against a store that ignores offset — on such a store the
+  tally would undercount rather than loop forever, which is the documented
+  behavior.
+
+### Waitlist-deep (`7ffb93e`) — tests ported as-is
+
+The 6 waitlist concurrency tests ported unchanged (test-only branch; no
+product code). All pass on the combined branch.
+
+### DO resilience — verified present, not duplicated
+
+The port branch already cherry-picked the DO-resilience fixes; the combined
+branch's `pr22-do-resilience.test.ts` (14 tests) passes. No re-port.
+
+## 3. F7 reconciliation (user decision, 2026-11-21 13:14 EST)
+
+**Decision: missing or null notes read as `''` (empty string); a present but
+non-string value is rejected.** This matches the port/migration branches and the
+stable product sprint's adopted behavior (PR #25 @ `254f865` closed F7 the same
+way). The adversarial branch's error-on-missing is superseded on this line.
+
+Implementation: `validateSession` rejects a present non-string `notes` with
+`'Notes must be text.'` and treats missing/null as `''` for the 400-character
+check; `parseSeriesTemplate` normalizes a missing `notes` to `''` and rejects a
+non-string one; `create-rally-action.ts` zod schema has notes optional (still
+rejects non-string drafts) and normalizes to `''` before validation and before
+forwarding the draft to the per-user room.
+
+## 4. C1 recommendation — keep `read: false`, fix the stale header
+
+**Recommendation: keep member AND admin `read: false` on `playerStats`,
+`matchResults`, and `resultAudits` in this branch. Do NOT restore
+`read: 'published'`. Fix the schema header comment to match the code (done in
+this branch); the contract doc (`RALLYCIRCLE_BACKEND_CONTRACTS.md` §§175, 838,
+1101) still says `'published'` and needs the same correction.**
+
+The three-way fork:
+
+| Position | Direct-read rule | Where |
+|---|---|---|
+| Contract + schema header (stale) | member `read: 'published'` (owner OR visibility='public') | `RALLYCIRCLE_BACKEND_CONTRACTS.md`, `profiles-schema.ts` header |
+| PR #19 code | member `read: 'own'` (owner only) | superseded |
+| PR #20/#22 code (this branch) | member `read: false`, admin `read: false` (no direct reads) | `profiles-schema.ts` collections |
+
+Privacy analysis of restoring `'published'`:
+
+1. **The visibility flag would become the sole enforcement for direct reads.**
+   That flag has already been proven fallible: X4 — rows past a 100-row read
+   cap kept a stale `'public'` value after the profile went private/deleted
+   (fixed by paging, but it proves the flag can be stale). A stale `'public'`
+   flag would expose the row to every signed-in member via direct read, with
+   no action-layer check to catch it.
+2. **The SDK predicate cannot express the row `status` vocabulary.**
+   `'published'` is owner OR visibility='public'; it says nothing about
+   `final`/`pending`/`disputed`/`cancelled`. A pending row (corrected outcome,
+   unapproved) on a public profile and every `resultAudits` row would become
+   directly readable — including corrected-but-unapproved outcomes and dispute
+   states the action layer deliberately hides or gates.
+3. **Direct reads bypass the action-layer gates that do exist:**
+   `getResultAuditAction` limits reads to host + participants;
+   `getMatchHistoryAction` caps at 50 entries; `getPlayerStatsAction`
+   derives only from verified rows. None of that applies to a direct query.
+4. **`'own'` (PR #19) is safe but redundant:** the owner already gets
+   everything through the actions; a second read path adds attack surface
+   (and a second place to keep in sync) for no user-facing capability.
+
+The action layer IS the read contract here: owner sees own data; a non-owner
+sees data only when the profile is public; audits are host/participant-only;
+history is capped. No client code reads these collections directly (verified:
+outside `src/server/`, only `src/lib/match-stats.ts` and the schema reference
+them; the UI goes through the actions), so closing direct reads costs no
+feature. The header comment previously promised `'published'` — that stale
+promise is what would mislead a future integrator into "restoring" direct
+reads, so it was corrected in the branch to describe the action-only rule.
+
+## 5. Test adaptations for the write-side architecture
+
+The migration test suite was written against the port branch's read-side
+loader (which re-derived every row from the session score). Three S5 tests and
+one S8 test needed fixture/semantic adaptation; the properties they lock are
+preserved in write-side form:
+
+- **Fixtures:** `seedFinalRow` now seeds complete rows exactly as finalization
+  writes them (format/won/sets/status). The combined read path trusts stored
+  final rows, so an incomplete row is dropped, not derived.
+- **5b (stale revision):** now seeds the row with `status: 'pending'` (the
+  state the correction flip produces) and the session at the corrected
+  revision; stats exclude it and history shows the corrected outcome as
+  pending (winner 1, revision 3). Legacy gap documented: a pre-status row
+  whose session was corrected *before* the status column shipped has no flip
+  to observe and counts as final — the backfill sweep in §6 covers it.
+- **5c (cancelled session):** now seeds the row with `status: 'cancelled'`
+  (the state the cancel flip produces). New test **5c2** proves the flip
+  through the real path: finalize a match through the room (counts 1),
+  cancel the session through the room, assert both rows flipped to
+  `'cancelled'` and stats/history exclude them.
+- **5d (missing session):** now seeds a complete row for a missing session
+  and asserts the documented trade: the call succeeds and the row is trusted
+  (counts). The read-side loader dropped it; the write-side design trades
+  that for 0 GETs. Sessions are never deleted in normal operation (deletion
+  is a DO-recovery edge case); a maintenance sweep can flip orphaned rows to
+  `'cancelled'`.
+- **8a:** seeded row completed with format/won/sets (it previously carried
+  only `status: 'final'` and would have been dropped as incomplete).
+
+## 6. Migration plan for the new `status` column (additive, no production migration)
+
+The `status` column on `matchResults` is additive: the schema declares
+`default: 'final'`, and `normalizeResultStatus` treats a missing value as
+`'final'` (pre-migration rows were written only on finalization). No existing
+collection is changed, no existing row is rewritten by the code, and no
+migration runs automatically. **Never apply any migration to production
+without approval.**
+
+One-time backfill sweep (only if pre-status rows exist in production — none
+do on this line yet, since no release has shipped `matchResults`): for every
+`matchResults` row with no `status`, set it from the session: `'cancelled'`
+if the session status is `'cancelled'`, `'pending'` if the session score
+revision exceeds the row's revision, `'disputed'` if the session score is
+disputed, `'final'` otherwise; rows whose session is missing are flipped to
+`'cancelled'`. The sweep is idempotent (rows already at a status are
+skipped) and must run as an explicit maintenance action with the owner's
+approval, never as a read-path side effect (a read-side heal would count a
+superseded outcome while a correction is in flight — the failed-commit
+window). After the sweep, the legacy gaps in §5 (pre-status stale rows,
+orphaned rows) are closed.
+
+## 7. Gate (final branch, local mock harness)
+
+- Vitest **356/356** (42 files), tsc clean, eslint clean, vite build clean,
+  node --test **31/31**.
+- The three former perf `it.fails` bounds now pass as ordinary tests; the
+  history page slice keeps history N=200 at exactly 50 GETs; stats N=500 at
+  0 GETs.
+- All evidence is local mock-harness simulation (in-memory RecordRoom, single
+  Node process, this 1.5-CPU VM) unless labeled otherwise. Live verification
+  (two-account flows, live RecordRoom enforcement, real-DO queue behaviour,
+  live alarms, migration against pre-existing production data) remains
+  unverified from this environment — see `docs/TEST_ENVIRONMENT_PLAN.md`.
+
+## 8. Known limitations carried forward (unchanged from the sprint)
+
+- `pendingResult` / poll-finalize liveness — no timeout on stuck pending
+  operations; `finalizePoll` two-write window remains (the alarm gives a
+  retry path, not a timeout).
+- Stats optimistic window — finalization writes the row (`final`) before the
+  session commit; a failed commit means stats count the approved result
+  until the retry lands (pre-existing base behaviour).
+- `markSessionResults` uses a single page (limit 100, ≤4 players per match).
+- Lost promotion notices are accepted-by-design (no background retry queue);
+  cancel notices come from RSVP rows.
+- No waitlist-position endpoint (Track K+L L10 never merged into PR #22).
+- K03 does not cover creation (creates self-serialize per user, but a
+  deliberate creation flood is still possible; a per-user creation cap is a
+  product decision). Same for `createSeries` across fresh series ids.
+- Cancel-flip gap (new, this branch): the `'cancelled'` flip runs after the
+  session commit and is best-effort — if it fails, the rows stay counted
+  until a maintenance sweep flips them. The flip is idempotent and a later
+  cancel is a no-op (early return), so the gap only opens on a failed flip.
+- Legacy gaps (new, this branch; see §5/§6): pre-status rows with a stale
+  session revision count as final, and orphaned complete final rows count;
+  both are closed by the backfill sweep in §6.
+
+---
+
+# Branch logs merged into this branch (appended at merge time)
+
 # PR #22 Port Fixes — Implementation Log
 
 **Target:** PR #22 `review/rallycircle-serialized-session-time` @ `e6ff2d9`
