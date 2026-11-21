@@ -1,9 +1,11 @@
-import { signOut, useUser } from 'deepspace'
+import { signOut, useAuth, useUser } from 'deepspace'
 import { Link } from 'react-router-dom'
 import { Button } from '@/components/ui'
+import { PlayerProfileEditor } from '@/components/PlayerProfileEditor'
 import { PlayerIdentity } from '@/components/PlayerIdentity'
 
 export default function SettingsPage() {
+  const { userId } = useAuth()
   const { user, isLoading, refetch } = useUser()
 
   return (
@@ -26,6 +28,7 @@ export default function SettingsPage() {
             </div>
           ) : <div role="alert"><p>Your profile is unavailable.</p><Button className="mt-3" variant="outline" onClick={() => void refetch().catch(() => undefined)}>Retry profile</Button></div>}
         </section>
+        {userId && <PlayerProfileEditor key={userId} userId={userId} />}
         <section className="space-y-3 rounded-2xl border border-white/15 bg-[#17251d] p-5" aria-labelledby="account-session">
           <h2 id="account-session" className="text-xl font-bold">Sign-in and privacy</h2>
           <a className="block min-h-11 text-sm text-[#d7fc83] underline underline-offset-4" href="/privacy">Privacy and help</a>

@@ -19,6 +19,7 @@ const resultLabels = {
   confirmed: 'Partially confirmed result',
   disputed: 'Disputed result',
   final: 'Final result',
+  corrected: 'Corrected result',
 }
 
 const sides = [0, 1] as const
@@ -41,7 +42,7 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
     return () => window.clearTimeout(timer)
   }, [awaitingRevision, waitingForScore])
   const canReview = session.status === 'open' && score &&
-    (result === 'proposed' || result === 'confirmed') &&
+    (result === 'proposed' || result === 'confirmed' || result === 'corrected') &&
     score.teams.flat().includes(userId) && !score.approvals.includes(userId)
   const editable = isHost && session.status === 'open'
   const teamSize = session.format === 'Singles' ? 1 : session.format === 'Doubles' ? 2 : 0
@@ -140,7 +141,7 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
           <button className={button} type="button" disabled={!canStart || pending} onClick={() => void edit({ operation: 'startMatch', sessionId, teams: [teams[0], teams[1]] })}>Start match</button>
         </>
       )}
-      {score?.winner != null && (result === 'proposed' || result === 'confirmed') && (
+      {score?.winner != null && (result === 'proposed' || result === 'confirmed' || result === 'corrected') && (
         <p className="text-sm text-white/75">{score.approvals.length} of {score.teams.flat().length} recorded players approved this result.</p>
       )}
       <ConfirmModal

@@ -14,7 +14,7 @@ const filters: { id: DashboardFilter; label: string }[] = [
 
 const matchLabels = {
   'in-progress': 'In progress', proposed: 'Awaiting confirmation', confirmed: 'Partially confirmed',
-  disputed: 'Disputed', final: 'Final',
+  disputed: 'Disputed', corrected: 'Corrected · awaiting confirmation', final: 'Final',
 }
 
 const panel = 'rounded-2xl border border-white/15 bg-[#17251d] p-4 sm:p-6'
