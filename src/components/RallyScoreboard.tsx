@@ -76,7 +76,6 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
       if (command.operation === 'startMatch') setAwaitingStart(true)
       if (command.operation === 'reviewResult') setReview(null)
     } catch (cause) {
-      setReview(null)
       setError(cause instanceof Error ? cause.message : 'The score could not be saved.')
     } finally {
       inFlight.current = false
@@ -117,8 +116,8 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
           </div>
           {canReview && (
             <div className="flex flex-wrap gap-2">
-              <button type="button" className={button} disabled={pending} onClick={() => setReview({ decision: 'approve', revision: score.revision, score: session.matchScore })}>Confirm result</button>
-              <button type="button" className={button} disabled={pending} onClick={() => setReview({ decision: 'dispute', revision: score.revision, score: session.matchScore })}>Dispute result</button>
+              <button type="button" className={button} disabled={pending} onClick={() => { setError(''); setReview({ decision: 'approve', revision: score.revision, score: session.matchScore }) }}>Confirm result</button>
+              <button type="button" className={button} disabled={pending} onClick={() => { setError(''); setReview({ decision: 'dispute', revision: score.revision, score: session.matchScore }) }}>Dispute result</button>
             </div>
           )}
           {editable && score.winner === null && (
@@ -181,6 +180,7 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
         confirmText={review?.decision === 'dispute' ? 'Dispute result' : 'Confirm result'}
         variant={review?.decision === 'dispute' ? 'destructive' : 'default'}
         loading={pending}
+        error={error}
       />
       {pending && <p role="status">Saving score…</p>}
       {waitingForStart && (
@@ -196,7 +196,7 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
           ) : 'Point saved. Waiting for the live score…'}
         </div>
       )}
-      {error && <p role="alert" className="text-sm text-rose-200">{error}</p>}
+      {error && !(review && canReview) && <p role="alert" className="text-sm text-rose-200">{error}</p>}
     </section>
   )
 }

@@ -30,7 +30,7 @@ export default function RallySchedulingPoll({ sessionId, userId, isHost }: Props
     : undefined
 
   async function run(command: Parameters<typeof runRallyCommand>[0], success: string) {
-    if (inFlight.current) return
+    if (inFlight.current) return false
     inFlight.current = true
     setBusy(true)
     setError('')
@@ -38,8 +38,10 @@ export default function RallySchedulingPoll({ sessionId, userId, isHost }: Props
     try {
       await runRallyCommand(command)
       setMessage(success)
+      return true
     } catch (error) {
       setError(error instanceof Error ? error.message : 'The scheduling poll could not be updated.')
+      return false
     } finally {
       inFlight.current = false
       setBusy(false)
@@ -64,7 +66,7 @@ export default function RallySchedulingPoll({ sessionId, userId, isHost }: Props
       {status === 'loading' && <p role="status">Loading the scheduling poll…</p>}
       {status === 'error' && <p role="alert">The scheduling poll could not be loaded.</p>}
       {status === 'ready' && poll && (
-        <PollOptions {...{ sessionId, userId, isHost, busy, run }} poll={poll} />
+        <PollOptions {...{ sessionId, userId, isHost, busy, run, error }} clearError={() => setError('')} poll={poll} />
       )}
       {status === 'ready' && !poll && confirmedTime && (
         <p>Confirmed time <time dateTime={confirmedTime.startsAt}>{formatSessionTime(confirmedTime.startsAt)}</time></p>
@@ -88,17 +90,19 @@ export default function RallySchedulingPoll({ sessionId, userId, isHost }: Props
           </div>
         </form>
       )}
-      {error && <p role="alert" className="text-rose-300">{error}</p>}
+      {error && !poll && <p role="alert" className="text-rose-300">{error}</p>}
       {poll && busy && <p role="status" className="text-sm text-muted-foreground">Saving poll changes…</p>}
       {message && <p role="status" className="text-sm text-muted-foreground">{message}</p>}
     </section>
   )
 }
 
-function PollOptions({ sessionId, userId, isHost, poll, busy, run }: Props & {
+function PollOptions({ sessionId, userId, isHost, poll, busy, run, error, clearError }: Props & {
   poll: { recordId: string; data: RallyPoll }
   busy: boolean
-  run: (command: Parameters<typeof runRallyCommand>[0], message: string) => Promise<void>
+  error: string
+  clearError: () => void
+  run: (command: Parameters<typeof runRallyCommand>[0], message: string) => Promise<boolean>
 }) {
   const pollId = poll.recordId
   const { records: votes, status } = useQuery<RallyPollVote>('pollVotes', { where: { pollId, userId } })
@@ -123,15 +127,16 @@ function PollOptions({ sessionId, userId, isHost, poll, busy, run }: Props & {
               {!finalizing && <Button type="button" variant="outline" disabled={busy || status !== 'ready'} onClick={() => void run({
                 operation: voted ? 'withdrawVote' : 'castVote', sessionId, pollId, optionId: id,
               }, voted ? 'Vote withdrawn.' : 'Vote saved.')} aria-label={`${voted ? 'Withdraw vote for' : 'Vote for'} ${formatSessionTime(startsAt)}`}>{voted ? 'Withdraw vote' : 'Vote'}</Button>}
-              {isHost && <Button type="button" disabled={busy} onClick={() => setConfirmation({ kind: 'time', optionId: id, startsAt })}
+              {isHost && <Button type="button" disabled={busy} onClick={() => { clearError(); setConfirmation({ kind: 'time', optionId: id, startsAt }) }}
                 aria-label={`${finalizing ? 'Retry confirmation for' : 'Confirm time'} ${formatSessionTime(startsAt)}`}>{finalizing ? 'Retry confirmation' : 'Confirm time'}</Button>}
             </li>
           )
         })}
       </ul>
       {status === 'error' && <p role="alert">Your votes could not be loaded.</p>}
-      {isHost && !finalizing && <Button type="button" variant="outline" disabled={busy} onClick={() => setConfirmation({ kind: 'cancel' })}>Cancel poll</Button>}
-      <ConfirmModal open={Boolean(confirmation)} onClose={() => { if (!busy) setConfirmation(undefined) }}
+      {isHost && !finalizing && <Button type="button" variant="outline" disabled={busy} onClick={() => { clearError(); setConfirmation({ kind: 'cancel' }) }}>Cancel poll</Button>}
+      {error && !confirmation && <p role="alert" className="text-rose-300">{error}</p>}
+      <ConfirmModal error={error} open={Boolean(confirmation)} onClose={() => { if (!busy) setConfirmation(undefined) }}
         title={confirmation?.kind === 'cancel' ? 'Cancel this scheduling poll?' : 'Confirm the rally time?'}
         description={confirmation?.kind === 'time' ? `${formatSessionTime(confirmation.startsAt)} will become the rally’s scheduled time.` : 'The current rally time will stay in place.'}
         confirmText={confirmation?.kind === 'cancel' ? 'Cancel poll' : finalizing ? 'Retry confirmation' : 'Confirm time'}
@@ -143,7 +148,7 @@ function PollOptions({ sessionId, userId, isHost, poll, busy, run }: Props & {
           const result = confirmation.kind === 'cancel'
             ? run({ operation: 'cancelPoll', sessionId, pollId }, 'Poll cancelled.')
             : run({ operation: 'finalizePoll', sessionId, pollId, optionId: confirmation.optionId }, 'Rally time confirmed.')
-          void result.then(() => setConfirmation(undefined))
+          void result.then(saved => { if (saved) setConfirmation(undefined) })
         }} />
     </div>
   )

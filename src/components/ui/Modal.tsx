@@ -161,6 +161,7 @@ interface ConfirmModalProps {
   cancelText?: string
   variant?: 'destructive' | 'default'
   loading?: boolean
+  error?: string
 }
 
 export function ConfirmModal({
@@ -173,6 +174,7 @@ export function ConfirmModal({
   cancelText = 'Cancel',
   variant = 'destructive',
   loading = false,
+  error,
 }: ConfirmModalProps): JSX.Element {
   return (
     <Modal open={open} onClose={onClose} size="sm">
@@ -180,6 +182,7 @@ export function ConfirmModal({
         <Modal.Title>{title}</Modal.Title>
         {description && <Modal.Description>{description}</Modal.Description>}
       </Modal.Header>
+      {error && <p role="alert" className="break-words text-sm text-foreground">{error}</p>}
       <Modal.Footer>
         <Button variant="ghost" onClick={onClose} disabled={loading}>
           {cancelText}
