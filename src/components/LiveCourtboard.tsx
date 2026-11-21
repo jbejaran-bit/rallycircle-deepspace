@@ -89,12 +89,11 @@ export default function LiveCourtboard({
     >
       <header className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[#d7fc83]">Tactics room</p>
           <h3 id="courtboard-title" className="mt-1 text-lg font-black text-white">Live Courtboard</h3>
-          <p className="mt-1 text-xs text-white/55">Place your doubles team together. Changes sync to this session only.</p>
+          <p className="mt-1 text-xs text-white/55">Place the doubles player markers to plan positions together.</p>
         </div>
         <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] font-semibold text-white/65">
-          A side / B side
+          Session only
         </span>
       </header>
 
@@ -365,7 +364,7 @@ function ConnectedCourtboard({
               : 'Connecting to the shared court…'}
         </p>
         {!connected && (
-          <button type="button" onClick={onRetry} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-semibold text-[#d7fc83] hover:bg-white/5">
+          <button type="button" onClick={onRetry} className="inline-flex min-h-11 items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-semibold text-[#d7fc83] hover:bg-white/5">
             <RefreshCw size={13} /> Retry
           </button>
         )}
@@ -389,9 +388,9 @@ function ConnectedCourtboard({
                 data-testid={`courtboard-add-${label}`}
                 disabled={!canEdit || exists || pending}
                 onClick={() => addMarker(label)}
-                className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold text-white transition hover:border-[#d7fc83]/50 disabled:cursor-not-allowed disabled:opacity-40"
+                className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold text-white transition hover:border-[#d7fc83]/50 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                {pending ? <LoaderCircle size={14} className="animate-spin" /> : <Plus size={14} />}
+                {pending ? <LoaderCircle size={14} className="motion-safe:animate-spin" /> : <Plus size={14} />}
                 {exists ? `${label} on court` : pending ? `Adding ${label}…` : `Add ${label}`}
               </button>
             )
@@ -403,7 +402,7 @@ function ConnectedCourtboard({
             data-testid="courtboard-remove-selected"
             disabled={!canEdit || pendingDeletes.has(selectedMarker.id)}
             onClick={() => removeMarker(selectedMarker)}
-            className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-300/20 px-3 py-2 text-xs font-semibold text-rose-200 hover:bg-rose-400/10 disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-rose-300/20 px-3 py-2 text-xs font-semibold text-rose-200 hover:bg-rose-400/10 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Trash2 size={14} />
             {pendingDeletes.has(selectedMarker.id) ? 'Removing…' : `Remove ${selectedMarker.props.label}`}
@@ -464,7 +463,7 @@ function ConnectedCourtboard({
                 tabIndex={0}
                 aria-label={`${label} player marker at ${Math.round(x)}, ${Math.round(y)}. ${canEdit ? 'Drag or use arrow keys to move.' : 'Read-only.'}`}
                 aria-pressed={isSelected}
-                className={canEdit ? 'cursor-grab focus:outline-none active:cursor-grabbing' : 'cursor-default focus:outline-none'}
+                className={canEdit ? 'group cursor-grab focus:outline-none active:cursor-grabbing' : 'group cursor-default focus:outline-none'}
                 onClick={() => setSelectedId(marker.id)}
                 onPointerDown={(event) => beginDrag(event, marker)}
                 onKeyDown={(event) => {
@@ -487,6 +486,8 @@ function ConnectedCourtboard({
                 filter="url(#marker-shadow)"
               >
                 <circle cx={x} cy={y} r="56" fill="#ffffff" fillOpacity=".01" />
+                <circle cx={x} cy={y} r={COURTBOARD_MARKER_SIZE / 2 + 13} fill="none" stroke="#ffffff" strokeWidth="5"
+                  className="opacity-0 group-focus-visible:opacity-100" aria-hidden="true" pointerEvents="none" />
                 <circle
                   cx={x}
                   cy={y}
@@ -519,7 +520,7 @@ function ConnectedCourtboard({
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-[11px] leading-relaxed text-white/45">
+        <p className="text-xs leading-relaxed text-white/65">
           {pendingMoveCount
             ? 'A local move preview is shown. Other players’ updates and a reconnected room snapshot are server-confirmed.'
             : 'Server-synchronized plan · drag markers or focus one and use arrow keys.'}
@@ -554,7 +555,7 @@ function NudgeButton({
       aria-label={label}
       disabled={disabled}
       onClick={onClick}
-      className="grid h-8 w-8 place-items-center rounded-lg border border-white/10 bg-white/5 text-white/75 hover:border-[#d7fc83]/50 hover:text-[#d7fc83] disabled:cursor-not-allowed disabled:opacity-35"
+      className="grid size-11 place-items-center rounded-lg border border-white/10 bg-white/5 text-white/75 hover:border-[#d7fc83]/50 hover:text-[#d7fc83] disabled:cursor-not-allowed disabled:opacity-35"
     >
       {children}
     </button>

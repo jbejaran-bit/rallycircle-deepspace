@@ -71,6 +71,9 @@ test('shared link and live readiness update across two accounts', async ({ users
     await bob.page.goto(invitation)
     await expect(bob.page.getByRole('heading', { name: title }).last()).toBeVisible({ timeout: 30_000 })
     bobReady = true
+    await expect(bob.page.getByRole('heading', { name: title }).last()).toBeFocused()
+    await bob.page.getByRole('link', { name: 'Session list' }).press('Enter')
+    await expect(bob.page.getByRole('heading', { name: 'Find a rally' })).toBeFocused()
     expect(await bob.page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
     const forbiddenCancel = await invokeRallyCommand(bob.page, { operation: 'cancel', sessionId })
     expect(forbiddenCancel.result).toMatchObject({
@@ -188,8 +191,10 @@ test('shared link and live readiness update across two accounts', async ({ users
   } finally {
     // Cancel rather than pretending the user can erase other players' records.
     if (created) {
-      alice.page.once('dialog', dialog => void dialog.accept())
       await alice.page.getByRole('button', { name: 'Cancel my session' }).click()
+      const cancellation = alice.page.getByRole('dialog', { name: 'Cancel this session?' })
+      await expect(cancellation.getByRole('button', { name: 'Keep session' })).toBeVisible()
+      await cancellation.getByRole('button', { name: 'Cancel session' }).click()
       await expect(alice.page.getByText('This session was cancelled')).toBeVisible()
       await expect(alice.page.getByText('This session is cancelled; player responses are closed.')).toBeVisible()
       await expect(alice.page.getByRole('button', { name: /I.m in/i })).toHaveCount(0)
