@@ -1,7 +1,7 @@
 # Duplicate rally creation — fix log
 
 **Target:** PR #22 `review/rallycircle-serialized-session-time` @ `e6ff2d9`
-**Branch:** `feature/muse-pr22-dup-create-fixes` @ `070f778` (2 commits off `e6ff2d9`)
+**Branch:** `feature/muse-pr22-dup-create-fixes` @ `49988c3` (3 commits off `e6ff2d9`)
 **Authorization:** user 2026-11-21 00:52, overnight 10-hour backend reliability sprint (issues #23/#24).
 **Method:** executable mock-harness/unit tests only; local simulation, never live auth, never production data.
 Codex's branches untouched; nothing merged, deployed, or submitted; PR #21 untouched.
@@ -161,11 +161,12 @@ Trial-merge commit (scratch worktree, removed): `aa4de3a`.
 
 ## 8. Deliverables
 
-- Branch: `feature/muse-pr22-dup-create-fixes` @ `070f778`
-  (commits `bdc00ba` tests-first, `070f778` fix)
+- Branch: `feature/muse-pr22-dup-create-fixes` @ `49988c3`
+  (commits `bdc00ba` tests-first, `070f778` fix, `49988c3` log)
 - Bundle: `fullstack/pr22-dup-create-fixes.bundle` — SHA-256
-  (recorded below after creation), `git bundle verify`: OK, complete history.
-- Per-commit patches: `fullstack/pr22-dup-create-fixes-patches/` (0001–0002, plus this log).
+  `1286cdf9cf7eebd32aa28d8ff64c070b8166b3ae87c8a4bbbdb06cac030e7e32`,
+  `git bundle verify`: OK, complete history, head `49988c3`.
+- Per-commit patches: `fullstack/pr22-dup-create-fixes-patches/` (0001–0004, including this log).
 - This log: `fullstack/pr22-dup-create-fixes/IMPLEMENTATION_LOG.md`
 
 Nothing was merged, deployed, pushed, or submitted; PR #21 untouched; no production data or
