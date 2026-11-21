@@ -115,3 +115,17 @@ for (const width of [320, 375, 390, 768, 1024, 1440]) {
     expect(bounds && bounds.x + bounds.width).toBeLessThanOrEqual(width)
   })
 }
+
+test('test-account sign-in can scroll on a short landscape screen', async ({ page }) => {
+  await page.setViewportSize({ width: 640, height: 320 })
+  await page.goto('/games')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).last().click()
+  const dialog = page.getByRole('dialog', { name: 'Sign in to RallyCircle' })
+  await dialog.getByText('Sign in with a test account').click()
+  const password = dialog.getByLabel('Password')
+  await password.focus()
+  await expect(password).toBeInViewport()
+  const entry = dialog.getByRole('button', { name: 'Sign in with email' })
+  await entry.scrollIntoViewIfNeeded()
+  await expect(entry).toBeInViewport()
+})

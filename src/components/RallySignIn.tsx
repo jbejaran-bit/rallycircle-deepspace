@@ -39,24 +39,26 @@ export default function RallySignIn({ onClose }: { onClose: () => void }) {
         <Modal.Title>Sign in to RallyCircle</Modal.Title>
         <Modal.Description>Continue with your account to join rallies and keep your schedule in one place.</Modal.Description>
       </Modal.Header>
-      <div className="mt-4 space-y-2">
-        {(['google', 'github'] as const).map(provider => (
-          <a key={provider} href={`/api/auth/social-redirect?provider=${provider}`}
-            className="flex min-h-11 items-center justify-between rounded-lg border border-border px-3 text-sm font-semibold hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring">
-            Continue with {provider === 'google' ? 'Google' : 'GitHub'} <ArrowUpRight className="size-4" aria-hidden="true" />
-          </a>
-        ))}
-      </div>
-      <details className="mt-4 border-t border-border pt-3" open={emailOpen} onToggle={event => setEmailOpen(event.currentTarget.open)}>
-        <summary data-testid="auth-email-toggle" className="cursor-pointer py-2 text-sm font-medium text-muted-foreground">Sign in with a test account</summary>
-        <form onSubmit={submit} className="mt-2 grid gap-3">
-          <label className="grid gap-1 text-sm">Email<Input name="email" type="email" autoComplete="email" required /></label>
-          <label className="grid gap-1 text-sm">Password<Input name="password" type="password" autoComplete="current-password" required /></label>
-          {error && <p role="alert" className="text-sm">{error}</p>}
-          <Button disabled={busy} type="submit" className="min-h-11">{busy ? 'Signing in…' : 'Sign in with email'}</Button>
-        </form>
-      </details>
-      <Link to="/privacy" onClick={onClose} className="mt-4 inline-flex w-fit text-sm text-muted-foreground underline underline-offset-4">Privacy and help</Link>
+      <Modal.Body className="min-h-0 space-y-3">
+        <div className="space-y-2">
+          {(['google', 'github'] as const).map(provider => (
+            <a key={provider} href={`/api/auth/social-redirect?provider=${provider}`}
+              className="flex min-h-11 items-center justify-between rounded-lg border border-border px-3 text-sm font-semibold hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring">
+              Continue with {provider === 'google' ? 'Google' : 'GitHub'} <ArrowUpRight className="size-4" aria-hidden="true" />
+            </a>
+          ))}
+        </div>
+        <details className="mt-4 border-t border-border pt-3" open={emailOpen} onToggle={event => setEmailOpen(event.currentTarget.open)}>
+          <summary data-testid="auth-email-toggle" className="cursor-pointer py-2 text-sm font-medium text-muted-foreground">Sign in with a test account</summary>
+          <form onSubmit={submit} className="mt-2 grid gap-3">
+            <label className="grid gap-1 text-sm">Email<Input name="email" type="email" autoComplete="email" required /></label>
+            <label className="grid gap-1 text-sm">Password<Input name="password" type="password" autoComplete="current-password" required /></label>
+            {error && <p role="alert" className="text-sm">{error}</p>}
+            <Button disabled={busy} type="submit" className="min-h-11">{busy ? 'Signing in…' : 'Sign in with email'}</Button>
+          </form>
+        </details>
+        <Link to="/privacy" onClick={onClose} className="inline-flex min-h-11 w-fit items-center text-sm text-muted-foreground underline underline-offset-4">Privacy and help</Link>
+      </Modal.Body>
     </Modal>
   )
 }
