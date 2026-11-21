@@ -232,6 +232,11 @@ export class RallyCommandRoom {
   ) {}
 
   fetch(request: Request): Promise<Response> {
+    // K01 is defense in depth. The Worker still authenticates the caller
+    // before it dispatches, and the Durable Object binding stays private.
+    if (request.headers.get('X-App-Action') !== 'true') {
+      return Promise.resolve(Response.json(failure('Invalid internal request.'), { status: 400 }))
+    }
     if (request.method === 'POST' && new URL(request.url).pathname === '/geocode') {
       return this.geocode(request)
     }
@@ -334,7 +339,7 @@ export const rallyCommandAction: ActionHandler<Env> = async ({ userId, params, t
     const response = await room.fetch(
       new Request('https://internal/rally-command', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-App-Action': 'true' },
         body: JSON.stringify(command),
       }),
     )
