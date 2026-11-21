@@ -12,15 +12,6 @@ export type FinalizationTool = <T>(
 
 type StoredRow<T> = { recordId: string; data: T }
 
-interface PlayerStatsRow {
-  userId: string
-  format: StatsFormat
-  wins: number
-  losses: number
-  matchesPlayed: number
-  visibility: ProfileVisibility
-}
-
 interface MatchResultRowData {
   sessionId: string
   userId: string
@@ -100,51 +91,7 @@ export async function writeAudit(
   return result.success
 }
 
-/**
- * Recompute one player's stats row from their `matchResults` rows and fix
- * it when it disagrees. Returns true when a repair was applied.
- */
-async function syncPlayerStats(
-  tool: FinalizationTool,
-  userId: string,
-  format: StatsFormat,
-): Promise<boolean | null> {
-  const rows = await query<MatchResultRowData>(tool, 'matchResults', { userId, format }, userId, 500)
-  if (rows === null || rows.length === 500) return null
-  const wins = rows.filter((row) => row.data.won === 1).length
-  const losses = rows.length - wins
-  const existing = await query<PlayerStatsRow>(tool, 'playerStats', { userId, format }, userId, 1)
-  if (existing === null) return null
-  const current = existing[0]
-  const visibility = await profileVisibility(tool, userId)
-  if (!current) {
-    if (rows.length === 0) return false
-    const created = await tool<MutateActionData>('records.create', {
-      collection: 'playerStats',
-      data: { format, wins, losses, matchesPlayed: rows.length, visibility },
-    }, userId)
-    return created.success ? true : null
-  }
-  const data = current.data
-  if (data.wins === wins && data.losses === losses && data.matchesPlayed === rows.length && data.visibility === visibility) {
-    return false
-  }
-  const updated = await tool<MutateActionData>('records.update', {
-    collection: 'playerStats',
-    recordId: current.recordId,
-    data: { wins, losses, matchesPlayed: rows.length, visibility },
-  }, userId)
-  return updated.success ? true : null
-}
-
-export async function reconcilePlayerStats(tool: FinalizationTool, userId: string, format: StatsFormat): Promise<boolean> {
-  return (await syncPlayerStats(tool, userId, format)) === true
-}
-
-/**
- * Apply a newly finalized result to statistics/history/audit. Idempotent:
- * safe to call again for the same session + revision.
- */
+/** Prepare the player index and audit before the scoreboard revision commits. */
 export async function applyFinalization(
   tool: FinalizationTool,
   session: RallySession,
@@ -187,36 +134,9 @@ export async function applyFinalization(
     if (!saved.success) return failure('The match result could not be recorded.')
   }
 
-  for (const player of players) {
-    if (await syncPlayerStats(tool, player, format) === null) return failure('Player statistics could not be saved.')
-  }
   const audited = await writeAudit(tool, sessionId, actorUserId, 'finalized', {
     sets: score.sets, winner: winnerSide, revision: score.revision,
   }, score.revision)
   if (!audited) return failure('The finalized result could not be audited.')
   return { ok: true, applied }
-}
-
-/** Remove the old result contribution, then rebuild the summary from the remaining rows. */
-export async function reverseFinalization(
-  tool: FinalizationTool,
-  sessionId: string,
-  actorUserId: string,
-  session: RallySession,
-  score: MatchScore,
-): Promise<boolean> {
-  const format = statsFormatOf(session)
-  if (!format) return true
-  const rows = await query<MatchResultRowData>(tool, 'matchResults', { sessionId }, actorUserId, 10)
-  if (!rows) return false
-  for (const row of rows) {
-    const removed = await tool<MutateActionData>('records.delete', {
-      collection: 'matchResults', recordId: row.recordId,
-    }, row.data.userId)
-    if (!removed.success) return false
-  }
-  for (const player of score.teams.flat()) {
-    if (await syncPlayerStats(tool, player, format) === null) return false
-  }
-  return true
 }

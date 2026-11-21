@@ -63,7 +63,7 @@ export async function runRallyCommand(command: RallyCommand): Promise<void> {
 }
 
 type SchedulingCommand =
-  | { operation: 'createSeries'; template: SeriesTemplate; startStartsAt: string; intervalWeeks: number; count: number }
+  | { operation: 'createSeries' | 'editSeries'; seriesId: string; template: SeriesTemplate; startStartsAt: string; intervalWeeks: number; count: number }
   | { operation: 'generateOccurrences'; seriesId: string }
   | { operation: 'cancelSeries'; seriesId: string }
 

@@ -96,3 +96,12 @@ export async function getPlayerStats(userId: string): Promise<PlayerStatsRespons
 export async function getMatchHistory(userId: string, limit = 20): Promise<MatchHistoryResponse> {
   return callProfileAction<MatchHistoryResponse>('getMatchHistory', { userId, limit })
 }
+
+export interface ResultAuditEntry {
+  kind: 'finalized' | 'disputed' | 'corrected'
+  resultRevision: number
+}
+
+export function getResultAudit(sessionId: string): Promise<{ success: boolean; data?: { entries: ResultAuditEntry[] } }> {
+  return callProfileAction('getResultAudit', { sessionId })
+}

@@ -12,10 +12,12 @@
 
 import { describe, expect, it } from 'vitest'
 import type { ActionTools } from 'deepspace/worker'
+import { createMatchScore } from '../lib/rally-score.js'
 import type { Env } from '../../worker.js'
 import {
   deleteProfileAction,
   getMatchHistoryAction,
+  getResultAuditAction,
   getPlayerStatsAction,
   updateProfileAction,
 } from './profile-actions.js'
@@ -84,8 +86,11 @@ function createToolsHarness() {
           return av < bv ? -dir : av > bv ? dir : 0
         })
       }
-      records = records.slice(0, Number(options.limit ?? 100))
-      return { success: true as const, data: { records, count: records.length } }
+      const offset = Number(options.offset ?? 0)
+      const size = Math.min(17, Number(options.limit ?? 100))
+      const nextOffset = records.length > offset + size ? offset + size : undefined
+      records = records.slice(offset, offset + size)
+      return { success: true as const, data: { records, count: records.length, nextOffset } }
     },
   }) as unknown as ActionTools
 
@@ -102,7 +107,16 @@ function createToolsHarness() {
     return recordId
   }
 
-  return { call, seed, collections }
+  const seedResult = (won: boolean, revision: number, finalizedAt: string, pendingResult = '') => {
+    const base = createMatchScore([['alice'], ['bob']])
+    const score = { ...base, sets: won ? [[6, 3], [6, 3]] : [[3, 6], [3, 6]], winner: won ? 0 : 1,
+      revision, approvals: ['alice', 'bob'] }
+    const sessionId = seed('sessions', { format: 'Singles', matchScore: JSON.stringify(score), pendingResult }, 'host')
+    seed('matchResults', { sessionId, resultRevision: revision, finalizedAt }, 'alice')
+    return sessionId
+  }
+
+  return { call, seed, seedResult, collections }
 }
 
 const validProfile = {
@@ -201,7 +215,9 @@ describe('getPlayerStats and getMatchHistory privacy gates', () => {
   it('returns public stats with completeness and per-format summaries', async () => {
     const harness = createToolsHarness()
     await harness.call(updateProfileAction, 'alice', validProfile)
-    harness.seed('playerStats', { format: 'singles', wins: 3, losses: 2, matchesPlayed: 5, visibility: 'public' }, 'alice')
+    harness.seed('playerStats', { format: 'singles', wins: 99, losses: 2, matchesPlayed: 101, visibility: 'public' }, 'alice')
+    for (let i = 0; i < 5; i++) harness.seedResult(i < 3, 1, '2026-11-01T18:00:00.000Z')
+    harness.seedResult(true, 1, '2026-11-02T18:00:00.000Z', 'in-progress')
     const result = await harness.call(getPlayerStatsAction, 'bob', { userId: 'alice' })
     expect(result).toMatchObject({
       success: true,
@@ -216,27 +232,46 @@ describe('getPlayerStats and getMatchHistory privacy gates', () => {
     })
   })
 
+  it('counts all paginated verified rows past the former cap', async () => {
+    const harness = createToolsHarness()
+    for (let i = 0; i < 501; i++) harness.seedResult(true, 1, '2026-11-01T18:00:00.000Z')
+    await expect(harness.call(getPlayerStatsAction, 'alice', { userId: 'alice' })).resolves.toMatchObject({
+      success: true, data: { stats: { singles: { wins: 501, matchesPlayed: 501 } } },
+    })
+  })
+
+  it('limits result audit reads to the host and participants and hides pending changes', async () => {
+    const harness = createToolsHarness()
+    const committed = harness.seedResult(true, 2, '2026-11-01T18:00:00.000Z')
+    const pending = harness.seedResult(true, 2, '2026-11-01T18:00:00.000Z', 'pending')
+    harness.seed('resultAudits', { sessionId: committed, kind: 'finalized', resultRevision: 2 }, 'alice')
+    harness.seed('resultAudits', { sessionId: committed, kind: 'corrected', resultRevision: 3 }, 'alice')
+    await expect(harness.call(getResultAuditAction, 'outsider', { sessionId: committed })).resolves.toMatchObject({ success: false })
+    await expect(harness.call(getResultAuditAction, 'alice', { sessionId: pending })).resolves.toMatchObject({ success: false, code: 'audit_pending' })
+    await expect(harness.call(getResultAuditAction, 'bob', { sessionId: committed })).resolves.toMatchObject({
+      success: true, data: { entries: [{ kind: 'finalized', resultRevision: 2 }] },
+    })
+    const row = harness.collections.get('sessions')!.get(committed)!
+    const score = JSON.parse(String(row.data.matchScore))
+    row.data.matchScore = JSON.stringify({ ...score, approvals: ['alice'] })
+    await expect(harness.call(getResultAuditAction, 'bob', { sessionId: committed })).resolves.toMatchObject({
+      success: true, data: { entries: [] },
+    })
+  })
+
   it('returns newest-first history with the limit clamped to 1..50', async () => {
     const harness = createToolsHarness()
     await harness.call(updateProfileAction, 'alice', validProfile)
-    for (const [index, date] of ['2026-11-01T18:00:00.000Z', '2026-11-18T18:00:00.000Z'].entries()) {
-      harness.seed('matchResults', {
-        sessionId: `s${index}`,
-        format: 'singles',
-        won: index,
-        sets: index === 0 ? JSON.stringify([[6, 4], [6, 3]]) : [[6, 4], [6, 3]],
-        resultRevision: index + 1,
-        finalizedAt: date,
-        visibility: 'public',
-      }, 'alice')
-    }
+    const older = harness.seedResult(false, 1, '2026-11-01T18:00:00.000Z')
+    const newer = harness.seedResult(true, 2, '2026-11-18T18:00:00.000Z')
+    harness.seedResult(true, 1, '2026-11-19T18:00:00.000Z', 'in-progress')
     const result = await harness.call(getMatchHistoryAction, 'bob', { userId: 'alice', limit: 500 })
     expect(result).toMatchObject({
       success: true,
       data: { public: true },
     })
     const data = (result as { data: { entries: Array<{ sessionId: string }> } }).data
-    expect(data.entries.map((entry) => entry.sessionId)).toEqual(['s1', 's0'])
+    expect(data.entries.map((entry) => entry.sessionId)).toEqual([newer, older])
     await expect(harness.call(getMatchHistoryAction, 'bob', { userId: '' })).resolves.toMatchObject({
       success: false,
       code: 'invalid_user',

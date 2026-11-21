@@ -33,6 +33,7 @@ function SignedOutPanel() {
   const params = new URLSearchParams(search)
   const reason = pathname === '/dashboard' ? 'Sign in to see your sessions, waitlists, and match results.'
     : pathname === '/games' ? 'Sign in to browse rallies and join a game.'
+    : pathname === '/series' ? 'Sign in to plan recurring rallies and manage your series.'
     : pathname === '/notifications' ? 'Sign in to see your rally updates.'
     : pathname === '/settings' ? 'Sign in to manage your player profile and see your match history.'
     : pathname === '/courts' ? 'Sign in to explore courts and plan a rally.'

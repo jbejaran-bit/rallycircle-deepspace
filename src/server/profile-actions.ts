@@ -32,7 +32,9 @@ import {
   type PlayerProfile,
   type ProfileInput,
 } from '../lib/profile.js'
-import { buildMatchHistory, type MatchResultRow, type StatsFormat } from '../lib/match-stats.js'
+import { readMatchScore, isEligibleForStats } from '../lib/rally-score.js'
+import { recordPages } from './record-pages.js'
+import { buildMatchHistory, summarizePlayerStats, type MatchResultRow, type StatsFormat } from '../lib/match-stats.js'
 
 interface StoredProfileRow {
   recordId: string
@@ -40,29 +42,51 @@ interface StoredProfileRow {
   data: PlayerProfile
 }
 
-interface StoredStatsRow {
-  recordId: string
-  data: {
-    userId: string
-    format: StatsFormat
-    wins: number
-    losses: number
-    matchesPlayed: number
-    visibility: PlayerProfile['visibility']
-  }
+type ResultIndexRow = {
+  sessionId: string
+  resultRevision: number
+  finalizedAt: string
 }
 
-interface StoredResultRow {
-  recordId: string
-  data: {
-    sessionId: string
-    userId: string
-    format: StatsFormat
-    won: number
-    sets: string | Array<[number, number]>
-    resultRevision: number
-    finalizedAt: string
-    visibility: PlayerProfile['visibility']
+async function loadVerifiedResults(
+  tools: ActionTools,
+  userId: string,
+  visibility: PlayerProfile['visibility'],
+  limit = Infinity,
+): Promise<MatchResultRow[] | null> {
+  const verified = new Map<string, MatchResultRow>()
+  try {
+    const pages = recordPages<ResultIndexRow>(offset => {
+      // The app action adapter forwards the SDK's offset even though the
+      // installed ActionTools declaration omits it.
+      const options = { where: { userId }, orderBy: 'finalizedAt', orderDir: 'desc' as const, limit: 30, offset }
+      return tools.query<ResultIndexRow>('matchResults', options)
+    })
+    for await (const records of pages) {
+      const checked = await Promise.all(records.map(async (record) => {
+        const { sessionId, resultRevision, finalizedAt } = record.data
+        const result = await tools.get('sessions', sessionId)
+        if (!result.success) {
+          if (result.error === 'Record not found') return null
+          throw new Error('The committed result could not be checked.')
+        }
+        const session = result.data.record.data
+        const score = readMatchScore(typeof session.matchScore === 'string' ? session.matchScore : undefined)
+        const format = session.format === 'Singles' ? 'singles' : session.format === 'Doubles' ? 'doubles' : null
+        if (!format || session.pendingResult || !score || !isEligibleForStats(score) || score.revision !== resultRevision) return null
+        const side = score.teams.findIndex(team => team.includes(userId))
+        if (side < 0) return null
+        return { recordId: record.recordId, sessionId, userId, format, resultRevision, finalizedAt,
+          visibility, won: side === score.winner, sets: score.sets } satisfies MatchResultRow
+      }))
+      for (const row of checked) {
+        if (row) verified.set(row.sessionId, row)
+        if (verified.size >= limit) return [...verified.values()]
+      }
+    }
+    return [...verified.values()]
+  } catch {
+    return null
   }
 }
 
@@ -176,38 +200,10 @@ export const getPlayerStatsAction: ActionHandler<Env> = async ({ userId: callerI
     return { success: true, data: { userId: targetUserId, public: false } }
   }
 
-  const statsResult = await tools.query<StoredStatsRow['data']>('playerStats', {
-    where: { userId: targetUserId },
-    limit: 2,
-  })
-  if (!statsResult.success) return failure('stats_unavailable', 'Player statistics could not be loaded.')
-  const rows = (statsResult.data as unknown as { records?: StoredStatsRow[] }).records ?? []
-  const visibility = profile?.data.visibility ?? 'public'
-  const byFormat = (format: StatsFormat) => {
-    const row = rows.find((record) => record.data.format === format)
-    if (!row) {
-      return {
-        userId: targetUserId,
-        format,
-        wins: 0,
-        losses: 0,
-        matchesPlayed: 0,
-        winRate: null,
-        provisional: true,
-        visibility,
-      }
-    }
-    return {
-      userId: targetUserId,
-      format,
-      wins: row.data.wins,
-      losses: row.data.losses,
-      matchesPlayed: row.data.matchesPlayed,
-      winRate: row.data.matchesPlayed === 0 ? null : row.data.wins / row.data.matchesPlayed,
-      provisional: row.data.matchesPlayed < 5,
-      visibility: row.data.visibility,
-    }
-  }
+  const visibility = profile?.data.visibility ?? 'private'
+  const rows = await loadVerifiedResults(tools, targetUserId, visibility)
+  if (!rows) return failure('stats_unavailable', 'Player statistics could not be loaded.')
+  const byFormat = (format: StatsFormat) => summarizePlayerStats(rows, targetUserId, format, visibility)
   return {
     success: true,
     data: {
@@ -241,25 +237,8 @@ export const getMatchHistoryAction: ActionHandler<Env> = async ({ userId: caller
   }
   const requested = isRecord(params) && typeof params.limit === 'number' ? Math.floor(params.limit) : 20
   const limit = Math.min(50, Math.max(1, requested))
-  const result = await tools.query<StoredResultRow['data']>('matchResults', {
-    where: { userId: targetUserId },
-    orderBy: 'finalizedAt',
-    orderDir: 'desc',
-    limit,
-  })
-  if (!result.success) return failure('history_unavailable', 'Match history could not be loaded.')
-  const records = (result.data as unknown as { records?: StoredResultRow[] }).records ?? []
-  const rows: MatchResultRow[] = records.map((record) => ({
-    recordId: record.recordId,
-    sessionId: record.data.sessionId,
-    userId: record.data.userId,
-    format: record.data.format,
-    won: record.data.won === 1,
-    sets: typeof record.data.sets === 'string' ? JSON.parse(record.data.sets) as Array<[number, number]> : record.data.sets,
-    resultRevision: record.data.resultRevision,
-    finalizedAt: record.data.finalizedAt,
-    visibility: record.data.visibility,
-  }))
+  const rows = await loadVerifiedResults(tools, targetUserId, profile?.data.visibility ?? 'private', limit)
+  if (!rows) return failure('history_unavailable', 'Match history could not be loaded.')
   return {
     success: true,
     data: {
@@ -270,9 +249,34 @@ export const getMatchHistoryAction: ActionHandler<Env> = async ({ userId: caller
   }
 }
 
+export const getResultAuditAction: ActionHandler<Env> = async ({ userId, params, tools }) => {
+  const sessionId = typeof params.sessionId === 'string' ? params.sessionId : ''
+  if (!sessionId || sessionId.length > 200) return failure('audit_unavailable', 'The result audit is unavailable.')
+  const found = await tools.get('sessions', sessionId)
+  if (!found.success) return failure('audit_unavailable', 'The result audit is unavailable.')
+  const session = found.data.record.data
+  const score = readMatchScore(typeof session.matchScore === 'string' ? session.matchScore : undefined)
+  if (!score || (session.hostId !== userId && !score.teams.flat().includes(userId))) {
+    return failure('audit_unavailable', 'The result audit is unavailable.')
+  }
+  if (session.pendingResult) return failure('audit_pending', 'The result update is still processing.')
+  const rows = await tools.query('resultAudits', { where: { sessionId }, orderBy: 'createdAt', orderDir: 'desc', limit: 50 })
+  if (!rows.success) return failure('audit_unavailable', 'The result audit is unavailable.')
+  return { success: true, data: { entries: rows.data.records
+    .filter(({ data }) => {
+      if (typeof data.resultRevision !== 'number' || data.resultRevision > score.revision) return false
+      if (data.resultRevision < score.revision) return true
+      if (data.kind === 'finalized') return isEligibleForStats(score)
+      if (data.kind === 'disputed') return score.disputed
+      return data.kind === 'corrected' && score.correctionCount > 0
+    })
+    .map(row => ({ kind: row.data.kind, detail: row.data.detail, resultRevision: row.data.resultRevision })) } }
+}
+
 export const profileActions: Record<string, ActionHandler<Env>> = {
   updateProfile: updateProfileAction,
   deleteProfile: deleteProfileAction,
   getPlayerStats: getPlayerStatsAction,
   getMatchHistory: getMatchHistoryAction,
+  getResultAudit: getResultAuditAction,
 }

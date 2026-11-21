@@ -1,3 +1,4 @@
+import ResultAudit from '@/components/ResultAudit'
 import { ConfirmModal } from '@/components/ui'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { RallySession } from '@/lib/rally'
@@ -149,6 +150,9 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
         <CorrectionForm key={score.revision} sets={score.sets} winner={score.winner ?? 0} busy={pending} onSubmit={(sets, winner) => void edit({
           operation: 'correctResult', sessionId, revision: score.revision, sets, winner,
         })} />
+      )}
+      {score?.winner != null && !session.pendingResult && (isHost || score.teams.flat().includes(userId)) && (
+        <ResultAudit key={`${sessionId}-${score.revision}-${result}`} sessionId={sessionId} />
       )}
       <ConfirmModal
         open={review !== null && Boolean(canReview)}

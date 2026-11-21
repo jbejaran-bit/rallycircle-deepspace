@@ -1,3 +1,4 @@
+import { recordPages } from './record-pages.js'
 import type { ActionHandler, ActionResult, GetActionData, MutateActionData, QueryActionData } from 'deepspace/worker'
 import { validCapacity, type RallyRSVP, type RallySession, type RallyWaitlist, type RSVPStatus } from '../lib/rally.js'
 import { awardPoint, correctResult, createMatchScore, isFinalTransition, readMatchScore, resultStatus, reviewResult, scoreEditSchema, validateCorrectedSets } from '../lib/rally-score.js'
@@ -6,7 +7,7 @@ import { occurrenceStartsAt, parseSeriesTemplate, serializeSeriesTemplate, valid
 import { pollCreatedKey, resultConfirmedKey, resultDisputedKey, scheduleChangedKey, sessionCancelledKey, waitlistPromotedKey } from '../lib/rally-notifications.js'
 import { emitNotification, type EmitNotificationInput } from './notifications.js'
 import type { z } from 'zod'
-import { applyFinalization, reverseFinalization, writeAudit } from './result-finalization.js'
+import { applyFinalization, writeAudit } from './result-finalization.js'
 import { fetchGeocodedPlaces, GEOCODER_MIN_GAP_MS } from './court-discovery.js'
 import type { Env } from '../../worker.js'
 
@@ -28,6 +29,9 @@ export interface RallyPoll {
   options: string
   status: 'open' | 'finalizing' | 'finalized' | 'cancelled'
   finalizedOptionId: string
+  baseStartsAt?: string
+  preparedStartsAt?: string
+  preparedRevision?: number
   tally: string
 }
 
@@ -92,7 +96,15 @@ function failure(error: string): RallyCommandResult {
   return { success: false, error }
 }
 
-async function applyCommand(command: RallyCommand, tool: RecordTool): Promise<RallyCommandResult> {
+type PollFinalization = Extract<RallyCommand, { operation: 'finalizePoll' }>
+type ResultRecovery = Extract<ScoreEdit, { operation: 'reviewResult' | 'correctResult' }>
+interface RecoveryHooks {
+  poll(command: PollFinalization): Promise<void>
+  result(command: ResultRecovery): Promise<void>
+}
+const RECOVERY_DELAY_MS = 30_000
+
+async function applyCommand(command: RallyCommand, tool: RecordTool, recovery: RecoveryHooks): Promise<RallyCommandResult> {
   const sessionResult = await tool<GetActionData<RallySession>>(
     'records.get',
     { collection: 'sessions', recordId: command.sessionId },
@@ -106,6 +118,9 @@ async function applyCommand(command: RallyCommand, tool: RecordTool): Promise<Ra
     if (session.status === 'cancelled') return { success: true, data: { recordId: command.sessionId } }
     if (session.status !== 'open') return failure('Only an open session can be cancelled.')
     if (session.pendingResult) return failure('Complete the pending result update before cancelling.')
+    const activePoll = await checkPendingPoll(tool, command.sessionId, command.userId)
+    if (activePoll !== false) return failure('The session schedule must finish updating before cancellation.')
+
 
     const result = await tool<MutateActionData>(
       'records.update',
@@ -119,13 +134,13 @@ async function applyCommand(command: RallyCommand, tool: RecordTool): Promise<Ra
   }
 
   if (command.operation === 'startMatch' || command.operation === 'scorePoint' || command.operation === 'reviewResult' || command.operation === 'correctResult') {
-    return applyScoreEdit(command, session, tool)
+    return applyScoreEdit(command, session, tool, recovery.result)
   }
 
   if (command.operation === 'createPoll' || command.operation === 'castVote' ||
       command.operation === 'withdrawVote' || command.operation === 'cancelPoll' ||
       command.operation === 'finalizePoll') {
-    return applyPollCommand(command, session, tool)
+    return applyPollCommand(command, session, tool, recovery.poll)
   }
 
   if (command.operation === 'rsvp' || command.operation === 'withdraw' ||
@@ -350,10 +365,18 @@ async function refreshPollTally(tool: RecordTool, pollId: string, userId: string
   )
 }
 
+async function checkPendingPoll(tool: RecordTool, sessionId: string, userId: string): Promise<boolean | null> {
+  const result = await tool<QueryActionData<RallyPoll>>('records.query', {
+    collection: 'polls', where: { sessionId, status: 'finalizing' }, limit: 1,
+  }, userId)
+  return result.success ? result.data.records.length > 0 : null
+}
+
 async function applyPollCommand(
   command: PollCommand,
   session: RallySession,
   tool: RecordTool,
+  armPollRecovery: (command: PollFinalization) => Promise<void>,
 ): Promise<RallyCommandResult> {
   const { sessionId, userId, operation } = command
   if (session.status !== 'open' && operation !== 'withdrawVote' && operation !== 'cancelPoll') {
@@ -382,7 +405,7 @@ async function applyPollCommand(
       'records.create',
       {
         collection: 'polls',
-        data: { sessionId, options: serializePollOptions(options), status: 'open', finalizedOptionId: '', tally: '{}' },
+        data: { sessionId, options: serializePollOptions(options), status: 'open', baseStartsAt: session.startsAt, finalizedOptionId: '', tally: '{}' },
       },
       userId,
     )
@@ -464,6 +487,7 @@ async function applyPollCommand(
   }
 
   // finalizePoll
+  if (command.operation !== 'finalizePoll') return failure('Invalid poll command.')
   if (session.hostId !== userId) return failure('Only the session host can finalise a poll.')
   if (pollData.status === 'finalized' && pollData.finalizedOptionId === command.optionId) {
     return { success: true, data: { recordId: sessionId } }
@@ -472,14 +496,25 @@ async function applyPollCommand(
   const chosen = options.find(option => option.id === command.optionId)
   if (!chosen) return failure('That time is not part of this poll.')
   if (pollData.status === 'open') {
+    if (pollData.baseStartsAt && Date.parse(pollData.baseStartsAt) !== Date.parse(session.startsAt)) {
+      return failure('The session time changed after this poll opened.')
+    }
     if (Date.parse(chosen.startsAt) <= Date.now()) return failure('The proposed time is no longer in the future.')
+    await armPollRecovery(command)
     const prepared = await tool<MutateActionData>('records.update', {
       collection: 'polls', recordId: command.pollId,
-      data: { status: 'finalizing', finalizedOptionId: command.optionId },
+      data: { status: 'finalizing', finalizedOptionId: command.optionId,
+        preparedStartsAt: session.startsAt, preparedRevision: session.scheduleRevision ?? 0 },
     }, userId)
     if (!prepared.success) return failure('The poll could not start finalizing. Try again.')
   } else if (pollData.finalizedOptionId !== command.optionId) {
     return failure('Another time is already being confirmed.')
+  }
+  if (pollData.status === 'finalizing' && pollData.preparedStartsAt &&
+      Date.parse(session.startsAt) !== Date.parse(chosen.startsAt) &&
+      (Date.parse(session.startsAt) !== Date.parse(pollData.preparedStartsAt) ||
+        (session.scheduleRevision ?? 0) !== pollData.preparedRevision)) {
+    return failure('The session was edited during poll finalization. Its time was preserved.')
   }
   // A retry after the session write may find the chosen time already persisted.
   if (Date.parse(session.startsAt) !== Date.parse(chosen.startsAt)) {
@@ -494,22 +529,29 @@ async function applyPollCommand(
     )
     if (!updatedSession.success) return failure('The session time could not be updated.')
   }
-  const recipients = await tool<QueryActionData<RallyRSVP>>(
-    'records.query', { collection: 'rsvps', where: { sessionId }, limit: 100 }, userId,
-  )
-  if (!recipients.success) return failure('Participants could not be notified. Retry the same time.')
-  for (const { data: { userId: recipientId } } of recipients.data.records) {
-    if (recipientId === userId) continue
-    const emitted = await emitNotification(tool, {
-      recipientId,
-      type: 'schedule_changed',
-      sessionId,
-      title: `New time: ${session.title}`,
-      body: `${session.title} moved to ${chosen.startsAt}. Your RSVP carries over.`,
-      link: `/rallies?session=${sessionId}`,
-      idempotencyKey: scheduleChangedKey(sessionId, chosen.startsAt, recipientId),
-    })
-    if (emitted === 'failed') return failure('Participants could not be notified. Retry the same time.')
+  try {
+    const pages = recordPages<RallyRSVP>(offset =>
+      tool<QueryActionData<RallyRSVP>>('records.query', {
+        collection: 'rsvps', where: { sessionId }, orderBy: 'createdAt', orderDir: 'asc', limit: 100, offset,
+      }, userId),
+    )
+    for await (const records of pages) {
+      for (const { data: { userId: recipientId } } of records) {
+        if (recipientId === userId) continue
+        const emitted = await emitNotification(tool, {
+          recipientId,
+          type: 'schedule_changed',
+          sessionId,
+          title: `New time: ${session.title}`,
+          body: `${session.title} moved to ${chosen.startsAt}. Your RSVP carries over.`,
+          link: `/rallies?session=${sessionId}`,
+          idempotencyKey: scheduleChangedKey(sessionId, chosen.startsAt, recipientId),
+        })
+        if (emitted === 'failed') return failure('Participants could not be notified. Retry the same time.')
+      }
+    }
+  } catch {
+    return failure('Participants could not be notified. The queued update will retry.')
   }
   const updatedPoll = await tool<MutateActionData>(
     'records.update',
@@ -520,7 +562,7 @@ async function applyPollCommand(
   return { success: true, data: { recordId: sessionId } }
 }
 
-async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: RecordTool): Promise<RallyCommandResult> {
+async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: RecordTool, armResultRecovery: RecoveryHooks['result']): Promise<RallyCommandResult> {
   if (command.operation !== 'reviewResult' && session.hostId !== command.userId) return failure('Only the session host can edit the score.')
   if (session.status !== 'open') return failure('This session is closed.')
 
@@ -534,6 +576,8 @@ async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: R
   }
   async function prepareResult(): Promise<boolean> {
     if (session.pendingResult) return true
+    if (command.operation !== 'reviewResult' && command.operation !== 'correctResult') return false
+    await armResultRecovery(command)
     const prepared = await tool<MutateActionData>('records.update', {
       collection: 'sessions', recordId: command.sessionId, data: { pendingResult: operationKey },
     }, command.userId)
@@ -592,10 +636,6 @@ async function applyScoreEdit(command: ScoreEdit, session: RallySession, tool: R
     next = correctResult(current, command.sets, command.winner)
     if (!next) return failure('This result cannot be corrected.')
     if (!await prepareResult()) return failure('The correction could not be started. Try again.')
-    if (previousStatus === 'final') {
-      const reversed = await reverseFinalization(tool, command.sessionId, command.userId, session, current)
-      if (!reversed) return failure('The previous result could not be reversed. Try again.')
-    }
     const audited = await writeAudit(tool, command.sessionId, command.userId, 'corrected', {
       previousSets: current.sets, previousWinner: current.winner, previousRevision: current.revision,
       sets: next.sets, winner: next.winner, revision: next.revision,
@@ -702,10 +742,28 @@ export class RallyCommandRoom {
     const command = parseCommand(body)
     const seriesCommand = command ? null : parseSeriesCommand(body)
 
+    const tool = this.recordTool()
+    if (command) {
+      return Response.json(await applyCommand(command, tool, this.recoveryHooks))
+    }
+    if (seriesCommand) {
+      return Response.json(await applySeriesCommand(seriesCommand, tool, async (sessionId, userId) => {
+        const id = this.env.RALLY_COMMAND_ROOMS.idFromName(`rally:${this.env.DEEPSPACE_APP_ID}:${sessionId}`)
+        const response = await this.env.RALLY_COMMAND_ROOMS.get(id).fetch(new Request('https://internal/rally-command', {
+          method: 'POST',
+          body: JSON.stringify({ operation: 'cancel', sessionId, userId }),
+        }))
+        return (await response.json() as RallyCommandResult).success
+      }))
+    }
+    return Response.json(failure('Invalid rally command.'), { status: 400 })
+  }
+
+  private recordTool(): RecordTool {
     const recordRoom = this.env.RECORD_ROOMS.get(
       this.env.RECORD_ROOMS.idFromName(`app:${this.env.DEEPSPACE_APP_ID}`),
     )
-    const tool: RecordTool = async <T>(
+    return async <T>(
       name: string,
       params: Record<string, unknown>,
       userId: string,
@@ -723,11 +781,56 @@ export class RallyCommandRoom {
       )
       return await response.json() as ActionResult<T>
     }
-
-    if (command) return Response.json(await applyCommand(command, tool))
-    if (seriesCommand) return Response.json(await applySeriesCommand(seriesCommand, tool))
-    return Response.json(failure('Invalid rally command.'), { status: 400 })
   }
+
+  private readonly recoveryHooks: RecoveryHooks = {
+    poll: command => this.armRecovery('pollRecovery', command),
+    result: command => this.armRecovery('resultRecovery', command),
+  }
+
+  private async armRecovery(key: string, command: PollFinalization | ResultRecovery) {
+    await this.state.storage.setAlarm(Date.now() + RECOVERY_DELAY_MS)
+    await this.state.storage.put(key, command)
+  }
+
+  async alarm(): Promise<void> {
+    const recovery = this.queue.then(() => this.recover())
+    this.queue = recovery.then(() => undefined, () => undefined)
+    await recovery
+  }
+
+  private async recover(): Promise<void> {
+    const storage = this.state.storage
+    const pollCommand = await storage.get<PollFinalization>('pollRecovery')
+    const resultCommand = await storage.get<ResultRecovery>('resultRecovery')
+    if (!pollCommand && !resultCommand) return
+    // The next alarm is persisted before network writes so eviction is safe.
+    await storage.setAlarm(Date.now() + RECOVERY_DELAY_MS)
+    const tool = this.recordTool()
+    if (pollCommand) {
+      const poll = await tool<GetActionData<RallyPoll>>('records.get', {
+        collection: 'polls', recordId: pollCommand.pollId,
+      }, pollCommand.userId)
+      if (poll.success) {
+        const data = poll.data.record.data
+        const outstanding = data.status === 'finalizing' && data.finalizedOptionId === pollCommand.optionId
+        if (!outstanding || (await applyCommand(pollCommand, tool, this.recoveryHooks)).success) {
+          await storage.delete('pollRecovery')
+        }
+      }
+    }
+    if (resultCommand) {
+      const session = await tool<GetActionData<RallySession>>('records.get', {
+        collection: 'sessions', recordId: resultCommand.sessionId,
+      }, resultCommand.userId)
+      if (session.success &&
+          (!session.data.record.data.pendingResult || (await applyCommand(resultCommand, tool, this.recoveryHooks)).success)) {
+        await storage.delete('resultRecovery')
+      }
+    }
+    if (!await storage.get('pollRecovery') && !await storage.get('resultRecovery')) await storage.deleteAlarm()
+  }
+
 }
 
 export const rallyCommandAction: ActionHandler<Env> = async ({ userId, params, tools, env }) => {
@@ -779,19 +882,20 @@ export const rallyCommandAction: ActionHandler<Env> = async ({ userId, params, t
 }
 
 type SeriesCommand =
-  | { operation: 'createSeries'; userId: string; seriesId: string; template: SeriesTemplate; startStartsAt: string; intervalWeeks: number; count: number }
+  | { operation: 'createSeries' | 'editSeries'; userId: string; seriesId: string; template: SeriesTemplate; startStartsAt: string; intervalWeeks: number; count: number }
   | { operation: 'generateOccurrences'; userId: string; seriesId: string }
   | { operation: 'cancelSeries'; userId: string; seriesId: string }
 
 function parseSeriesCommand(value: unknown): SeriesCommand | null {
-  if (!isRecord(value) || typeof value.userId !== 'string' || !value.userId) return null
-  if (value.operation === 'createSeries' &&
+  if (!isRecord(value) || typeof value.userId !== 'string' || !value.userId ||
+      typeof value.seriesId !== 'string' || !/^[a-z0-9_-]{1,100}$/i.test(value.seriesId)) return null
+  if ((value.operation === 'createSeries' || value.operation === 'editSeries') &&
       typeof value.seriesId === 'string' && value.seriesId &&
       typeof value.startStartsAt === 'string' &&
       typeof value.intervalWeeks === 'number' && typeof value.count === 'number' &&
       isRecord(value.template)) {
     return {
-      operation: 'createSeries',
+      operation: value.operation,
       userId: value.userId,
       seriesId: value.seriesId,
       template: value.template as unknown as SeriesTemplate,
@@ -807,8 +911,24 @@ function parseSeriesCommand(value: unknown): SeriesCommand | null {
   return null
 }
 
-async function applySeriesCommand(command: SeriesCommand, tool: RecordTool): Promise<RallyCommandResult> {
+async function applySeriesCommand(
+  command: SeriesCommand, tool: RecordTool,
+  cancelSession: (sessionId: string, userId: string) => Promise<boolean>,
+): Promise<RallyCommandResult> {
   if (command.operation === 'createSeries') {
+    const existing = await tool<GetActionData<RecurringSeriesRecord>>('records.get', {
+      collection: 'recurringSeries', recordId: command.seriesId,
+    }, command.userId)
+    if (existing.success) {
+      const series = existing.data.record.data
+      if (series.hostId === command.userId && series.template === serializeSeriesTemplate(command.template) &&
+          Date.parse(series.startStartsAt) === Date.parse(command.startStartsAt) &&
+          series.intervalWeeks === command.intervalWeeks && series.count === command.count) {
+        return { success: true, data: { recordId: command.seriesId } }
+      }
+      return failure('This series is unavailable.')
+    }
+    if (existing.error !== 'Record not found') return failure('The series could not be checked.')
     const problem = validateSeries({
       template: command.template,
       startStartsAt: command.startStartsAt,
@@ -846,29 +966,68 @@ async function applySeriesCommand(command: SeriesCommand, tool: RecordTool): Pro
   const series = found.data.record.data
   if (series.hostId !== command.userId) return failure('Only the series host can change it.')
 
+  if (command.operation === 'editSeries') {
+    if (series.status !== 'active') return failure('This series is not active.')
+    const instances = await tool<QueryActionData<RallySession>>('records.query', {
+      collection: 'sessions', where: { seriesId: command.seriesId }, limit: 1,
+    }, command.userId)
+    if (!instances.success) return failure('Published sessions could not be checked.')
+    if (series.generatedCount || instances.data.records.length) return failure('A published series cannot be edited.')
+    const problem = validateSeries(command)
+    if (problem) return failure(problem)
+    const updated = await tool<MutateActionData>('records.update', {
+      collection: 'recurringSeries', recordId: command.seriesId,
+      data: { template: serializeSeriesTemplate(command.template), startStartsAt: new Date(command.startStartsAt).toISOString(),
+        intervalWeeks: command.intervalWeeks, count: command.count },
+    }, command.userId)
+    return updated.success
+      ? { success: true, data: { recordId: command.seriesId } }
+      : failure('The series could not be updated.')
+  }
+
   if (command.operation === 'generateOccurrences') {
     if (series.status !== 'active') return failure('This series is not active.')
-    if (series.generatedCount >= series.count) return failure('All occurrences have already been generated.')
+    if (series.generatedCount >= series.count) return { success: true, data: { recordId: command.seriesId } }
     const template = parseSeriesTemplate(series.template)
     if (!template) return failure('This series is unavailable.')
     for (let index = series.generatedCount; index < series.count; index++) {
       const startsAt = occurrenceStartsAt(series.startStartsAt, index, series.intervalWeeks)
-      if (Date.parse(startsAt) <= Date.now()) return failure('A series occurrence is no longer in the future.')
-      const created = await tool<MutateActionData>(
-        'records.create',
-        {
-          collection: 'sessions',
+      const occurrenceId = `series-${command.seriesId}-${index}`
+      const indexed = await tool<GetActionData<RallySession>>('records.get', {
+        collection: 'sessions', recordId: occurrenceId,
+      }, command.userId)
+      if (indexed.success && (indexed.data.record.data.seriesId !== command.seriesId ||
+          indexed.data.record.data.hostId !== command.userId)) {
+        return failure('The series session is unavailable.')
+      }
+      if (!indexed.success && indexed.error !== 'Record not found') return failure('The series session could not be checked.')
+      let recordId = indexed.success ? occurrenceId : undefined
+      if (!recordId) {
+        const legacy = await tool<QueryActionData<RallySession>>('records.query', {
+          collection: 'sessions', where: { seriesId: command.seriesId, hostId: command.userId, startsAt }, limit: 1,
+        }, command.userId)
+        if (!legacy.success) return failure('The series session could not be checked.')
+        recordId = legacy.data.records[0]?.recordId
+      }
+      if (!recordId) {
+        if (Date.parse(startsAt) <= Date.now()) return failure('A series occurrence is no longer in the future.')
+        const created = await tool<MutateActionData>('records.create', {
+          collection: 'sessions', recordId: occurrenceId,
           data: { ...template, startsAt, seriesId: command.seriesId, chatChannelId: '', status: 'open' },
-        },
-        command.userId,
-      )
-      if (!created.success) return failure('A series session could not be created.')
-      const rsvp = await tool<MutateActionData>(
-        'records.create',
-        { collection: 'rsvps', data: { sessionId: created.data.recordId, status: 'going' } },
-        command.userId,
-      )
-      if (!rsvp.success) return failure('The host RSVP could not be saved.')
+        }, command.userId)
+        if (!created.success) return failure('A series session could not be created.')
+        recordId = created.data.recordId
+      }
+      const existingRsvp = await tool<QueryActionData<RallyRSVP>>('records.query', {
+        collection: 'rsvps', where: { sessionId: recordId, userId: command.userId }, limit: 1,
+      }, command.userId)
+      if (!existingRsvp.success) return failure('The host RSVP could not be checked.')
+      if (existingRsvp.data.records.length === 0) {
+        const rsvp = await tool<MutateActionData>('records.create', {
+          collection: 'rsvps', data: { sessionId: recordId, status: 'going' },
+        }, command.userId)
+        if (!rsvp.success) return failure('The host RSVP could not be saved.')
+      }
     }
     const updated = await tool<MutateActionData>(
       'records.update',
@@ -881,6 +1040,7 @@ async function applySeriesCommand(command: SeriesCommand, tool: RecordTool): Pro
   }
 
   // cancelSeries
+  if (command.operation !== 'cancelSeries') return failure('Invalid scheduling command.')
   if (series.status !== 'active') return failure('This series is already cancelled.')
   const instances = await tool<QueryActionData<RallySession>>(
     'records.query',
@@ -888,16 +1048,16 @@ async function applySeriesCommand(command: SeriesCommand, tool: RecordTool): Pro
     command.userId,
   )
   if (!instances.success) return failure('Series sessions could not be checked.')
-  const now = Date.now()
-  for (const instance of instances.data.records) {
-    if (Date.parse(instance.data.startsAt) <= now) continue
-    const cancelled = await tool<MutateActionData>(
-      'records.update',
-      { collection: 'sessions', recordId: instance.recordId, data: { status: 'cancelled' } },
-      command.userId,
-    )
-    if (cancelled.success) {
-      await notifySessionCancelled(tool, instance.data, instance.recordId, command.userId)
+  const future = instances.data.records.filter(instance => Date.parse(instance.data.startsAt) > Date.now())
+  for (const instance of future) {
+    if (instance.data.pendingResult ||
+        await checkPendingPoll(tool, instance.recordId, command.userId) !== false) {
+      return failure('A series session is still updating. Try again after it completes.')
+    }
+  }
+  for (const instance of future) {
+    if (!await cancelSession(instance.recordId, command.userId)) {
+      return failure('A series session could not be cancelled. Try again.')
     }
   }
   const updated = await tool<MutateActionData>(
@@ -921,9 +1081,7 @@ export const schedulingAction: ActionHandler<Env> = async ({ userId, params, env
     userId,
   })
   if (!command) return failure('Invalid scheduling command.')
-  const roomName = command.operation === 'createSeries'
-    ? `rally:${env.DEEPSPACE_APP_ID}:series-create:${userId}`
-    : `rally:${env.DEEPSPACE_APP_ID}:series:${command.seriesId}`
+  const roomName = `rally:${env.DEEPSPACE_APP_ID}:series:${command.seriesId}`
   const room = env.RALLY_COMMAND_ROOMS.get(env.RALLY_COMMAND_ROOMS.idFromName(roomName))
   let result: unknown
   try {

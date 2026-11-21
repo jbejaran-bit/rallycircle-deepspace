@@ -63,6 +63,9 @@ function createHarness() {
         return Response.json({ success: true, data: { recordId } })
       }
 
+      if (tool === 'records.query' && params.collection === 'polls') {
+        return Response.json({ success: true, data: { records: [], count: 0 } })
+      }
       if (tool === 'records.get' && params.collection === 'sessions') {
         const record = sessions.get(String(params.recordId))
         return record
@@ -157,7 +160,15 @@ function createHarness() {
       get: () => recordRoom,
     },
   } as unknown as Env
-  let room = new RallyCommandRoom({} as DurableObjectState, env)
+  const store = new Map<string, unknown>()
+  const state = { storage: {
+    setAlarm: async () => undefined,
+    deleteAlarm: async () => undefined,
+    put: async (key: string, value: unknown) => { store.set(key, value) },
+    get: async (key: string) => store.get(key),
+    delete: async (key: string) => store.delete(key),
+  } } as unknown as DurableObjectState
+  let room = new RallyCommandRoom(state, env)
   const commandNamespace = {
     idFromName: (name: string) => name,
     get: () => ({ fetch: (request: Request) => room.fetch(request) }),
@@ -207,7 +218,8 @@ function createHarness() {
   return {
     addSession, command, rsvps, sessions, waitlists, resultCollections,
     interruptScoreSave: () => { failScoreWrite = true },
-    restart: () => { room = new RallyCommandRoom({} as DurableObjectState, env) },
+    restart: () => { room = new RallyCommandRoom(state, env) },
+    alarm: () => room.alarm(),
     interruptQueueCleanup: (times = 1) => { failQueueDeletes = times },
   }
 }
@@ -918,7 +930,8 @@ describe('Track A regression suite — waitlist, scoring and authorization', () 
     expect(resultStatus(readMatchScore(session.matchScore)!)).toBe('disputed')
     harness.restart()
     await expect(harness.command('host', { ...correction, sets: [[0, 6], [0, 6]] })).resolves.toMatchObject({ success: false })
-    await expect(harness.command('host', correction)).resolves.toMatchObject({ success: true })
+    await harness.alarm()
+    await harness.alarm()
     expect(session.pendingResult).toBe('')
     expect(resultStatus(readMatchScore(session.matchScore)!)).toBe('corrected')
     await expect(harness.command('alice', { operation: 'reviewResult', sessionId: 'correction', decision: 'approve', revision }))
