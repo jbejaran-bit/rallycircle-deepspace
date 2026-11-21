@@ -117,14 +117,21 @@ async function applyCommand(command: RallyCommand, tool: RecordTool, recovery: R
     if (session.hostId !== command.userId) return failure('Only the session host can cancel it.')
     if (session.status === 'cancelled') return { success: true, data: { recordId: command.sessionId } }
     if (session.status !== 'open') return failure('Only an open session can be cancelled.')
-    if (session.pendingResult) return failure('Complete the pending result update before cancelling.')
+    // A failed finalization leaves pendingResult set; cancelling must
+    // still be possible, otherwise the session is frozen until the exact
+    // retry succeeds. Cancelling clears the marker — the unfinalized
+    // result stays unfinalized. On this architecture the history rows a
+    // partial finalization already wrote are inert: loadVerifiedResults
+    // only counts rows whose session score is final at the same revision,
+    // and a cancelled session's score can never become final, so the rows
+    // remain as storage-level provenance and never count.
     const activePoll = await checkPendingPoll(tool, command.sessionId, command.userId)
     if (activePoll !== false) return failure('The session schedule must finish updating before cancellation.')
 
 
     const result = await tool<MutateActionData>(
       'records.update',
-      { collection: 'sessions', recordId: command.sessionId, data: { status: 'cancelled' } },
+      { collection: 'sessions', recordId: command.sessionId, data: { status: 'cancelled', pendingResult: '' } },
       command.userId,
     )
     if (!result.success) return failure('The session could not be cancelled.')
