@@ -118,7 +118,7 @@ export default function DashboardPage() {
               <ul className="mt-2 divide-y divide-white/15">
                 {dashboard.awaitingResponse.map(({ recordId, data }) => (
                   <li key={recordId}>
-                    <Link className="flex min-h-11 items-center justify-between gap-3 rounded-md py-2 text-sm font-semibold text-[#d7fc83] hover:underline focus-visible:outline-2" to={rallyLink(recordId)}>
+                    <Link className="flex min-h-11 items-center justify-between gap-3 rounded-md py-2 text-sm font-semibold text-[#d7fc83] hover:underline focus-visible:outline-2" to={rallyLink(recordId) + '#rally-match'}>
                       <span className="min-w-0 break-words">{data.title}</span>
                       <span className="flex shrink-0 items-center gap-2">Review <ArrowRight size={16} aria-hidden /></span>
                     </Link>
@@ -219,7 +219,7 @@ export default function DashboardPage() {
                 <ul className="mt-3 divide-y divide-white/15">
                   {dashboard.matches.map(({ recordId, data, score, side }) => score && (side === 0 || side === 1) && (
                     <li key={recordId}>
-                      <Link to={rallyLink(recordId)} className="block rounded-lg py-3 focus-visible:outline-2">
+                      <Link to={rallyLink(recordId) + '#rally-match'} className="block rounded-lg py-3 focus-visible:outline-2">
                         <h3 className="break-words font-semibold">{data.title}</h3>
                         <p className="text-sm text-white/75">{matchLabels[resultStatus(score)]}{resultStatus(score) === 'final' && (score.winner === side ? ' · Won' : ' · Lost')}</p>
                         <p className="mt-1 text-sm text-white/75">{score.teams[side === 0 ? 1 : 0].map(id => getName(id) ?? 'Player').join(' / ')}</p>
