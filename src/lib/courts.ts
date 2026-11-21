@@ -35,6 +35,14 @@ export function distanceMiles(from: { lat: number; lng: number }, to: Court) {
   return haversineMiles(from, to)
 }
 
+/** Keep court cards and numbered map pins in the same display order. */
+export function rankCourts(visibleCourts: Court[], location?: LatLng) {
+  return visibleCourts.map(court => ({
+    court,
+    distance: location ? distanceMiles(location, court) : undefined,
+  })).sort((a, b) => (a.distance ?? 0) - (b.distance ?? 0))
+}
+
 /** Match a session's court/location text against the known Pittsburgh courts. */
 export function findKnownCourtForSession(courtName: string, location: string): Court | undefined {
   const haystack = `${courtName} ${location}`.trim().toLowerCase()
