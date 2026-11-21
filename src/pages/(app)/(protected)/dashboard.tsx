@@ -63,6 +63,7 @@ export default function DashboardPage() {
             {user?.name && <p className="mt-2 text-white/75">Welcome, {user.name}.</p>}
           </div>
           <div className="flex flex-wrap gap-2">
+            <Link to="/notifications" className={outline}>Notifications</Link>
             <Link to="/games" className={outline}>Find a game</Link>
             <Link to="/rallies?create=1" className={`${button} bg-[#d7fc83] text-[#152015] hover:bg-[#ecffb0]`}><Plus size={16} aria-hidden /> Create a rally</Link>
           </div>
