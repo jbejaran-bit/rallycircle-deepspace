@@ -181,7 +181,7 @@ describe('RallyCircle server-side session and RSVP rules', () => {
   it('rejects unmarked room requests and preserves authorized command dispatch', async () => {
     const harness = createHarness()
     harness.addSession('workout', 'host')
-    for (const headers of [{}, { 'X-App-Action': 'false' }]) {
+    for (const headers of [new Headers(), new Headers({ 'X-App-Action': 'false' })]) {
       const response = await harness.room.fetch(new Request('https://internal/rally-command', {
         method: 'POST', headers,
         body: JSON.stringify({ operation: 'cancel', sessionId: 'workout', userId: 'host' }),
