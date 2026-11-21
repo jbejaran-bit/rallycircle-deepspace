@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { buildCalendarEvent } from './rally-calendar'
+import { buildCalendarEvent, canDownloadCalendar } from './rally-calendar'
 
 const session = {
   status: 'open', startsAt: '2027-04-11T19:30:00-04:00', durationMinutes: 90,
@@ -34,4 +34,23 @@ it('can be encoded as a download when a title contains an unpaired surrogate', (
   const data = buildCalendarEvent({ ...session, title: 'Practice \uD800' }, invite, now)!
   expect(() => encodeURIComponent(data)).not.toThrow()
   expect(data).toContain('SUMMARY:Practice \uFFFD')
+})
+
+it('offers export to a host or confirmed player only while the rally is open', () => {
+  const row = { status: 'open', hostId: 'host' } as const
+  expect(canDownloadCalendar(row, 'host')).toBe(true)
+  expect(canDownloadCalendar(row, 'guest', 'going')).toBe(true)
+  expect(canDownloadCalendar(row, 'guest', 'maybe')).toBe(false)
+  expect(canDownloadCalendar(row, '', 'going')).toBe(false)
+  expect(canDownloadCalendar({ ...row, status: 'cancelled' }, 'host')).toBe(false)
+})
+
+it('preserves UID across downloads and records a useful description across DST', () => {
+  const match = { ...session, startsAt: '2027-03-14T01:30:00-05:00', format: 'Doubles' } as const
+  const first = buildCalendarEvent(match, invite, now)!
+  const second = buildCalendarEvent(match, invite, new Date('2027-04-02T13:00:00Z'))!
+  expect(first.match(/^UID:.*$/m)?.[0]).toBe(second.match(/^UID:.*$/m)?.[0])
+  expect(first).toContain('DTSTART:20270314T063000Z\r\nDTEND:20270314T080000Z')
+  expect(first.replace(/\r\n /g, '')).toContain(`DESCRIPTION:Format: Doubles\\nView rally: ${invite}`)
+  expect(buildCalendarEvent(match, 'https://rally.example/rallies\r\nX-INJECTED:value')).toBeNull()
 })

@@ -29,10 +29,27 @@ export function buildDashboard(
     }]
   }).sort((a, b) => Number(b.scheduled) - Number(a.scheduled) || (a.start - b.start || 0))
 
+  const confirmedCounts = new Map<string, number>()
+  for (const response of responses) {
+    if (response.status === 'going') confirmedCounts.set(response.sessionId, (confirmedCounts.get(response.sessionId) ?? 0) + 1)
+  }
+  const gamesNeedingPlayers = sessions
+    .filter(({ recordId, data }) => data.status === 'open' && Date.parse(data.startsAt) > now &&
+      data.hostId !== userId && !myResponses.has(recordId) && !myWaitlist.has(recordId))
+    .map(({ recordId, data }) => ({
+      recordId, data,
+      needed: Math.min(data.targetPlayers, data.capacity ?? Infinity) - (confirmedCounts.get(recordId) ?? 0),
+    }))
+    .filter(row => row.needed > 0)
+    .sort((a, b) => Date.parse(a.data.startsAt) - Date.parse(b.data.startsAt))
+    .slice(0, 3)
+
   const matches = entries.filter(row => row.score && row.side >= 0).reverse()
   const finalized = matches.filter(row => row.score && resultStatus(row.score) === 'final')
   return {
     entries,
+    nextRally: entries.find(row => row.scheduled && !row.past && !row.cancelled && (row.hosting || row.response === 'going')),
+    gamesNeedingPlayers,
     matches,
     finalized: finalized.length,
     wins: finalized.filter(row => row.score?.winner === row.side).length,

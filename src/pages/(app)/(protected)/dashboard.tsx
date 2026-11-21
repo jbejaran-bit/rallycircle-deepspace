@@ -26,7 +26,7 @@ export default function DashboardPage() {
   const { user } = useUser()
   const { getName } = useUserLookup()
   const sessions = useQuery<RallySession>('sessions')
-  const rsvps = useQuery<RallyRSVP>('rsvps', { where: { userId } })
+  const rsvps = useQuery<RallyRSVP>('rsvps')
   const waitlist = useQuery<RallyWaitlist>('waitlists', { where: { userId } })
   const [filter, setFilter] = useState<DashboardFilter>('upcoming')
   const [now, setNow] = useState(Date.now)
@@ -65,6 +65,24 @@ export default function DashboardPage() {
             <button className={`${outline} mt-3`} type="button" onClick={() => window.location.reload()}>Reload dashboard</button>
           </div>
         ) : !ready ? <p role="status" className={panel}>Loading your rallies and matches…</p> : (
+          <>
+          <section aria-labelledby="next-rally-title" className="rounded-2xl border border-[#d7fc83]/40 bg-[#d7fc83] p-5 text-[#152015] sm:p-6">
+            <h2 id="next-rally-title" className="text-sm font-bold">Your next rally</h2>
+            {dashboard.nextRally ? (
+              <div className="mt-2 flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <p className="text-2xl font-bold">{dashboard.nextRally.data.title}</p>
+                  <p className="mt-1 text-sm"><time dateTime={dashboard.nextRally.data.startsAt}>{formatSessionTime(dashboard.nextRally.data.startsAt)}</time> · {dashboard.nextRally.data.court}</p>
+                </div>
+                <Link className={`${button} bg-[#152015] text-white`} to={`/rallies?session=${encodeURIComponent(dashboard.nextRally.recordId)}`}>Open rally <ArrowRight size={16} aria-hidden /></Link>
+              </div>
+            ) : (
+              <div className="mt-2 flex flex-wrap items-end justify-between gap-3">
+                <p>Host a rally or confirm an RSVP to see your next session here.</p>
+                <Link className={`${button} bg-[#152015] text-white`} to="/games">Browse games <ArrowRight size={16} aria-hidden /></Link>
+              </div>
+            )}
+          </section>
           <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
             <section className={panel} aria-labelledby="agenda-title">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -147,6 +165,23 @@ export default function DashboardPage() {
               )}
             </section>
           </div>
+          <section className={panel} aria-labelledby="open-games-title">
+            <h2 id="open-games-title" className="text-xl font-bold">Games needing players</h2>
+            {dashboard.gamesNeedingPlayers.length ? (
+              <ul className="mt-3 divide-y divide-white/15">
+                {dashboard.gamesNeedingPlayers.map(({ recordId, data, needed }) => (
+                  <li key={recordId}>
+                    <Link className="block rounded-md py-3 focus-visible:outline-2" to={`/rallies?session=${encodeURIComponent(recordId)}`}>
+                      <span className="block font-bold">{data.title}</span>
+                      <span className="text-sm text-white/75"><time dateTime={data.startsAt}>{formatSessionTime(data.startsAt)}</time> · {data.court} · {needed} {needed === 1 ? 'player' : 'players'} to target</span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            ) : <p className="mt-2 text-sm text-white/75">No upcoming games need more players right now.</p>}
+            <Link className={`${outline} mt-3`} to="/games">Explore all games <ArrowRight size={16} aria-hidden /></Link>
+          </section>
+          </>
         )}
       </div>
     </div>

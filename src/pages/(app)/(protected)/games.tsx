@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom'
 import { useAuth, useQuery } from 'deepspace'
 import { CalendarDays, ChevronRight, LocateFixed, MapPin, Sparkles, Users } from 'lucide-react'
 import { courts as pittsburghCourts } from '@/lib/courts'
-import { filterGames, gameStatusLabel, DEFAULT_GAME_RADIUS_MILES, type GameFormat, type KnownCourtLocation } from '@/lib/find-games'
+import { DiscoveryRsvp } from '@/components/DiscoveryRsvp'
+import { discoveryAction, filterGames, gameStatusLabel, DEFAULT_GAME_RADIUS_MILES, type GameFormat, type KnownCourtLocation } from '@/lib/find-games'
 import { formatDistanceMiles, type LatLng } from '@/lib/geo'
 import { requestOneShotLocation } from '@/lib/location'
 import { formatSessionTime, type Level, type RallyRSVP, type RallySession, type RallyWaitlist } from '@/lib/rally'
@@ -19,12 +20,12 @@ function loadDiscoveredCourts(): KnownCourtLocation[] {
     const parsed: unknown = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
     return parsed
-      .filter((entry): entry is { name: string; lat: number; lng: number } =>
+      .filter((entry): entry is { name: string; locality?: unknown; lat: number; lng: number } =>
         typeof entry === 'object' && entry !== null &&
         typeof (entry as Record<string, unknown>).name === 'string' &&
         typeof (entry as Record<string, unknown>).lat === 'number' &&
         typeof (entry as Record<string, unknown>).lng === 'number')
-      .map(entry => ({ name: entry.name, lat: entry.lat, lng: entry.lng }))
+      .map(entry => ({ name: entry.name, lat: entry.lat, lng: entry.lng, locality: typeof entry.locality === 'string' ? entry.locality : undefined }))
   } catch {
     return []
   }
@@ -38,7 +39,7 @@ export default function GamesPage() {
   const waitlist = useQuery<RallyWaitlist>('waitlists', { where: { userId } })
   const myConfirmedSessions = useMemo(() => new Set(rsvps.filter(row => row.data.userId === userId && row.data.status === 'going').map(row => row.data.sessionId)), [rsvps, userId])
   const queuedSessions = useMemo(() => new Set(waitlist.records.map(row => row.data.sessionId)), [waitlist.records])
-  const [knownCourts] = useState<KnownCourtLocation[]>(() => [...pittsburghCourts, ...loadDiscoveredCourts()])
+  const [knownCourts] = useState<KnownCourtLocation[]>(() => [...pittsburghCourts.map(court => ({ ...court, locality: 'Pittsburgh' })), ...loadDiscoveredCourts()])
   const [availability, setAvailability] = useState<'any' | 'spots' | 'waitlist'>('any')
   const [area, setArea] = useState('')
   const [level, setLevel] = useState<Level | 'Any level'>('Any level')
@@ -188,10 +189,10 @@ export default function GamesPage() {
           <div className="space-y-3">
             <p className="text-sm text-white/55">{games.length} game{games.length === 1 ? '' : 's'} found</p>
             {games.map(game => (
+              <article key={game.recordId} className="rounded-2xl border border-white/15 bg-[#141b1a]">
               <Link
-                key={game.recordId}
                 to={`/rallies?session=${encodeURIComponent(game.recordId)}`}
-                className="block w-full rounded-2xl border border-white/10 bg-[#141b1a] p-4 text-left transition hover:border-white/25"
+                className="block w-full rounded-2xl p-4 text-left hover:bg-white/5 focus-visible:outline-2"
               >
                 <div className="mb-3 flex items-center justify-between">
                   <span className={`rounded-lg px-2.5 py-1 text-[11px] font-bold ${game.cancelled ? 'bg-rose-400/15 text-rose-200' : game.status === 'target-reached' ? 'bg-[#d7fc83]/15 text-[#d7fc83]' : 'bg-white/10 text-white/85'}`}>
@@ -209,6 +210,10 @@ export default function GamesPage() {
                   <span className="text-[11px] font-bold text-[#d7fc83]">{!game.cancelled && queuedSessions.has(game.recordId) && !myConfirmedSessions.has(game.recordId) ? 'On your waitlist' : game.cancelled ? '' : game.isMine ? 'You’re involved' : game.status === 'full' ? 'Waitlist available' : 'Open to join'}</span>
                 </div>
               </Link>
+              <DiscoveryRsvp sessionId={game.recordId} action={waitlist.status === 'ready'
+                ? discoveryAction(game, userId, myConfirmedSessions.has(game.recordId), queuedSessions.has(game.recordId))
+                : null} />
+              </article>
             ))}
           </div>
         )}
