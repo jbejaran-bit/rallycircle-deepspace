@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { validateSession } from './rally'
+import { summarizeAttendance, validateSession } from './rally'
 import type { RallySession } from './rally'
 
 const NOW = Date.parse('2026-11-21T12:00:00Z')
@@ -45,5 +45,30 @@ describe('session input validation and legacy compatibility', () => {
   it('still rejects past starts and capacity below the target', () => {
     expect(validateSession({ ...valid, startsAt: '2026-11-20T18:00:00Z' }, NOW)).toBe('Choose a future date and time.')
     expect(validateSession({ ...valid, capacity: 2 }, NOW)).toBe('The planning target cannot exceed the maximum.')
+  })
+})
+
+describe('session detail attendance consistency', () => {
+  it('counts each participant once and ignores malformed or unrelated rows', () => {
+    const rows = [
+      { sessionId: 's1', userId: 'alice', status: 'going' },
+      { sessionId: 's1', userId: 'alice', status: 'going' },
+      { sessionId: 's1', userId: 'alice', status: 'maybe' },
+      { sessionId: 's1', userId: 'bob', status: 'maybe' },
+      { sessionId: 's1', userId: 'charlie', status: 'unknown' },
+      { sessionId: 's1', userId: '', status: 'going' },
+      { sessionId: 's2', userId: 'dana', status: 'going' },
+    ] as unknown as Parameters<typeof summarizeAttendance>[0]
+    expect(summarizeAttendance(rows, 's1')).toEqual({ going: 1, maybe: 1 })
+    expect(summarizeAttendance(rows, 's2')).toEqual({ going: 1, maybe: 0 })
+  })
+
+  it('skips an invalid row without preventing a later valid membership', () => {
+    const rows = [
+      { sessionId: 's1', userId: 'alice', status: 'corrupt' },
+      { sessionId: 's1', userId: 'alice', status: 'going' },
+      { sessionId: 's1', userId: 'bob', status: 'maybe' },
+    ] as unknown as Parameters<typeof summarizeAttendance>[0]
+    expect(summarizeAttendance(rows, 's1')).toEqual({ going: 1, maybe: 1 })
   })
 })
