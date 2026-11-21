@@ -2,11 +2,11 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowUpRight, LocateFixed, MapPin, Navigation, Search } from 'lucide-react'
 import PittsburghCourts from '@/components/PittsburghCourts'
+import CourtDiscoveryMap, { CourtMapLayout } from '@/components/CourtDiscoveryMap'
 import { fetchNearbyCourts, searchPlaces } from '@/lib/court-discovery-client'
-import { clampRadiusKm, formatDistanceMiles, haversineMiles, RADIUS_OPTIONS_KM, type LatLng } from '@/lib/geo'
+import { clampRadiusKm, DEFAULT_RADIUS_KM, formatDistanceMiles, haversineMiles, RADIUS_OPTIONS_KM, type LatLng } from '@/lib/geo'
 import { requestOneShotLocation } from '@/lib/location'
 import type { DiscoveredCourt, GeocodedPlace } from '@/lib/osm'
-import 'leaflet/dist/leaflet.css'
 
 const DISCOVERED_STORAGE_KEY = 'rallycircle:discovered-courts'
 
@@ -19,65 +19,15 @@ function stashDiscoveredCourts(found: DiscoveredCourt[]): void {
   }
 }
 
-function DiscoveryMap({ courts: found, location, onSelect }: {
-  courts: DiscoveredCourt[]
-  location: LatLng | null
-  onSelect: (court: DiscoveredCourt) => void
-}) {
-  const container = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    let disposed = false
-    let remove: (() => void) | undefined
-    void import('leaflet').then(({ map, tileLayer, marker, divIcon, circleMarker, latLngBounds }) => {
-      if (disposed || !container.current) return
-      const view = map(container.current, { scrollWheelZoom: false })
-      remove = () => view.remove()
-      tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>',
-      }).addTo(view)
-
-      const points: [number, number][] = found.map(court => [court.lat, court.lng])
-      if (location) points.push([location.lat, location.lng])
-      if (points.length > 0) {
-        view.fitBounds(latLngBounds(points), { padding: [36, 36], maxZoom: 14 })
-      } else {
-        view.setView([40.44, -79.95], 11)
-      }
-
-      if (location) {
-        circleMarker([location.lat, location.lng], { radius: 8, color: '#ffffff', weight: 2, fillColor: '#3b82f6', fillOpacity: 0.9 })
-          .addTo(view)
-          .bindTooltip('You are here (approximate)')
-      }
-      found.forEach((court, index) => {
-        marker([court.lat, court.lng], {
-          title: court.name,
-          icon: divIcon({
-            className: '',
-            html: `<span class="grid h-8 w-8 place-items-center rounded-full border-2 border-[#17231b] bg-[#d7fc83] font-bold text-[#17231b]">${index + 1}</span>`,
-            iconSize: [32, 32],
-            iconAnchor: [16, 16],
-          }),
-        }).addTo(view).on('click', () => onSelect(court))
-      })
-    }).catch(error => console.warn('Court map unavailable', error))
-    return () => { disposed = true; remove?.() }
-  }, [found, location, onSelect])
-
-  return <div ref={container} role="region" aria-label="Nearby tennis courts map" className="relative z-0 h-[360px] min-w-0 rounded-2xl bg-[#202c25] lg:h-[500px]" />
-}
-
 function CourtAttributes({ court }: { court: DiscoveredCourt }) {
   // Show an attribute ONLY when OpenStreetMap actually carries it.
   const rows: [string, string][] = []
   if (court.surface) rows.push(['Surface', court.surface])
-  if (court.lights) rows.push(['Lights', court.lights === 'lit' ? 'Lit' : 'No lights listed'])
+  if (court.lights) rows.push(['Lights', court.lights === 'lit' ? 'Lit' : 'Unlit'])
   if (court.access) rows.push(['Access', court.access])
   if (court.indoor !== undefined) rows.push(['Setting', court.indoor ? 'Indoor' : 'Outdoor'])
   if (rows.length === 0) {
-    return <p className="text-sm text-white/60">No surface, lighting, or access details are listed for this court in OpenStreetMap — they may still be worth a visit.</p>
+    return <p className="text-sm text-white/60">No surface, lighting, or access details are listed for this court in OpenStreetMap.</p>
   }
   return (
     <dl className="grid grid-cols-2 gap-2 text-sm">
@@ -91,10 +41,10 @@ function CourtAttributes({ court }: { court: DiscoveredCourt }) {
   )
 }
 
-function NearbyCourts() {
+function NearbyCourts({ active }: { active: boolean }) {
   const [location, setLocation] = useState<LatLng | null>(null)
   const [locationLabel, setLocationLabel] = useState('')
-  const [radiusKm, setRadiusKm] = useState(10)
+  const [radiusKm, setRadiusKm] = useState(DEFAULT_RADIUS_KM)
   const [placeQuery, setPlaceQuery] = useState('')
   const [places, setPlaces] = useState<GeocodedPlace[]>([])
   const [searchingPlaces, setSearchingPlaces] = useState(false)
@@ -102,7 +52,6 @@ function NearbyCourts() {
   const [selected, setSelected] = useState<DiscoveredCourt | null>(null)
   const [status, setStatus] = useState<'idle' | 'locating' | 'searching' | 'ready' | 'error'>('idle')
   const [message, setMessage] = useState('Search by place or share an approximate location with OpenStreetMap services to find mapped courts.')
-  const [searchCount, setSearchCount] = useState(0)
   const activeRequest = useRef<AbortController | null>(null)
   useEffect(() => () => activeRequest.current?.abort(), [])
 
@@ -127,7 +76,6 @@ function NearbyCourts() {
       setFound(sorted)
       stashDiscoveredCourts(sorted)
       setSelected(sorted[0] ?? null)
-      setSearchCount(count => count + 1)
       setStatus('ready')
       setMessage(
         sorted.length === 0
@@ -199,10 +147,8 @@ function NearbyCourts() {
   function changeRadius(next: number) {
     const radius = clampRadiusKm(next)
     setRadiusKm(radius)
-    if (location && status === 'ready') void searchNearby(location, radius)
+    if (location) void searchNearby(location, radius)
   }
-
-  const mapKey = `${searchCount}:${location?.lat ?? 0}:${location?.lng ?? 0}`
 
   return (
     <div className="space-y-6">
@@ -212,22 +158,23 @@ function NearbyCourts() {
         </button>
         <label className="flex items-center gap-2 text-sm text-white/75">
           Radius
-          <select value={radiusKm} disabled={busy} onChange={e => changeRadius(Number(e.target.value))} className="rounded-xl border border-white/15 bg-[#0e1513] px-3 py-2.5 text-sm text-white outline-none">
+          <select value={radiusKm} disabled={busy} onChange={e => changeRadius(Number(e.target.value))} className="rounded-xl border border-white/15 bg-[#0e1513] px-3 py-2.5 text-sm text-white focus-visible:outline-2 focus-visible:outline-[#d7fc83]">
             {RADIUS_OPTIONS_KM.map(km => <option key={km} value={km}>{km} km</option>)}
           </select>
         </label>
-        {location && <span className="text-xs text-white/55">Searching around: {locationLabel}</span>}
+        {location && <span className="min-w-0 break-words text-xs text-white/75">Search area: {locationLabel}</span>}
       </div>
 
-      <form onSubmit={e => void searchPlace(e)} className="flex flex-wrap gap-2">
-        <label className="min-w-0 flex-1">
-          <span className="sr-only">Search by place name</span>
+      <form onSubmit={e => void searchPlace(e)} className="flex flex-wrap items-end gap-2">
+        <label className="min-w-0 grow basis-48">
+          <span className="block pb-1 text-sm font-semibold text-white/85">City or neighbourhood</span>
           <input
             value={placeQuery}
             onChange={e => setPlaceQuery(e.target.value)}
-            placeholder="Or search by place — e.g. Boston, MA"
+            placeholder="Search by place, e.g. Boston, MA"
             maxLength={200}
-            className="w-full rounded-xl border border-white/15 bg-[#0e1513] px-3.5 py-3 text-sm text-white outline-none placeholder:text-white/35 focus:border-[#d7fc83]"
+            type="search"
+            className="w-full rounded-xl border border-white/15 bg-[#0e1513] px-3.5 py-3 text-sm text-white placeholder:text-white/50 focus-visible:outline-2 focus-visible:outline-[#d7fc83]"
           />
         </label>
         <button type="submit" disabled={busy} className="inline-flex items-center gap-2 rounded-xl border border-white/20 px-4 py-3 text-sm font-semibold disabled:opacity-50">
@@ -240,7 +187,7 @@ function NearbyCourts() {
             <li key={`${place.lat},${place.lng}:${place.displayName}`}>
               <button type="button" disabled={busy} onClick={() => void choosePlace(place)} className="flex w-full items-center gap-3 rounded-xl border border-white/15 px-3 py-3 text-left text-sm hover:border-[#d7fc83]/60">
                 <MapPin size={16} className="shrink-0 text-[#d7fc83]" />
-                <span className="flex-1">{place.displayName}</span>
+                <span className="min-w-0 flex-1 break-words">{place.displayName}</span>
               </button>
             </li>
           ))}
@@ -253,22 +200,20 @@ function NearbyCourts() {
       )}
 
       {status === 'searching' || status === 'locating' ? (
-        <div role="status" aria-busy="true" className="space-y-3">
+        <div aria-hidden className="space-y-3">
           {[1, 2, 3].map(n => <div key={n} className="h-20 motion-safe:animate-pulse rounded-2xl bg-white/5" />)}
         </div>
       ) : found.length > 0 ? (
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
-          <div key={mapKey}><DiscoveryMap courts={found} location={location} onSelect={setSelected} /></div>
-          <div className="min-w-0 space-y-4">
-            {selected && (
+        <CourtMapLayout map={active && <CourtDiscoveryMap courts={found} location={location} label="Nearby tennis courts map" selectedId={selected?.id} onSelect={setSelected} />}
+          details={selected && (
               <section className="rounded-2xl border border-white/15 bg-[#141b1a] p-5" aria-label="Selected court">
-                <h2 className="text-xl font-bold">{selected.name}</h2>
+                <h2 className="break-words text-xl font-bold">{selected.name}</h2>
                 <p className="mt-1 text-sm text-white/70">
                   {selected.locality ?? 'OpenStreetMap'} {location && `· ${formatDistanceMiles(haversineMiles(location, selected))} away (straight line)`}
                 </p>
                 <div className="mt-4"><CourtAttributes court={selected} /></div>
                 <p className="mt-3 text-xs text-white/50">
-                  Court data is community-mapped and may be incomplete or out of date. Availability is not shown — we never claim a court is free without a real source.
+                  Check the venue for access and availability before you go.
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2">
                   <a
@@ -287,20 +232,19 @@ function NearbyCourts() {
                   </Link>
                 </div>
               </section>
-            )}
+          )}>
             <ul className="space-y-2" aria-label="Nearby courts">
               {found.map((court, index) => (
                 <li key={court.id}>
                   <button type="button" onClick={() => setSelected(court)} aria-pressed={selected?.id === court.id} className="flex w-full items-center gap-3 rounded-xl border border-white/15 px-3 py-3 text-left text-sm aria-pressed:border-[#d7fc83]">
                     <MapPin size={16} className="shrink-0 text-[#d7fc83]" />
-                    <span className="flex-1">{index + 1}. {court.name}</span>
+                    <span className="min-w-0 flex-1 break-words">{index + 1}. {court.name}</span>
                     {location && <span className="shrink-0 text-white/65">{formatDistanceMiles(haversineMiles(location, court))}</span>}
                   </button>
                 </li>
               ))}
             </ul>
-          </div>
-        </div>
+        </CourtMapLayout>
       ) : status === 'ready' ? (
         <div className="rounded-2xl border border-dashed border-white/20 p-10 text-center">
           <p className="text-sm font-bold">No courts mapped nearby</p>
@@ -310,7 +254,7 @@ function NearbyCourts() {
 
       <p className="text-xs text-white/40">
         Court data © <a className="underline" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a> (ODbL).
-        Your location is used once to run the search and is never saved. Distances are straight-line, not road distances.
+        Nearby search uses your shared location once per request. Distances are straight-line estimates.
       </p>
     </div>
   )
@@ -318,6 +262,11 @@ function NearbyCourts() {
 
 export default function CourtsPage() {
   const [tab, setTab] = useState<'nearby' | 'pittsburgh'>('pittsburgh')
+  const [nearbyOpened, setNearbyOpened] = useState(false)
+  function showSource(source: 'nearby' | 'pittsburgh') {
+    if (source === 'nearby') setNearbyOpened(true)
+    setTab(source)
+  }
 
   return (
     <div className="min-h-screen bg-[#0b110f] text-white">
@@ -330,20 +279,23 @@ export default function CourtsPage() {
           if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
           event.preventDefault()
           const next = event.key === 'Home' ? 'nearby' : event.key === 'End' ? 'pittsburgh' : tab === 'nearby' ? 'pittsburgh' : 'nearby'
-          setTab(next)
+          showSource(next)
           event.currentTarget.querySelector<HTMLButtonElement>(`#court-tab-${next}`)?.focus()
         }}>
           {([
             { id: 'nearby', label: 'Courts near me' },
             { id: 'pittsburgh', label: 'Pittsburgh courts' },
           ] as const).map(({ id, label }) => (
-            <button key={id} type="button" role="tab" id={`court-tab-${id}`} aria-controls="court-source-panel" tabIndex={tab === id ? 0 : -1} aria-selected={tab === id} onClick={() => setTab(id)} className={`min-h-11 rounded-full px-4 py-2 focus-visible:outline-2 text-xs font-bold ${tab === id ? 'bg-[#d7fc83] text-[#0e180f]' : 'bg-white/5 text-white/55 hover:bg-white/10'}`}>
+            <button key={id} type="button" role="tab" id={`court-tab-${id}`} aria-controls={`court-source-${id}`} tabIndex={tab === id ? 0 : -1} aria-selected={tab === id} onClick={() => showSource(id)} className={`min-h-11 rounded-full px-4 py-2 focus-visible:outline-2 text-xs font-bold ${tab === id ? 'bg-[#d7fc83] text-[#0e180f]' : 'bg-white/5 text-white/55 hover:bg-white/10'}`}>
               {label}
             </button>
           ))}
         </div>
-        <div role="tabpanel" id="court-source-panel" aria-labelledby={`court-tab-${tab}`}>
-          {tab === 'nearby' ? <NearbyCourts /> : <PittsburghCourts />}
+        <div role="tabpanel" id="court-source-nearby" aria-labelledby="court-tab-nearby" hidden={tab !== 'nearby'}>
+          {nearbyOpened && <NearbyCourts active={tab === 'nearby'} />}
+        </div>
+        <div role="tabpanel" id="court-source-pittsburgh" aria-labelledby="court-tab-pittsburgh" hidden={tab !== 'pittsburgh'}>
+          <PittsburghCourts active={tab === 'pittsburgh'} />
         </div>
       </div>
     </div>

@@ -100,8 +100,9 @@ test.describe('find games', () => {
     await page.goto('/games')
     await page.getByPlaceholder(/e\.g\. Schenley, Oakland/i).fill('Tokyo')
     await expect(page.getByText(/No games match these filters/)).toBeVisible()
-    await page.getByPlaceholder(/e\.g\. Schenley, Oakland/i).fill('')
+    await page.getByRole('button', { name: 'Show all upcoming games' }).click()
+    await expect(page.getByRole('searchbox', { name: 'Rally title, court or area' })).toHaveValue('')
     // With no sessions seeded in the test app, the empty state is the honest result.
-    await expect(page.getByText(/No games match these filters|games found/)).toBeVisible()
+    await expect(page.getByText(/No upcoming games yet|games found/)).toBeVisible()
   })
 })

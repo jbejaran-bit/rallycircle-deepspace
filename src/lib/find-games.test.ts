@@ -178,3 +178,30 @@ it('does not assign the first distance when multiple cities have a court with th
     ...options, knownCourts: [{ ...first, locality: undefined }, { ...second, locality: undefined }],
   })[0].distanceMiles).toBeNull()
 })
+
+it('searches the rally title as well as the court and area', () => {
+  expect(filterGames(sessions, rsvps, { query: '  sunday DOUBLES  ' }, baseOpts).map(game => game.recordId)).toEqual(['s1'])
+  expect(filterGames(sessions, rsvps, { query: 'schenley doubles' }, baseOpts).map(game => game.recordId)).toEqual(['s1'])
+  expect(filterGames(sessions, rsvps, { query: 'oakland' }, baseOpts).map(game => game.recordId)).toEqual(['s3'])
+})
+
+it('sorts nearest by known distance while keeping unknown distances visible', () => {
+  const games = filterGames(sessions, rsvps, { sort: 'nearest' }, { ...baseOpts, userLocation: HIGHLAND })
+  expect(games.map(game => game.recordId)).toEqual(['s2', 's1', 's3', 's6'])
+  expect(games.slice(2).map(game => game.distanceMiles)).toEqual([null, null])
+  expect(filterGames(sessions, rsvps, { sort: 'nearest' }, baseOpts).map(game => game.recordId)).toEqual(['s1', 's2', 's3', 's6'])
+})
+
+it('keeps invalid start times and past games out of actionable availability filters', () => {
+  const malformed = session({ recordId: 'bad', startsAt: 'unknown' })
+  const earlier = session({ recordId: 'earlier', startsAt: new Date(NOW - 10_000).toISOString() })
+  expect(filterGames([malformed, earlier], [], { showPast: true }, baseOpts).map(game => game.recordId)).toEqual(['earlier'])
+  expect(filterGames([malformed, earlier], [], { showPast: true, availability: 'spots' }, baseOpts)).toEqual([])
+})
+
+
+it('keeps invalid coordinates out of distance labels and filters', () => {
+  const options = { ...baseOpts, userLocation: HIGHLAND, knownCourts: [{ ...HIGHLAND, lat: 400 }] }
+  expect(filterGames(sessions, rsvps, {}, options).every(game => game.distanceMiles === null)).toBe(true)
+  expect(filterGames(sessions, rsvps, { maxDistanceMiles: 25 }, options)).toHaveLength(0)
+})
