@@ -26,7 +26,8 @@ export default function DashboardPage() {
   const { user } = useUser()
   const { getName } = useUserLookup()
   const sessions = useQuery<RallySession>('sessions')
-  const rsvps = useQuery<RallyRSVP>('rsvps')
+  const rsvps = useQuery<RallyRSVP>('rsvps', { where: { userId } })
+  const confirmedRsvps = useQuery<RallyRSVP>('rsvps', { where: { status: 'going' } })
   const waitlist = useQuery<RallyWaitlist>('waitlists', { where: { userId } })
   const [filter, setFilter] = useState<DashboardFilter>('upcoming')
   const [now, setNow] = useState(Date.now)
@@ -37,8 +38,15 @@ export default function DashboardPage() {
     return () => window.clearInterval(timer)
   }, [])
   const dashboard = useMemo(
-    () => buildDashboard(sessions.records, rsvps.records.map(row => row.data), waitlist.records.map(row => row.data), userId ?? '', now),
-    [sessions.records, rsvps.records, waitlist.records, userId, now],
+    () => buildDashboard(
+      sessions.records,
+      rsvps.records.map(row => row.data),
+      waitlist.records.map(row => row.data),
+      userId ?? '',
+      now,
+      confirmedRsvps.status === 'ready' ? confirmedRsvps.records.map(row => row.data) : null,
+    ),
+    [sessions.records, rsvps.records, waitlist.records, userId, now, confirmedRsvps.records, confirmedRsvps.status],
   )
   const agenda = filterAgenda(dashboard.entries, filter)
   const days = view === 'calendar' ? agendaWeek(new Date(now), week, dashboard.entries) : []
@@ -167,7 +175,11 @@ export default function DashboardPage() {
           </div>
           <section className={panel} aria-labelledby="open-games-title">
             <h2 id="open-games-title" className="text-xl font-bold">Games needing players</h2>
-            {dashboard.gamesNeedingPlayers.length ? (
+            {confirmedRsvps.status === 'error' ? (
+              <p role="alert" className="mt-2 text-sm text-white/75">Community attendance could not load. Your personal schedule is still available.</p>
+            ) : confirmedRsvps.status === 'loading' ? (
+              <p role="status" className="mt-2 text-sm text-white/75">Checking community attendance…</p>
+            ) : dashboard.gamesNeedingPlayers.length ? (
               <ul className="mt-3 divide-y divide-white/15">
                 {dashboard.gamesNeedingPlayers.map(({ recordId, data, needed }) => (
                   <li key={recordId}>

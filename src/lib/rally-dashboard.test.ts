@@ -76,3 +76,16 @@ it('separates the next confirmed rally from actual community openings', () => {
   expect(dashboard.nextRally?.recordId).toBe('confirmed')
   expect(dashboard.gamesNeedingPlayers.map(({ recordId, needed }) => ({ recordId, needed }))).toEqual([{ recordId: 'open', needed: 1 }])
 })
+
+it('keeps personal attendance visible when the community counts are unavailable', () => {
+  const rally = row('mine')
+  const opening = row('open')
+  const responses = [{ sessionId: 'mine', userId: 'me', status: 'going' }] as const
+  const missingCommunity = buildDashboard([rally, opening], [...responses], [], 'me', now, null)
+  expect(missingCommunity.nextRally?.recordId).toBe('mine')
+  expect(missingCommunity.gamesNeedingPlayers).toEqual([])
+  const available = buildDashboard([rally, opening], [...responses], [], 'me', now, [
+    { sessionId: 'open', userId: 'another-player', status: 'going' },
+  ])
+  expect(available.gamesNeedingPlayers[0]).toMatchObject({ recordId: 'open', needed: 1 })
+})

@@ -10,6 +10,7 @@ export function buildDashboard(
   waitlist: RallyWaitlist[],
   userId: string,
   now: number,
+  communityResponses: RallyRSVP[] | null = responses,
 ) {
   const myResponses = new Map(responses.filter(row => row.userId === userId).map(row => [row.sessionId, row.status]))
   const myWaitlist = new Set(waitlist.filter(row => row.userId === userId).map(row => row.sessionId))
@@ -30,10 +31,10 @@ export function buildDashboard(
   }).sort((a, b) => Number(b.scheduled) - Number(a.scheduled) || (a.start - b.start || 0))
 
   const confirmedCounts = new Map<string, number>()
-  for (const response of responses) {
+  for (const response of communityResponses ?? []) {
     if (response.status === 'going') confirmedCounts.set(response.sessionId, (confirmedCounts.get(response.sessionId) ?? 0) + 1)
   }
-  const gamesNeedingPlayers = sessions
+  const gamesNeedingPlayers = communityResponses === null ? [] : sessions
     .filter(({ recordId, data }) => data.status === 'open' && Date.parse(data.startsAt) > now &&
       data.hostId !== userId && !myResponses.has(recordId) && !myWaitlist.has(recordId))
     .map(({ recordId, data }) => ({
