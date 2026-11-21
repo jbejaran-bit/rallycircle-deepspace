@@ -32,7 +32,7 @@ import {
   type PlayerProfile,
   type ProfileInput,
 } from '../lib/profile.js'
-import { readMatchScore, isEligibleForStats } from '../lib/rally-score.js'
+import { readMatchScore, isEligibleForStats, resultStatus } from '../lib/rally-score.js'
 import { recordPages } from './record-pages.js'
 import { buildMatchHistory, normalizeResultStatus, parseStoredSets, summarizePlayerStats, type MatchResultRow, type StatsFormat } from '../lib/match-stats.js'
 
@@ -86,9 +86,47 @@ type StoredResultRow = {
  * correction is still in flight. Re-approval heals the row on the write
  * path instead.
  *
- * Disputed rows and rows with an unknown status or corrupt stored sets
- * are dropped (fail closed), never counted, never shown.
+ * Disputed rows and rows with an unknown status are dropped (fail closed),
+ * never counted, never shown. A corrupt stored `sets` value drops the row
+ * from statistics, but history derives the outcome from the committed
+ * session score instead (one GET, bounded by the history limit), so a
+ * hand-corrupted row still shows the verified result; a row whose session
+ * score is itself corrupt or missing is dropped from history.
+ *
+ * Final rows are verified against the committed session score in two
+ * cases (matrix follow-up, ADAPT S1/S3 + D1/F6, R-D1/F6):
+ * - History reads verify EVERY final row (one GET each, bounded by the
+ *   history limit: at most 50 GETs to reach 50 verified entries from
+ *   valid rows, the perf-suite bound). The session must exist, not be
+ *   cancelled, and carry a final score at exactly the row's revision;
+ *   otherwise the row is dropped. When the stored sets are unparseable
+ *   the outcome is derived from that verified session score instead.
+ * - Statistics reads verify only RECENTLY finalized rows: a row whose
+ *   `finalizedAt` is within RECENT_FINALIZATION_WINDOW_MS of now. That
+ *   is the optimistic window — finalization writes the row `final`
+ *   before the session score commits, so a failed commit leaves a fresh
+ *   row counting an outcome the scoreboard has not confirmed yet. The
+ *   window (10 minutes) covers prompt manual retries and the bounded DO
+ *   alarm-recovery window (~5 minutes). Past the window the stored row
+ *   is the durable record and statistics trust it with zero session
+ *   GETs, so the N=50/200/500 perf bounds stay green. A failed commit
+ *   unretried past the window therefore starts counting — a documented
+ *   trade-off, not a silent one. Future-dated `finalizedAt` values are
+ *   never "recent" (production rows are written with real now, so a
+ *   future value marks a fixture/legacy row, which stays trusted —
+ *   migration 5d: an orphaned complete row still counts in statistics),
+ *   and an unparseable `finalizedAt` is trusted the same way.
  */
+const RECENT_FINALIZATION_WINDOW_MS = 10 * 60 * 1000
+
+/** True when `finalizedAt` is within the recent-finalization window of `nowMs`. */
+function isRecentlyFinalized(finalizedAt: string, nowMs: number): boolean {
+  const ms = Date.parse(finalizedAt)
+  if (!Number.isFinite(ms)) return false
+  const ageMs = nowMs - ms
+  return ageMs >= 0 && ageMs <= RECENT_FINALIZATION_WINDOW_MS
+}
+
 async function loadVerifiedResults(
   tools: ActionTools,
   userId: string,
@@ -97,6 +135,7 @@ async function loadVerifiedResults(
   includePending = false,
 ): Promise<MatchResultRow[] | null> {
   const verified = new Map<string, MatchResultRow>()
+  const nowMs = Date.now()
   try {
     const pages = recordPages<StoredResultRow>(offset => {
       // The app action adapter forwards the SDK's offset even though the
@@ -125,14 +164,39 @@ async function loadVerifiedResults(
         const format = record.data.format === 'singles' ? 'singles' : record.data.format === 'doubles' ? 'doubles' : null
         if (!format) return null
         if (status === 'final') {
-          // Trust the stored outcome: the row was written (or re-finalized
-          // in place) by the serialized command room at this revision, and
-          // any later correction/dispute flips the status before the
-          // session score commits. No session GET.
+          // A final row is verified against the committed session score
+          // when the row is young enough that a failed finalization
+          // commit could still be in flight (statistics), and always
+          // for history reads (bounded by the history limit). See the
+          // function comment for the window and the trade-off.
           const sets = parseStoredSets(record.data.sets)
-          if (!sets) return null
+          const needsVerification = includePending || isRecentlyFinalized(finalizedAt, nowMs)
+          if (!needsVerification) {
+            if (!sets) return null
+            return { recordId: record.recordId, sessionId, userId, format, resultRevision, finalizedAt,
+              visibility, won: record.data.won === 1, sets, status: 'final' } satisfies MatchResultRow
+          }
+          const verifiedSession = await tools.get('sessions', sessionId)
+          if (!verifiedSession.success) {
+            if (verifiedSession.error === 'Record not found') return null
+            throw new Error('The committed result could not be checked.')
+          }
+          const session = verifiedSession.data.record.data
+          if (session.status === 'cancelled') return null
+          const score = readMatchScore(typeof session.matchScore === 'string' ? session.matchScore : undefined)
+          if (!score || resultStatus(score) !== 'final' || score.revision !== resultRevision) return null
+          if (sets) {
+            return { recordId: record.recordId, sessionId, userId, format, resultRevision, finalizedAt,
+              visibility, won: record.data.won === 1, sets, status: 'final' } satisfies MatchResultRow
+          }
+          // Stored sets unparseable: derive the outcome from the verified
+          // session score (history only in practice — statistics drops
+          // corrupt rows above when they are old, and verifies young ones
+          // the same way here).
+          const side = score.teams.findIndex(team => team.includes(userId))
+          if (side < 0) return null
           return { recordId: record.recordId, sessionId, userId, format, resultRevision, finalizedAt,
-            visibility, won: record.data.won === 1, sets, status: 'final' } satisfies MatchResultRow
+            visibility, won: side === score.winner, sets: score.sets, status: 'final' } satisfies MatchResultRow
         }
         // Pending: derive the corrected outcome from the committed session
         // score (one GET, bounded by the history limit). The stored row

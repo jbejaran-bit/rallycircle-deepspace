@@ -608,3 +608,108 @@ describe('PR22-STATS-AGG differential and room lifecycle', () => {
     expect(h.counters.sessionGets).toBe(0)
   })
 })
+
+describe('PR22-STATS-AGG final-row verification on read (matrix follow-up)', () => {
+  it('stats: a recently finalized row whose session score is not final yet is excluded until the retry lands (ADAPT S1/S3)', async () => {
+    const h = createHarness()
+    h.seedProfile('alice')
+    // Mid-state of a failed final session commit: the row is written
+    // 'final' with a fresh timestamp, but the session score still shows
+    // only the first approval (the second approval never committed).
+    const base = createMatchScore([['alice'], ['bob']])
+    const partial = { ...base, sets: [[6, 3], [6, 3]], winner: 0, revision: 7, approvals: ['bob'] }
+    h.seed('sessions', {
+      format: 'Singles', matchScore: JSON.stringify(partial),
+      pendingResult: '["reviewResult","alice",7,"approve"]',
+      hostId: 'host', status: 'open', title: 'Mid-state',
+    }, 'host', 'session-mid')
+    h.seed('matchResults', {
+      sessionId: 'session-mid', format: 'singles', won: 1, sets: JSON.stringify([[6, 3], [6, 3]]),
+      resultRevision: 7, finalizedAt: new Date().toISOString(), visibility: 'public', status: 'final',
+    }, 'alice')
+    const mid = await h.readStats('alice', 'alice')
+    expect(mid.singles.matchesPlayed).toBe(0)
+    expect(h.counters.sessionGets).toBe(1)
+    // The retry lands: the session score is now final at the same revision.
+    const session = h.store.getCollection('sessions').get('session-mid')!
+    session.data.matchScore = JSON.stringify({ ...partial, approvals: ['alice', 'bob'] })
+    session.data.pendingResult = ''
+    const after = await h.readStats('alice', 'alice')
+    expect(after.singles).toMatchObject({ wins: 1, matchesPlayed: 1 })
+  })
+
+  it('stats: a recent final row whose session is gone is dropped, while an old orphaned row still counts (window boundary)', async () => {
+    const h = createHarness()
+    h.seedProfile('alice')
+    h.seed('matchResults', {
+      sessionId: 'gone-recent', format: 'singles', won: 1, sets: JSON.stringify([[6, 3], [6, 3]]),
+      resultRevision: 1, finalizedAt: new Date().toISOString(), visibility: 'public', status: 'final',
+    }, 'alice')
+    h.seed('matchResults', {
+      sessionId: 'gone-old', format: 'singles', won: 1, sets: JSON.stringify([[6, 3], [6, 3]]),
+      resultRevision: 1, finalizedAt: '2026-11-01T18:00:00.000Z', visibility: 'public', status: 'final',
+    }, 'alice')
+    const stats = await h.readStats('alice', 'alice')
+    expect(stats.singles).toMatchObject({ wins: 1, matchesPlayed: 1 })
+    expect(h.counters.sessionGets).toBe(1)
+  })
+
+  it('stats: a final row older than the verification window is trusted even when its session score is not final (documented trade-off)', async () => {
+    const h = createHarness()
+    h.seedProfile('alice')
+    // A failed commit unretried past the window: the row counts again.
+    // The window (10 minutes) covers prompt retries and the bounded DO
+    // alarm-recovery window (~5 minutes); past it, the stored row is the
+    // durable record and statistics trust it with zero session GETs.
+    const base = createMatchScore([['alice'], ['bob']])
+    const partial = { ...base, sets: [[6, 3], [6, 3]], winner: 0, revision: 7, approvals: ['bob'] }
+    h.seed('sessions', {
+      format: 'Singles', matchScore: JSON.stringify(partial), pendingResult: '',
+      hostId: 'host', status: 'open', title: 'Stale mid-state',
+    }, 'host', 'session-stale')
+    h.seed('matchResults', {
+      sessionId: 'session-stale', format: 'singles', won: 1, sets: JSON.stringify([[6, 3], [6, 3]]),
+      resultRevision: 7, finalizedAt: new Date(Date.now() - 11 * 60 * 1000).toISOString(),
+      visibility: 'public', status: 'final',
+    }, 'alice')
+    const stats = await h.readStats('alice', 'alice')
+    expect(stats.singles).toMatchObject({ wins: 1, matchesPlayed: 1 })
+    expect(h.counters.sessionGets).toBe(0)
+  })
+
+  it('history: a corrupt stored sets value is derived from the session score (ADAPT D1/F6)', async () => {
+    const h = createHarness()
+    h.seedProfile('alice')
+    h.seedFinalMatch('alice', 'bob', 0, { won: true })
+    h.seedFinalMatch('alice', 'bob', 1, { won: false })
+    const bad = [...h.store.getCollection('matchResults').values()]
+      .find(row => row.data.sessionId === 'session-1')!
+    bad.data.sets = 'not-json{{{'
+    const entries = await h.readHistory('alice', 'alice')
+    expect(entries.map(entry => entry.sessionId).sort()).toEqual(['session-0', 'session-1'])
+    expect(entries.find(entry => entry.sessionId === 'session-1')).toMatchObject({
+      won: false, sets: [[3, 6], [3, 6]], status: 'final',
+    })
+  })
+
+  it('history: a corrupt session score hides the row even when stored sets are valid (R-D1/F6)', async () => {
+    const h = createHarness()
+    h.seedProfile('alice')
+    for (let i = 0; i < 4; i++) h.seedFinalMatch('alice', 'bob', i, { won: true })
+    const session = h.store.getCollection('sessions').get('session-3')!
+    session.data.matchScore = 'corrupt{{{'
+    const entries = await h.readHistory('alice', 'alice')
+    expect(entries.map(entry => entry.sessionId).sort()).toEqual(['session-0', 'session-1', 'session-2'])
+  })
+
+  it('history: a valid final row whose session is gone is dropped (history verifies; stats trusts old rows)', async () => {
+    const h = createHarness()
+    h.seedProfile('alice')
+    h.seed('matchResults', {
+      sessionId: 'gone-session', format: 'singles', won: 1, sets: JSON.stringify([[6, 4], [6, 3]]),
+      resultRevision: 2, finalizedAt: '2030-06-06T15:00:00.000Z', userId: 'alice', visibility: 'public',
+    }, 'alice')
+    expect(await h.readHistory('alice', 'alice')).toHaveLength(0)
+    expect((await h.readStats('alice', 'alice')).singles).toMatchObject({ wins: 1, matchesPlayed: 1 })
+  })
+})
