@@ -31,6 +31,15 @@ test('readiness identifies the final player needed for doubles', () => {
 test('readiness marks four confirmed players as ready', () => {
   assert.equal(summarizeReadiness(4, 4).status, 'Doubles ready!')
 })
+test('doubles readiness requires four distinct confirmed players in the rally', () => {
+  const going = (userId, sessionId = 'rally') => ({ sessionId, userId, status: 'going' })
+  const rsvps = [going('host'), going('host'), going('player-2'), going('player-3'), going('visitor', 'other-rally')]
+  const readiness = rows => summarizeReadiness(summarizeAttendance(rows, 'rally').going, 4, 'Doubles')
+  const undecided = { ...going('player-4'), status: 'maybe' }
+  assert.equal(readiness([...rsvps, undecided]).status, 'One more player needed')
+  assert.equal(readiness([...rsvps, going('player-4')]).status, 'Doubles ready!')
+  assert.equal(readiness(rsvps).ready, false)
+})
 test('readiness separates doubles from a larger session target', () => {
   assert.deepEqual(summarizeReadiness(3, 6), {
     confirmedPlayers: 3,
