@@ -60,3 +60,16 @@ it('A12: only a finalized result is eligible for statistics or ratings', () => {
   expect(resultStatus(final)).toBe('final')
   expect(isEligibleForStats(final)).toBe(true)
 })
+
+it('rejects duplicate players within or across teams when loading a match', () => {
+  const valid = createMatchScore([['alice', 'partner'], ['bob', 'opponent']])
+  expect(readMatchScore(JSON.stringify(valid))).toEqual(valid)
+  expect(readMatchScore(JSON.stringify({ ...valid, teams: [['alice', 'alice'], ['bob']] }))).toBeNull()
+  expect(readMatchScore(JSON.stringify({ ...valid, teams: [['alice'], ['bob', 'alice']] }))).toBeNull()
+})
+
+it('rejects malformed team identities before creating a score through the command schema', async () => {
+  const { scoreEditSchema } = await import('./rally-score')
+  expect(scoreEditSchema.safeParse({ operation: 'startMatch', teams: [['alice'], ['alice']] }).success).toBe(false)
+  expect(scoreEditSchema.safeParse({ operation: 'startMatch', teams: [['alice', 'partner'], ['bob']] }).success).toBe(true)
+})

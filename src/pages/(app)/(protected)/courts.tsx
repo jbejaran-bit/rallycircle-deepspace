@@ -25,8 +25,10 @@ function DiscoveryMap({ courts: found, location, onSelect }: {
   onSelect: (court: DiscoveredCourt) => void
 }) {
   const container = useRef<HTMLDivElement>(null)
+  const [mapUnavailable, setMapUnavailable] = useState(false)
 
   useEffect(() => {
+    setMapUnavailable(false)
     let disposed = false
     let remove: (() => void) | undefined
     void import('leaflet').then(({ map, tileLayer, marker, divIcon, circleMarker, latLngBounds }) => {
@@ -62,18 +64,30 @@ function DiscoveryMap({ courts: found, location, onSelect }: {
           }),
         }).addTo(view).on('click', () => onSelect(court))
       })
-    }).catch(error => console.warn('Court map unavailable', error))
+    }).catch(error => {
+      console.warn('Court map unavailable', error)
+      if (!disposed) setMapUnavailable(true)
+    })
     return () => { disposed = true; remove?.() }
   }, [found, location, onSelect])
 
-  return <div ref={container} role="region" aria-label="Nearby tennis courts map" className="relative z-0 h-[360px] min-w-0 rounded-2xl bg-[#202c25] lg:h-[500px]" />
+  return (
+    <div className="relative">
+      <div ref={container} role="region" aria-label="Nearby tennis courts map" className="relative z-0 h-[360px] min-w-0 rounded-2xl bg-[#202c25] lg:h-[500px]" />
+      {mapUnavailable && (
+        <p role="status" className="absolute inset-0 z-10 grid place-items-center rounded-2xl bg-[#202c25] p-6 text-center text-sm text-white/85">
+          Interactive map unavailable. Choose a court from the list to see its details and directions.
+        </p>
+      )}
+    </div>
+  )
 }
 
 function CourtAttributes({ court }: { court: DiscoveredCourt }) {
   // Show an attribute ONLY when OpenStreetMap actually carries it.
   const rows: [string, string][] = []
   if (court.surface) rows.push(['Surface', court.surface])
-  if (court.lights) rows.push(['Lights', court.lights === 'lit' ? 'Lit' : 'No lights listed'])
+  if (court.lights) rows.push(['Lights', court.lights === 'lit' ? 'Lit' : 'Unlit'])
   if (court.access) rows.push(['Access', court.access])
   if (court.indoor !== undefined) rows.push(['Setting', court.indoor ? 'Indoor' : 'Outdoor'])
   if (rows.length === 0) {

@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowUpRight, LocateFixed, MapPin } from 'lucide-react'
-import { courts, distanceMiles, matchesCourt, type Court } from '@/lib/courts'
+import { courts, matchesCourt, rankCourts, type Court } from '@/lib/courts'
 import 'leaflet/dist/leaflet.css'
 
 type Point = { lat: number; lng: number }
 
 function CourtMap({ visibleCourts, onSelect }: { visibleCourts: Court[]; onSelect: (court: Court) => void }) {
   const container = useRef<HTMLDivElement>(null)
+  const [mapUnavailable, setMapUnavailable] = useState(false)
 
   useEffect(() => {
+    setMapUnavailable(false)
     let disposed = false
     let remove: (() => void) | undefined
     void import('leaflet').then(({ map, tileLayer, marker, divIcon, latLngBounds }) => {
@@ -22,8 +24,7 @@ function CourtMap({ visibleCourts, onSelect }: { visibleCourts: Court[]; onSelec
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>',
       }).addTo(view)
 
-      visibleCourts.forEach(court => {
-        const index = courts.indexOf(court)
+      visibleCourts.forEach((court, index) => {
         marker([court.lat, court.lng], {
           title: court.name,
           icon: divIcon({
@@ -34,11 +35,23 @@ function CourtMap({ visibleCourts, onSelect }: { visibleCourts: Court[]; onSelec
           }),
         }).addTo(view).on('click', () => onSelect(court))
       })
-    }).catch(error => console.warn('Court map unavailable', error))
+    }).catch(error => {
+      console.warn('Court map unavailable', error)
+      if (!disposed) setMapUnavailable(true)
+    })
     return () => { disposed = true; remove?.() }
   }, [onSelect, visibleCourts])
 
-  return <div ref={container} role="region" aria-label="Pittsburgh tennis court map" className="relative z-0 h-[360px] min-w-0 rounded-2xl bg-[#202c25] lg:h-[500px]" />
+  return (
+    <div className="relative">
+      <div ref={container} role="region" aria-label="Pittsburgh tennis court map" className="relative z-0 h-[360px] min-w-0 rounded-2xl bg-[#202c25] lg:h-[500px]" />
+      {mapUnavailable && (
+        <p role="status" className="absolute inset-0 z-10 grid place-items-center rounded-2xl bg-[#202c25] p-6 text-center text-sm text-white/85">
+          Interactive map unavailable. Use the court list to choose a venue and open its booking page.
+        </p>
+      )}
+    </div>
+  )
 }
 
 export default function PittsburghCourts() {
@@ -48,9 +61,8 @@ export default function PittsburghCourts() {
   const [locationStatus, setLocationStatus] = useState('')
   const [locating, setLocating] = useState(false)
   const visibleCourts = useMemo(() => courts.filter(court => matchesCourt(court, query)), [query])
-  const listed = visibleCourts.map(court => ({
-    court, index: courts.indexOf(court), distance: location ? distanceMiles(location, court) : undefined,
-  })).sort((a, b) => (a.distance ?? 0) - (b.distance ?? 0))
+  const listed = useMemo(() => rankCourts(visibleCourts, location), [visibleCourts, location])
+  const mapCourts = useMemo(() => listed.map(({ court }) => court), [listed])
 
   const selected = visibleCourts.includes(selection) ? selection : listed[0]?.court
 
@@ -94,7 +106,7 @@ export default function PittsburghCourts() {
             <button type="button" className="mt-3 min-h-11 underline underline-offset-4" onClick={() => setQuery('')}>Clear search</button>
           </div>
         ) : <div className="grid gap-5 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
-          <CourtMap visibleCourts={visibleCourts} onSelect={setSelected} />
+          <CourtMap visibleCourts={mapCourts} onSelect={setSelected} />
           <div className="min-w-0 space-y-4">
             <section className="rounded-2xl border border-white/15 bg-[#141b1a] p-5" aria-label="Selected court">
               <h2 className="text-xl font-bold">{selected.name}</h2>
@@ -112,7 +124,7 @@ export default function PittsburghCourts() {
               </div>
             </section>
             <ul className="space-y-2" aria-label="Pittsburgh courts">
-              {listed.map(({ court, index, distance }) => (
+              {listed.map(({ court, distance }, index) => (
                 <li key={court.id}>
                   <button type="button" onClick={() => setSelected(court)} aria-pressed={selected.id === court.id} className="flex w-full items-center gap-3 rounded-xl border border-white/15 px-3 py-3 text-left text-sm aria-pressed:border-[#d7fc83]">
                     <MapPin size={16} className="shrink-0 text-[#d7fc83]" />

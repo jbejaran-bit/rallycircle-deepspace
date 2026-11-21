@@ -35,9 +35,9 @@ export interface RallyRSVP {
 /** Validate the input BEFORE sending a write. Server schema still enforces ownership and uniqueness. */
 export function validateSession(input: Omit<RallySession, 'hostId' | 'chatChannelId' | 'status'>, now = Date.now()): string | null {
   if (input.format !== undefined && !SESSION_FORMATS.includes(input.format)) return 'Select a session format.'
-  if (!input.title.trim() || input.title.trim().length > 72) return 'Use a title between 1 and 72 characters.'
-  if (!input.court.trim() || input.court.trim().length > 100) return 'Enter a court name (up to 100 characters).'
-  if (!input.location.trim() || input.location.trim().length > 100) return 'Enter a location (up to 100 characters).'
+  if (typeof input.title !== 'string' || !input.title.trim() || input.title.trim().length > 72) return 'Use a title between 1 and 72 characters.'
+  if (typeof input.court !== 'string' || !input.court.trim() || input.court.trim().length > 100) return 'Enter a court name (up to 100 characters).'
+  if (typeof input.location !== 'string' || !input.location.trim() || input.location.trim().length > 100) return 'Enter a location (up to 100 characters).'
   const time = Date.parse(input.startsAt)
   if (!Number.isFinite(time) || time <= now) return 'Choose a future date and time.'
   if (![60, 90, 120, 150].includes(input.durationMinutes)) return 'Select a valid session duration.'
@@ -45,7 +45,8 @@ export function validateSession(input: Omit<RallySession, 'hostId' | 'chatChanne
   if (!Number.isInteger(input.targetPlayers) || input.targetPlayers < 2 || input.targetPlayers > 12) return 'Choose 2–12 target players.'
   if (input.capacity != null && input.targetPlayers > input.capacity) return 'The planning target cannot exceed the maximum.'
   if (!['All levels', 'Beginner', 'Intermediate', 'Advanced'].includes(input.level)) return 'Select a skill level.'
-  if (input.notes.length > 400) return 'Keep notes under 400 characters.'
+  if (input.notes != null && typeof input.notes !== 'string') return 'Enter valid session notes.'
+  if ((input.notes ?? '').length > 400) return 'Keep notes under 400 characters.'
   return null
 }
 
@@ -66,11 +67,20 @@ export function groupSessionRsvps<T extends { data: RallyRSVP }>(records: readon
 }
 
 export function summarizeAttendance(rsvps: RallyRSVP[], sessionId: string) {
-  const people = rsvps.filter(r => r.sessionId === sessionId)
-  return {
-    going: people.filter(r => r.status === 'going').length,
-    maybe: people.filter(r => r.status === 'maybe').length,
+  // Match Find Games' first-valid-membership semantics. Legacy duplicate
+  // rows must not inflate the session detail's capacity or readiness counts.
+  const seen = new Set<string>()
+  let going = 0
+  let maybe = 0
+  for (const rsvp of rsvps) {
+    if (rsvp.sessionId !== sessionId || typeof rsvp.userId !== 'string' || !rsvp.userId) continue
+    if (rsvp.status !== 'going' && rsvp.status !== 'maybe') continue
+    if (seen.has(rsvp.userId)) continue
+    seen.add(rsvp.userId)
+    if (rsvp.status === 'going') going++
+    else maybe++
   }
+  return { going, maybe }
 }
 
 export function summarizeReadiness(confirmed: number, target: number, format?: SessionFormat) {

@@ -63,6 +63,20 @@ describe('filterGames defaults', () => {
     expect(ids).toEqual(['s1', 's2', 's3', 's6'])
   })
 
+  it('excludes unparseable start times even when showing past games or filtering by date', () => {
+    const invalid = session({ recordId: 'invalid', startsAt: 'not-a-date' })
+    const valid = session({ recordId: 'valid' })
+    const rows = [invalid, valid]
+    const ids = (filters: Parameters<typeof filterGames>[2]) =>
+      filterGames(rows, [], filters, baseOpts).map(game => game.recordId)
+
+    expect(ids({})).toEqual(['valid'])
+    expect(ids({ showPast: true, showCancelled: true })).toEqual(['valid'])
+    expect(ids({ fromDate: '2026-11-20', toDate: '2026-11-23' })).toEqual(['valid'])
+    expect(ids({ availability: 'spots' })).toEqual(['valid'])
+  })
+
+
   it('annotates attendance and target status', () => {
     const games = filterGames(sessions, rsvps, {}, baseOpts)
     const s1 = games.find(g => g.recordId === 's1')
@@ -133,6 +147,36 @@ describe('filterGames distance', () => {
   it('keeps text-only sessions when no distance filter is set', () => {
     const ids = filterGames(sessions, rsvps, {}, { ...baseOpts, userLocation }).map(g => g.recordId)
     expect(ids).toContain('s3')
+  })
+})
+
+describe('filterGames corrupted or duplicated attendance', () => {
+  it('does not double count the same player or treat unknown statuses as attendance', () => {
+    const row = session({ recordId: 'limited', capacity: 2, targetPlayers: 2 })
+    const legacy: RallyRSVP[] = [
+      { sessionId: 'limited', userId: 'u1', status: 'going' },
+      { sessionId: 'limited', userId: 'u1', status: 'going' },
+      { sessionId: 'limited', userId: 'u2', status: 'withdrawn' as RallyRSVP['status'] },
+    ]
+    const [game] = filterGames([row], legacy, {}, { ...baseOpts, userId: 'u1' })
+    expect(game.going).toBe(1)
+    expect(game.maybe).toBe(0)
+    expect(game.status).toBe('needs-players')
+    expect(game.isMine).toBe(true)
+    expect(filterGames([row], legacy, { availability: 'spots' }, baseOpts)).toHaveLength(1)
+    expect(filterGames([row], legacy, { availability: 'waitlist' }, baseOpts)).toHaveLength(0)
+  })
+
+  it('counts distinct users independently for each session', () => {
+    const first = session({ recordId: 'first', capacity: 2, targetPlayers: 2 })
+    const second = session({ recordId: 'second', capacity: 2, targetPlayers: 2 })
+    const members: RallyRSVP[] = [
+      { sessionId: 'first', userId: 'u1', status: 'going' },
+      { sessionId: 'second', userId: 'u1', status: 'going' },
+      { sessionId: 'first', userId: 'u2', status: 'maybe' },
+    ]
+    const result = filterGames([first, second], members, {}, baseOpts)
+    expect(result.map(game => [game.going, game.maybe])).toEqual([[1, 1], [1, 0]])
   })
 })
 
