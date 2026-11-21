@@ -151,6 +151,27 @@ async function applyCommand(command: RallyCommand, tool: RecordTool, recovery: R
   return failure('Invalid rally command.')
 }
 
+/** Read every RSVP row for a session, paging past the 100-row read cap. */
+async function queryAllSessionRsvps(
+  tool: RecordTool,
+  sessionId: string,
+  userId: string,
+): Promise<Array<{ data: RallyRSVP }> | null> {
+  const all: Array<{ data: RallyRSVP }> = []
+  let offset = 0
+  for (;;) {
+    const page = await tool<QueryActionData<RallyRSVP>>(
+      'records.query',
+      { collection: 'rsvps', where: { sessionId }, limit: 100, offset },
+      userId,
+    )
+    if (!page.success) return null
+    all.push(...page.data.records)
+    if (page.data.records.length < 100) return all
+    offset += page.data.records.length
+  }
+}
+
 /** Notify every RSVP holder (going/maybe) except `excludeUserId`. Best-effort: never throws. */
 async function notifyRsvpHolders(
   tool: RecordTool,
@@ -158,13 +179,9 @@ async function notifyRsvpHolders(
   excludeUserId: string,
   makeInput: (recipientId: string) => Omit<EmitNotificationInput, 'recipientId'>,
 ): Promise<void> {
-  const found = await tool<QueryActionData<RallyRSVP>>(
-    'records.query',
-    { collection: 'rsvps', where: { sessionId }, limit: 100 },
-    excludeUserId,
-  )
-  if (!found.success) return
-  for (const record of found.data.records) {
+  const found = await queryAllSessionRsvps(tool, sessionId, excludeUserId)
+  if (!found) return
+  for (const record of found) {
     const recipientId = record.data.userId
     if (recipientId === excludeUserId) continue
     await emitNotification(tool, { recipientId, ...makeInput(recipientId) })
