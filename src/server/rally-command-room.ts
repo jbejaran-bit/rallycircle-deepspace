@@ -111,6 +111,25 @@ function failure(error: string): RallyCommandResult {
   return { success: false, error }
 }
 
+/**
+ * Surface the room's own error when it rejects with a non-2xx status
+ * (K05 body bound, malformed JSON, unparseable command). The room's 400
+ * body already carries a fail-closed error string ('Invalid rally
+ * command request.'); mapping it to the generic "temporarily
+ * unavailable" message invites a retry that can never succeed. Returns
+ * null when the body is not a well-formed room failure, and the caller
+ * falls back to the generic message. Never throws.
+ */
+async function roomFailureFromResponse(response: Response): Promise<string | null> {
+  try {
+    const body: unknown = await response.json()
+    if (isRecord(body) && body.success === false && typeof body.error === 'string' && body.error) return body.error
+  } catch {
+    // Unreadable body — fall back to the generic message.
+  }
+  return null
+}
+
 type PollFinalization = Extract<RallyCommand, { operation: 'finalizePoll' }>
 type ResultRecovery = Extract<ScoreEdit, { operation: 'reviewResult' | 'correctResult' }>
 interface RecoveryHooks {
@@ -1095,7 +1114,10 @@ export const rallyCommandAction: ActionHandler<Env> = async ({ userId, params, t
         body: JSON.stringify(command),
       }),
     )
-    if (!response.ok) return failure('The session service is temporarily unavailable. Try again.')
+    if (!response.ok) {
+      const roomError = await roomFailureFromResponse(response)
+      return failure(roomError ?? 'The session service is temporarily unavailable. Try again.')
+    }
     result = await response.json()
   } catch {
     return failure('The session service is temporarily unavailable. Try again.')
@@ -1382,6 +1404,26 @@ export const schedulingAction: ActionHandler<Env> = async ({ userId, params, env
     userId,
   })
   if (!command) return failure('Invalid scheduling command.')
+  if (command.operation === 'createSeries') {
+    // Validate the template before the room hop: the room's K05 body
+    // bound rejects a >64 KB command before validation, so without this
+    // the caller gets the generic body error instead of the specific
+    // validation error (e.g. a 1 MB title). Same validator the room uses
+    // in applySeriesCommand, so no behaviour divergence for valid input.
+    // (A replay of a series created before validation existed would now
+    // fail here instead of succeeding in the room's idempotency check —
+    // fail-closed, and no such series can exist on this line.)
+    // editSeries is NOT pre-validated: the room's host/active checks
+    // keep their error precedence there, and the 400 surfacing below
+    // covers its oversized-body case.
+    const problem = validateSeries({
+      template: command.template,
+      startStartsAt: command.startStartsAt,
+      intervalWeeks: command.intervalWeeks,
+      count: command.count,
+    })
+    if (problem) return failure(problem)
+  }
   const roomName = `rally:${env.DEEPSPACE_APP_ID}:series:${command.seriesId}`
   const room = env.RALLY_COMMAND_ROOMS.get(env.RALLY_COMMAND_ROOMS.idFromName(roomName))
   let result: unknown
@@ -1393,7 +1435,10 @@ export const schedulingAction: ActionHandler<Env> = async ({ userId, params, env
         body: JSON.stringify(command),
       }),
     )
-    if (!response.ok) return failure('The session service is temporarily unavailable. Try again.')
+    if (!response.ok) {
+      const roomError = await roomFailureFromResponse(response)
+      return failure(roomError ?? 'The session service is temporarily unavailable. Try again.')
+    }
     result = await response.json()
   } catch {
     return failure('The session service is temporarily unavailable. Try again.')

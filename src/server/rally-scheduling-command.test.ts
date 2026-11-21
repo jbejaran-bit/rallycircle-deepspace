@@ -610,6 +610,47 @@ describe('Recurring series', () => {
     expect(harness.rsvps.size).toBe(2)
   })
 
+  it('a 1 MB series title is rejected with the specific validation error, not the generic unavailable message (K05 x validation)', async () => {
+    const harness = createHarness()
+    // Without pre-validation in the action, the 1 MB body trips the room's
+    // 64 KB bound before validation and the caller gets "temporarily
+    // unavailable" — a retry that can never succeed.
+    await expect(harness.scheduleCommand('host', {
+      operation: 'createSeries',
+      template: { ...template, title: 't'.repeat(1024 * 1024) },
+      startStartsAt: '2030-01-05T18:00:00.000Z', intervalWeeks: 1, count: 3,
+    })).resolves.toMatchObject({ success: false, error: 'Use a title between 1 and 72 characters.' })
+    expect(harness.recurringSeries.size).toBe(0)
+  })
+
+  it('surfaces the room 400 body error instead of the generic unavailable message', async () => {
+    // A stub room that rejects with a well-formed 400 failure: the action
+    // must surface the room's error, not mask it as "temporarily
+    // unavailable". A 400 with an unreadable body falls back to generic.
+    const stubRooms = {
+      idFromName: (name: string) => name,
+      get: (response: Response) => ({ fetch: async () => response }),
+    }
+    const okBody = new Response(JSON.stringify({ success: false, error: 'Invalid rally command request.' }), { status: 400 })
+    const surfaced = await schedulingAction({
+      userId: 'host',
+      params: { operation: 'generateOccurrences', seriesId: 'any-series' },
+      env: { DEEPSPACE_APP_ID: 'test-app', RALLY_COMMAND_ROOMS: { idFromName: stubRooms.idFromName, get: () => stubRooms.get(okBody) } } as unknown as Env,
+      callerJwt: 'test-token',
+      tools: {} as ActionTools,
+    })
+    expect(surfaced).toMatchObject({ success: false, error: 'Invalid rally command request.' })
+    const badBody = new Response('not json', { status: 400 })
+    const fallback = await schedulingAction({
+      userId: 'host',
+      params: { operation: 'generateOccurrences', seriesId: 'any-series' },
+      env: { DEEPSPACE_APP_ID: 'test-app', RALLY_COMMAND_ROOMS: { idFromName: stubRooms.idFromName, get: () => stubRooms.get(badBody) } } as unknown as Env,
+      callerJwt: 'test-token',
+      tools: {} as ActionTools,
+    })
+    expect(fallback).toMatchObject({ success: false, error: 'The session service is temporarily unavailable. Try again.' })
+  })
+
   it('cancels only future open instances and leaves the series record cancelled', async () => {
     const harness = createHarness()
     const created = await harness.scheduleCommand('host', {
