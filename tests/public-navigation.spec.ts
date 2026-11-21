@@ -129,3 +129,22 @@ test('test-account sign-in can scroll on a short landscape screen', async ({ pag
   await entry.scrollIntoViewIfNeeded()
   await expect(entry).toBeInViewport()
 })
+
+test('a rejected test-account sign-in leaves a recoverable form', async ({ page }) => {
+  await page.route('**/api/auth/sign-in/email', route => route.fulfill({
+    status: 401,
+    json: { message: 'Fixture sign-in rejected' },
+  }))
+  await page.goto('/rallies?session=attempted-invite')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).last().click()
+  const dialog = page.getByRole('dialog', { name: 'Sign in to RallyCircle' })
+  await dialog.getByText('Sign in with a test account').click()
+  await dialog.getByLabel('Email').fill('fixture@deepspace.test')
+  await dialog.getByLabel('Password').fill('fixture-placeholder')
+  const submit = dialog.getByRole('button', { name: 'Sign in with email' })
+  await submit.click()
+  await expect(dialog.getByRole('alert')).toContainText('Check your test account details')
+  await expect(dialog.getByLabel('Email')).toHaveValue('fixture@deepspace.test')
+  await expect(submit).toBeEnabled()
+  await expect(page).toHaveURL(/session=attempted-invite/)
+})
