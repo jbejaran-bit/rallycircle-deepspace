@@ -146,6 +146,7 @@ export function isFinalTransition(previous: MatchScore, next: MatchScore): boole
 /** A completed set scoreline: 6–0..6–4, 7–5, or 7–6 (either side). */
 export function isValidSetScore(set: [number, number]): boolean {
   const [a, b] = set
+  if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b < 0) return false
   const winner = Math.max(a, b)
   const loser = Math.min(a, b)
   if (winner === 6) return loser <= 4
@@ -169,6 +170,8 @@ export function validateCorrectedSets(
   const loser: ScoreSide = winner === 0 ? 1 : 0
   const winnerSets = sets.filter((set) => set[winner] > set[loser]).length
   if (winnerSets !== 2) return 'The winning side must have won exactly two sets.'
+  const lastSet = sets.at(-1)!
+  if (lastSet[winner] < lastSet[loser]) return 'The match ends when the winning side takes its second set.'
   return null
 }
 

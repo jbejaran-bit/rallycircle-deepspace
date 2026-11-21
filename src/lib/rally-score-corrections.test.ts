@@ -29,6 +29,12 @@ describe('validateCorrectedSets', () => {
     expect(validateCorrectedSets([[6, 7], [7, 5], [4, 6]], 1)).toBeNull()
   })
 
+  it('rejects an extra set after the winner clinches the match', () => {
+    expect(validateCorrectedSets([[6, 3], [6, 2], [3, 6]], 0)).toContain('match ends')
+    expect(validateCorrectedSets([[3, 6], [2, 6], [6, 3]], 1)).toContain('match ends')
+    expect(validateCorrectedSets([[6, -1], [6, 3]], 0)).toContain('completed set')
+  })
+
   it('rejects invalid sets, wrong winners, and wrong set counts', () => {
     expect(validateCorrectedSets([[6, 6], [6, 3]], 0)).toContain('completed set')
     expect(validateCorrectedSets([[6, 5], [6, 3]], 0)).toContain('completed set')
