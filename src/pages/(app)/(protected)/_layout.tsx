@@ -15,7 +15,8 @@
 
 import { useState } from 'react'
 import { Link, Outlet, useLocation } from 'react-router-dom'
-import { AuthGate, AuthOverlay } from 'deepspace'
+import { AuthGate } from 'deepspace'
+import RallySignIn from '@/components/RallySignIn'
 import { Button } from '@/components/ui'
 
 export default function ProtectedLayout() {
@@ -33,12 +34,12 @@ function SignedOutPanel() {
   const params = new URLSearchParams(search)
   const reason = pathname === '/dashboard' ? 'Sign in to see your sessions, waitlists, and match results.'
     : pathname === '/games' ? 'Sign in to browse rallies and join a game.'
+    : pathname === '/courts' ? 'Sign in to explore courts and plan a rally.'
     : pathname === '/series' ? 'Sign in to plan recurring rallies and manage your series.'
     : pathname === '/notifications' ? 'Sign in to see your rally updates.'
-    : pathname === '/settings' ? 'Sign in to manage your player profile and see your match history.'
-    : pathname === '/courts' ? 'Sign in to explore courts and plan a rally.'
-    : params.has('session') ? 'Sign in to open this rally invitation.'
-    : params.get('create') === '1' ? 'Sign in to set a time, choose a court, and invite players.'
+    : pathname === '/settings' ? 'Sign in to manage your RallyCircle account and preferences.'
+    : pathname === '/rallies' && params.has('session') ? 'Sign in to open this rally invitation.'
+    : pathname === '/rallies' && params.get('create') === '1' ? 'Sign in to set a time, choose a court, and invite players.'
     : 'Sign in to access your RallyCircle account.'
 
   return (
@@ -59,7 +60,7 @@ function SignedOutPanel() {
         </Link>
       </div>
 
-      {showAuthModal && <AuthOverlay onClose={() => setShowAuthModal(false)} />}
+      {showAuthModal && <RallySignIn onClose={() => setShowAuthModal(false)} />}
     </div>
   )
 }

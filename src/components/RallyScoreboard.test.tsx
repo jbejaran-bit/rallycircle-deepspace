@@ -12,9 +12,9 @@ const base: RallySession = {
 }
 const nameOf = (id: string) => id === 'host' ? 'Alex' : 'Sam'
 
-function render(userId: string, session: RallySession) {
+function render(userId: string, session: RallySession, players: Array<{ id: string; name: string }> = []) {
   return renderToStaticMarkup(<RallyScoreboard session={session} sessionId="match"
-    userId={userId} isHost={userId === 'host'} players={[]} nameOf={nameOf} />)
+    userId={userId} isHost={userId === 'host'} players={players} nameOf={nameOf} />)
 }
 
 it('renders real player names and point controls only for the host', () => {
@@ -41,4 +41,11 @@ it('shows real approval progress to a neutral observer without granting a vote',
   const html = render('observer', { ...base, matchScore: JSON.stringify(result) })
   expect(html).toContain('1 of 2 recorded players approved this result.')
   expect(html).not.toContain('Dispute result')
+})
+
+
+it('labels the set-by-set scoreboard as a named keyboard-focusable region', () => {
+  const html = render('guest', { ...base, matchScore: JSON.stringify(score) })
+  expect(html).toMatch(/role="region" aria-label="Score by set" tabindex="0"/)
+  expect(html).toContain('scope="row"')
 })

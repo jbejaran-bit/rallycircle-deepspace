@@ -28,14 +28,22 @@ const button = 'min-h-11 rounded-lg border border-white/25 px-3 text-sm font-sem
 
 export default function RallyScoreboard({ session, sessionId, userId, isHost, players, nameOf }: Props) {
   const inFlight = useRef(false)
-  const [review, setReview] = useState<{ decision: 'approve' | 'dispute'; revision: number } | null>(null)
+  const [review, setReview] = useState<{ decision: 'approve' | 'dispute'; revision: number; score: string | undefined } | null>(null)
   const [selected, setSelected] = useState<Record<string, string>>({})
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const [awaitingRevision, setAwaitingRevision] = useState<number | null>(null)
+  const [awaitingStart, setAwaitingStart] = useState(false)
+  const [startSlow, setStartSlow] = useState(false)
   const [slowRevision, setSlowRevision] = useState<number | null>(null)
   const score = readMatchScore(session.matchScore)
   const result = score && resultStatus(score)
+  const waitingForStart = awaitingStart && !session.matchScore
+  useEffect(() => {
+    if (!waitingForStart) return
+    const timer = window.setTimeout(() => setStartSlow(true), 5000)
+    return () => window.clearTimeout(timer)
+  }, [waitingForStart])
   const waitingForScore = score !== null && awaitingRevision !== null && score.revision === awaitingRevision
   useEffect(() => {
     if (!waitingForScore) return
@@ -51,7 +59,8 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
   if (!score && (!editable || !teamSize)) return null
   const teams = sides.map(team => Array.from({ length: teamSize }, (_, index) => selected[`${team}-${index}`] ?? ''))
   const distinctPlayers = new Set(teams.flat())
-  const canStart = !session.matchScore && distinctPlayers.size === teamSize * 2 && !distinctPlayers.has('')
+  const canStart = !session.matchScore && !waitingForStart && distinctPlayers.size === teamSize * 2 &&
+    [...distinctPlayers].every(playerId => players.some(player => player.id === playerId))
 
   async function edit(command: Parameters<typeof runRallyCommand>[0]) {
     if (inFlight.current) return
@@ -64,6 +73,7 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
         setSlowRevision(null)
         setAwaitingRevision(command.revision)
       }
+      if (command.operation === 'startMatch') setAwaitingStart(true)
       if (command.operation === 'reviewResult') setReview(null)
     } catch (cause) {
       setReview(null)
@@ -91,13 +101,13 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
               : session.status !== 'open' ? 'Scoring closed.'
               : isTiebreak(score) ? 'Tiebreak · first to seven, win by two' : 'In progress'}
           </p>
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto rounded-lg focus-visible:outline-2" role="region" aria-label="Score by set" tabIndex={0}>
             <table className="w-full border-separate border-spacing-y-2 text-left text-sm tabular-nums">
               <thead><tr><th scope="col" className="px-2 pb-1">Players</th>{score.sets.map((_, index) => <th scope="col" key={index} className="px-2 text-center">Set {index + 1}</th>)}{score.winner === null && <><th scope="col" className="px-2 text-center">Games</th><th scope="col" className="px-2 text-center">Points</th></>}</tr></thead>
               <tbody>
                 {sides.map(side => (
                   <tr key={side} className={score.winner === side ? "bg-[#d7fc83]/15" : "bg-white/5"}>
-                    <th scope="row" className="rounded-l-lg px-2 py-3">{score.teams[side].map(nameOf).join(' / ')}</th>
+                    <th scope="row" className="rounded-l-lg px-2 py-3 [overflow-wrap:anywhere]">{score.teams[side].map(nameOf).join(' / ')}</th>
                     {score.sets.map((set, index) => <td key={index} className="px-2 text-center font-semibold">{set[side]}</td>)}
                     {score.winner === null && <><td className="px-2 text-center font-semibold">{score.games[side]}</td><td className="rounded-r-lg px-2 text-center text-lg font-bold text-[#d7fc83]">{displayPoints(score, side)}</td></>}
                   </tr>
@@ -107,8 +117,8 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
           </div>
           {canReview && (
             <div className="flex flex-wrap gap-2">
-              <button type="button" className={button} disabled={pending} onClick={() => setReview({ decision: 'approve', revision: score.revision })}>Confirm result</button>
-              <button type="button" className={button} disabled={pending} onClick={() => setReview({ decision: 'dispute', revision: score.revision })}>Dispute result</button>
+              <button type="button" className={button} disabled={pending} onClick={() => setReview({ decision: 'approve', revision: score.revision, score: session.matchScore })}>Confirm result</button>
+              <button type="button" className={button} disabled={pending} onClick={() => setReview({ decision: 'dispute', revision: score.revision, score: session.matchScore })}>Dispute result</button>
             </div>
           )}
           {editable && score.winner === null && (
@@ -157,7 +167,15 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
       <ConfirmModal
         open={review !== null && Boolean(canReview)}
         onClose={() => { if (!inFlight.current) setReview(null) }}
-        onConfirm={() => { if (review && canReview) void edit({ operation: 'reviewResult', sessionId, decision: review.decision, revision: review.revision }) }}
+        onConfirm={() => {
+          if (!review || !canReview) return
+          if (session.matchScore !== review.score) {
+            setReview(null)
+            setError('The result changed while you were reviewing it. Check the score and try again.')
+            return
+          }
+          void edit({ operation: 'reviewResult', sessionId, decision: review.decision, revision: review.revision })
+        }}
         title={review?.decision === 'dispute' ? 'Dispute this result?' : 'Confirm this result?'}
         description={review?.decision === 'dispute' ? 'A dispute closes further approvals for this result.' : 'The result becomes final after every recorded player approves it.'}
         confirmText={review?.decision === 'dispute' ? 'Dispute result' : 'Confirm result'}
@@ -165,6 +183,12 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
         loading={pending}
       />
       {pending && <p role="status">Saving score…</p>}
+      {waitingForStart && (
+        <div role="status" className="text-sm text-white/75">
+          <p>{startSlow ? 'Match created. The live scoreboard has not caught up yet.' : 'Match created. Waiting for the live scoreboard…'}</p>
+          {startSlow && <button type="button" className={button} onClick={() => window.location.reload()}>Reload latest score</button>}
+        </div>
+      )}
       {waitingForScore && (
         <div role="status" className="text-sm text-white/75">
           {slowRevision === awaitingRevision ? (

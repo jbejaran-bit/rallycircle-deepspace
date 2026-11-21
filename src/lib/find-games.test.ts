@@ -63,6 +63,20 @@ describe('filterGames defaults', () => {
     expect(ids).toEqual(['s1', 's2', 's3', 's6'])
   })
 
+  it('excludes unparseable start times even when showing past games or filtering by date', () => {
+    const invalid = session({ recordId: 'invalid', startsAt: 'not-a-date' })
+    const valid = session({ recordId: 'valid' })
+    const rows = [invalid, valid]
+    const ids = (filters: Parameters<typeof filterGames>[2]) =>
+      filterGames(rows, [], filters, baseOpts).map(game => game.recordId)
+
+    expect(ids({})).toEqual(['valid'])
+    expect(ids({ showPast: true, showCancelled: true })).toEqual(['valid'])
+    expect(ids({ fromDate: '2026-11-20', toDate: '2026-11-23' })).toEqual(['valid'])
+    expect(ids({ availability: 'spots' })).toEqual(['valid'])
+  })
+
+
   it('annotates attendance and target status', () => {
     const games = filterGames(sessions, rsvps, {}, baseOpts)
     const s1 = games.find(g => g.recordId === 's1')
@@ -136,6 +150,36 @@ describe('filterGames distance', () => {
   })
 })
 
+describe('filterGames corrupted or duplicated attendance', () => {
+  it('does not double count the same player or treat unknown statuses as attendance', () => {
+    const row = session({ recordId: 'limited', capacity: 2, targetPlayers: 2 })
+    const legacy: RallyRSVP[] = [
+      { sessionId: 'limited', userId: 'u1', status: 'going' },
+      { sessionId: 'limited', userId: 'u1', status: 'going' },
+      { sessionId: 'limited', userId: 'u2', status: 'withdrawn' as RallyRSVP['status'] },
+    ]
+    const [game] = filterGames([row], legacy, {}, { ...baseOpts, userId: 'u1' })
+    expect(game.going).toBe(1)
+    expect(game.maybe).toBe(0)
+    expect(game.status).toBe('needs-players')
+    expect(game.isMine).toBe(true)
+    expect(filterGames([row], legacy, { availability: 'spots' }, baseOpts)).toHaveLength(1)
+    expect(filterGames([row], legacy, { availability: 'waitlist' }, baseOpts)).toHaveLength(0)
+  })
+
+  it('counts distinct users independently for each session', () => {
+    const first = session({ recordId: 'first', capacity: 2, targetPlayers: 2 })
+    const second = session({ recordId: 'second', capacity: 2, targetPlayers: 2 })
+    const members: RallyRSVP[] = [
+      { sessionId: 'first', userId: 'u1', status: 'going' },
+      { sessionId: 'second', userId: 'u1', status: 'going' },
+      { sessionId: 'first', userId: 'u2', status: 'maybe' },
+    ]
+    const result = filterGames([first, second], members, {}, baseOpts)
+    expect(result.map(game => [game.going, game.maybe])).toEqual([[1, 1], [1, 0]])
+  })
+})
+
 describe('filterGames ownership', () => {
   it('marks sessions the user hosts or joined as mine', () => {
     const games = filterGames(sessions, rsvps, {}, { ...baseOpts, userId: 'u1' })
@@ -177,4 +221,31 @@ it('does not assign the first distance when multiple cities have a court with th
   expect(filterGames([localRow], [], {}, {
     ...options, knownCourts: [{ ...first, locality: undefined }, { ...second, locality: undefined }],
   })[0].distanceMiles).toBeNull()
+})
+
+it('searches the rally title as well as the court and area', () => {
+  expect(filterGames(sessions, rsvps, { query: '  sunday DOUBLES  ' }, baseOpts).map(game => game.recordId)).toEqual(['s1'])
+  expect(filterGames(sessions, rsvps, { query: 'schenley doubles' }, baseOpts).map(game => game.recordId)).toEqual(['s1'])
+  expect(filterGames(sessions, rsvps, { query: 'oakland' }, baseOpts).map(game => game.recordId)).toEqual(['s3'])
+})
+
+it('sorts nearest by known distance while keeping unknown distances visible', () => {
+  const games = filterGames(sessions, rsvps, { sort: 'nearest' }, { ...baseOpts, userLocation: HIGHLAND })
+  expect(games.map(game => game.recordId)).toEqual(['s2', 's1', 's3', 's6'])
+  expect(games.slice(2).map(game => game.distanceMiles)).toEqual([null, null])
+  expect(filterGames(sessions, rsvps, { sort: 'nearest' }, baseOpts).map(game => game.recordId)).toEqual(['s1', 's2', 's3', 's6'])
+})
+
+it('keeps invalid start times and past games out of actionable availability filters', () => {
+  const malformed = session({ recordId: 'bad', startsAt: 'unknown' })
+  const earlier = session({ recordId: 'earlier', startsAt: new Date(NOW - 10_000).toISOString() })
+  expect(filterGames([malformed, earlier], [], { showPast: true }, baseOpts).map(game => game.recordId)).toEqual(['earlier'])
+  expect(filterGames([malformed, earlier], [], { showPast: true, availability: 'spots' }, baseOpts)).toEqual([])
+})
+
+
+it('keeps invalid coordinates out of distance labels and filters', () => {
+  const options = { ...baseOpts, userLocation: HIGHLAND, knownCourts: [{ ...HIGHLAND, lat: 400 }] }
+  expect(filterGames(sessions, rsvps, {}, options).every(game => game.distanceMiles === null)).toBe(true)
+  expect(filterGames(sessions, rsvps, { maxDistanceMiles: 25 }, options)).toHaveLength(0)
 })

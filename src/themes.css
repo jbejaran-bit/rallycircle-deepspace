@@ -44,3 +44,29 @@
   --color-shell: #fafafa;
   --color-shell-panel: #ffffff;
 }
+
+/* RallyCircle club palette. Components consume semantic tokens in both themes. */
+[data-theme="club"] {
+  color-scheme: dark;
+  --color-background: #101b14;
+  --color-foreground: #f4f6ec;
+  --color-card: #192820;
+  --color-card-foreground: #f4f6ec;
+  --color-popover: #192820;
+  --color-popover-foreground: #f4f6ec;
+  --color-primary: #d7fc83;
+  --color-primary-foreground: #182311;
+  --color-secondary: #24362b;
+  --color-secondary-foreground: #f4f6ec;
+  --color-muted: #223129;
+  --color-muted-foreground: #b7c6b9;
+  --color-accent: #2a3e30;
+  --color-accent-foreground: #f4f6ec;
+  --color-destructive: #a43840;
+  --color-destructive-foreground: #ffffff;
+  --color-border: #394e40;
+  --color-input: #577061;
+  --color-ring: #d7fc83;
+  --color-shell: #101b14;
+  --color-shell-panel: #192820;
+}

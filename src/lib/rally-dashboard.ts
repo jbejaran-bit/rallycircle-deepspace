@@ -22,24 +22,32 @@ export function buildDashboard(
     const waiting = myWaitlist.has(recordId) && response !== 'going'
     if (!hosting && !response && !waiting && side < 0) return []
     const start = Date.parse(data.startsAt)
+    const scheduled = Number.isFinite(start)
+    const end = start + data.durationMinutes * 60_000
+    const inSession = scheduled && Number.isFinite(end) && start <= now && end > now
     return [{
       recordId, data, hosting, response, waiting, score, side, start,
       cancelled: data.status === 'cancelled',
-      past: Number.isFinite(start) && start <= now,
-      scheduled: Number.isFinite(start),
+      inSession,
+      past: scheduled && start <= now && !inSession,
+      scheduled,
     }]
   }).sort((a, b) => Number(b.scheduled) - Number(a.scheduled) || (a.start - b.start || 0))
 
-  const confirmedCounts = new Map<string, number>()
+  const confirmedPlayers = new Map<string, Set<string>>()
   for (const response of communityResponses ?? []) {
-    if (response.status === 'going') confirmedCounts.set(response.sessionId, (confirmedCounts.get(response.sessionId) ?? 0) + 1)
+    if (response.status !== 'going') continue
+    const players = confirmedPlayers.get(response.sessionId) ?? new Set<string>()
+    players.add(response.userId)
+    confirmedPlayers.set(response.sessionId, players)
   }
   const gamesNeedingPlayers = communityResponses === null ? [] : sessions
     .filter(({ recordId, data }) => data.status === 'open' && Date.parse(data.startsAt) > now &&
-      data.hostId !== userId && !myResponses.has(recordId) && !myWaitlist.has(recordId))
+      data.hostId !== userId && !myResponses.has(recordId) && !myWaitlist.has(recordId) &&
+      !confirmedPlayers.get(recordId)?.has(userId))
     .map(({ recordId, data }) => ({
       recordId, data,
-      needed: Math.min(data.targetPlayers, data.capacity ?? Infinity) - (confirmedCounts.get(recordId) ?? 0),
+      needed: Math.min(data.targetPlayers, data.capacity ?? Infinity) - (confirmedPlayers.get(recordId)?.size ?? 0),
     }))
     .filter(row => row.needed > 0)
     .sort((a, b) => Date.parse(a.data.startsAt) - Date.parse(b.data.startsAt))
@@ -47,9 +55,13 @@ export function buildDashboard(
 
   const matches = entries.filter(row => row.score && row.side >= 0).reverse()
   const finalized = matches.filter(row => row.score && resultStatus(row.score) === 'final')
+  const committed = entries.filter(row => row.scheduled && !row.past && !row.cancelled &&
+    (row.hosting || row.response === 'going'))
   return {
     entries,
-    nextRally: entries.find(row => row.scheduled && !row.past && !row.cancelled && (row.hosting || row.response === 'going')),
+    nextRally: committed[0],
+    awaitingResponse: matches.filter(row => !row.cancelled && row.score && row.score.winner !== null &&
+      !row.score.disputed && !row.score.approvals.includes(userId)),
     gamesNeedingPlayers,
     matches,
     finalized: finalized.length,
@@ -63,7 +75,7 @@ export function filterAgenda(entries: Entry[], filter: DashboardFilter) {
   switch (filter) {
     case 'hosting': return entries.filter(row => row.hosting)
     case 'participating': return entries.filter(row => row.response !== undefined && !row.cancelled)
-    case 'waitlisted': return entries.filter(row => row.waiting && !row.cancelled)
+    case 'waitlisted': return entries.filter(row => row.waiting && !row.cancelled && !row.past)
     case 'cancelled': return entries.filter(row => row.cancelled).reverse()
     case 'past': return entries.filter(row => row.past && !row.cancelled).reverse()
     case 'upcoming': return entries.filter(row => row.scheduled && !row.past && !row.cancelled)
@@ -77,4 +89,16 @@ export function agendaWeek(anchor: Date, offset: number, entries: Entry[]) {
     const next = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1)
     return { date, entries: entries.filter(entry => entry.start >= date.getTime() && entry.start < next.getTime()) }
   })
+}
+
+export function groupAgendaByDay(entries: ReturnType<typeof filterAgenda>) {
+  const days = new Map<number | null, Entry[]>()
+  for (const entry of entries) {
+    const start = new Date(entry.start)
+    const day = entry.scheduled ? new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime() : null
+    const group = days.get(day) ?? []
+    group.push(entry)
+    days.set(day, group)
+  }
+  return [...days].map(([day, rows]) => ({ day, entries: rows }))
 }

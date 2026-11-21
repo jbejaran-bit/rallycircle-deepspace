@@ -28,7 +28,10 @@
 import { z } from 'zod'
 
 const pair = z.tuple([z.number().int().min(0), z.number().int().min(0)])
-const teams = z.tuple([z.array(z.string().min(1).max(200)).min(1).max(2), z.array(z.string().min(1).max(200)).min(1).max(2)])
+const teams = z.tuple([z.array(z.string().min(1).max(200)).min(1).max(2), z.array(z.string().min(1).max(200)).min(1).max(2)]).refine(
+  ([first, second]) => new Set([...first, ...second]).size === first.length + second.length,
+  { message: 'A player cannot appear more than once in a match.' },
+)
 const side = z.union([z.literal(0), z.literal(1)])
 const scoreSchema = z.object({
   revision: z.number().int().min(0),

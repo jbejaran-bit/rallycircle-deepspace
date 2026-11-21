@@ -171,6 +171,21 @@ test('session courtboard is private, synchronized, persistent, and isolated', as
     await expect(aliceMarker).toHaveAttribute('data-x', String(touchMove.x))
     await expect(aliceMarker).toHaveAttribute('data-y', String(touchMove.y))
 
+    // A cancelled gesture must clear its preview and never move the shared marker.
+    await bobMarker.evaluate(marker => {
+      const court = (marker as SVGGElement).ownerSVGElement!
+      const bounds = court.getBoundingClientRect()
+      const x = Number(marker.getAttribute('data-x'))
+      const y = Number(marker.getAttribute('data-y'))
+      const start = { clientX: bounds.left + x * bounds.width / 1000, clientY: bounds.top + y * bounds.height / 500 }
+      const pointer = { bubbles: true, pointerId: 8, pointerType: 'touch', isPrimary: true }
+      marker.dispatchEvent(new PointerEvent('pointerdown', { ...pointer, ...start, buttons: 1 }))
+      court.dispatchEvent(new PointerEvent('pointermove', { ...pointer, ...start, clientX: start.clientX - bounds.width * 0.2, buttons: 1 }))
+      court.dispatchEvent(new PointerEvent('pointercancel', { ...pointer, ...start }))
+    })
+    await expect(bobMarker).toHaveAttribute('data-x', String(touchMove.x))
+    await expect(aliceMarker).toHaveAttribute('data-x', String(touchMove.x))
+
     await alice.page.reload()
     await expect(alice.page.getByTestId('courtboard-status')).toContainText('Connected · editing enabled')
     await expect(aliceMarker).toHaveAttribute('data-x', String(touchMove.x))
