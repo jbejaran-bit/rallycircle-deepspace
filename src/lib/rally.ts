@@ -67,11 +67,20 @@ export function groupSessionRsvps<T extends { data: RallyRSVP }>(records: readon
 }
 
 export function summarizeAttendance(rsvps: RallyRSVP[], sessionId: string) {
-  const people = rsvps.filter(r => r.sessionId === sessionId)
-  return {
-    going: people.filter(r => r.status === 'going').length,
-    maybe: people.filter(r => r.status === 'maybe').length,
+  // Match Find Games' first-valid-membership semantics. Legacy duplicate
+  // rows must not inflate the session detail's capacity or readiness counts.
+  const seen = new Set<string>()
+  let going = 0
+  let maybe = 0
+  for (const rsvp of rsvps) {
+    if (rsvp.sessionId !== sessionId || typeof rsvp.userId !== 'string' || !rsvp.userId) continue
+    if (rsvp.status !== 'going' && rsvp.status !== 'maybe') continue
+    if (seen.has(rsvp.userId)) continue
+    seen.add(rsvp.userId)
+    if (rsvp.status === 'going') going++
+    else maybe++
   }
+  return { going, maybe }
 }
 
 export function summarizeReadiness(confirmed: number, target: number, format?: SessionFormat) {
