@@ -63,6 +63,20 @@ describe('filterGames defaults', () => {
     expect(ids).toEqual(['s1', 's2', 's3', 's6'])
   })
 
+  it('excludes unparseable start times even when showing past games or filtering by date', () => {
+    const invalid = session({ recordId: 'invalid', startsAt: 'not-a-date' })
+    const valid = session({ recordId: 'valid' })
+    const rows = [invalid, valid]
+    const ids = (filters: Parameters<typeof filterGames>[2]) =>
+      filterGames(rows, [], filters, baseOpts).map(game => game.recordId)
+
+    expect(ids({})).toEqual(['valid'])
+    expect(ids({ showPast: true, showCancelled: true })).toEqual(['valid'])
+    expect(ids({ fromDate: '2026-11-20', toDate: '2026-11-23' })).toEqual(['valid'])
+    expect(ids({ availability: 'spots' })).toEqual(['valid'])
+  })
+
+
   it('annotates attendance and target status', () => {
     const games = filterGames(sessions, rsvps, {}, baseOpts)
     const s1 = games.find(g => g.recordId === 's1')
