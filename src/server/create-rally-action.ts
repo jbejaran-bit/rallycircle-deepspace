@@ -16,17 +16,49 @@ const rallyDraft = z.object({
   notes: z.string().trim().max(400),
 }).strict()
 
-export const createRallyAction: ActionHandler<Env> = async ({ params, tools }) => {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+export const createRallyAction: ActionHandler<Env> = async ({ userId, params, env }) => {
   const parsed = rallyDraft.safeParse(params)
   if (!parsed.success) return { success: false, error: 'Check the rally details and try again.' }
   const problem = validateSession(parsed.data)
   if (problem) return { success: false, error: problem }
-  const created = await tools.create('sessions', {
-    ...parsed.data,
-    startsAt: new Date(parsed.data.startsAt).toISOString(),
-    status: 'open',
-    chatChannelId: '',
-  })
-  if (!created.success) return { success: false, error: 'The rally could not be created. Try again.' }
-  return { success: true, data: { recordId: created.data.recordId } }
+  // Creation is serialized per host in a dedicated command room
+  // (`rally:<appId>:user:<userId>`): the room returns the existing open
+  // session when the draft exactly matches one, so a double-submit or a
+  // retry after a transient failure lands on one session instead of two.
+  // The marker header keeps this working with the room's internal-action
+  // check (K01 fix). Without the room binding the action fails closed
+  // rather than creating directly and re-introducing the race.
+  const rooms = env.RALLY_COMMAND_ROOMS
+  if (!rooms) return { success: false, error: 'The rally could not be created. Try again.' }
+  const room = rooms.get(rooms.idFromName(`rally:${env.DEEPSPACE_APP_ID}:user:${userId}`))
+  let result: unknown
+  try {
+    const response = await room.fetch(
+      new Request('https://internal/rally-command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-App-Action': 'true' },
+        body: JSON.stringify({
+          operation: 'createRally',
+          userId,
+          draft: { ...parsed.data, startsAt: new Date(parsed.data.startsAt).toISOString() },
+        }),
+      }),
+    )
+    if (!response.ok) return { success: false, error: 'The rally could not be created. Try again.' }
+    result = await response.json()
+  } catch {
+    return { success: false, error: 'The rally could not be created. Try again.' }
+  }
+  if (isRecord(result) && result.success === true && isRecord(result.data) &&
+      typeof result.data.recordId === 'string') {
+    return { success: true, data: { recordId: result.data.recordId } }
+  }
+  if (isRecord(result) && result.success === false && typeof result.error === 'string') {
+    return { success: false, error: result.error }
+  }
+  return { success: false, error: 'The rally could not be created. Try again.' }
 }
