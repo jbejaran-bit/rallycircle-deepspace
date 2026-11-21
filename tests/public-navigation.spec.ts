@@ -100,3 +100,18 @@ test('keyboard users can skip app navigation', async ({ page }) => {
   await page.keyboard.press('Enter')
   await expect(page.getByRole('main')).toBeFocused()
 })
+
+for (const width of [320, 375, 390, 768, 1024, 1440]) {
+  test(`invite and sign-in fit at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 820 })
+    await page.goto('/rallies?session=shared-invite')
+    await expect(page.getByText('Sign in to open this rally invitation.')).toBeVisible()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+    await page.getByRole('button', { name: 'Sign in', exact: true }).last().click()
+    const dialog = page.getByRole('dialog', { name: 'Sign in to RallyCircle' })
+    await expect(dialog.getByRole('link', { name: 'Continue with Google' })).toBeVisible()
+    const bounds = await dialog.boundingBox()
+    expect(bounds?.x).toBeGreaterThanOrEqual(0)
+    expect(bounds && bounds.x + bounds.width).toBeLessThanOrEqual(width)
+  })
+}

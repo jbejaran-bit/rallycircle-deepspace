@@ -142,7 +142,7 @@ export default function Navigation() {
             </DropdownMenu>
           ) : isSignedIn ? (
             <div className="flex items-center gap-2">
-              <Link to="/settings" className="inline-flex min-h-11 items-center gap-2 rounded-md px-2 text-sm text-muted-foreground">Account settings</Link>
+              <Link to="/settings" className="inline-flex min-h-11 items-center gap-2 rounded-md px-2 text-sm text-muted-foreground">Account</Link>
               <button type="button" aria-label="Sign out" className="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground" onClick={() => void signOut()}><LogOut aria-hidden className="size-4" /></button>
             </div>
           ) : (
