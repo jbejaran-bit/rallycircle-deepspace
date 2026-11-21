@@ -116,9 +116,14 @@ export function createRoomHarness() {
 
       if (tool === 'records.query' && params.collection === 'pollVotes') {
         const where = params.where as Partial<RallyPollVote>
+        // Honor offset like every other query path in this harness (and
+        // like the real SDK): refreshPollTally pages past the 500-row cap,
+        // and a store that ignores offset silently undercounts past 500
+        // votes instead of failing. Rows stay in insertion order.
+        const offset = Number(params.offset ?? 0)
         const records = [...pollVotes.values()].filter(record =>
           Object.entries(where).every(([key, value]) => record.data[key as keyof RallyPollVote] === value),
-        ).slice(0, Number(params.limit ?? pollVotes.size))
+        ).slice(offset, offset + Number(params.limit ?? pollVotes.size))
         return Response.json({ success: true, data: { records, count: records.length } })
       }
 
