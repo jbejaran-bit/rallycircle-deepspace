@@ -37,7 +37,7 @@ function SignedOutPanel() {
     : pathname === '/courts' ? 'Sign in to explore courts and plan a rally.'
     : pathname === '/series' ? 'Sign in to plan recurring rallies and manage your series.'
     : pathname === '/notifications' ? 'Sign in to see your rally updates.'
-    : pathname === '/settings' ? 'Sign in to manage your RallyCircle account and preferences.'
+    : pathname === '/settings' ? 'Sign in to manage your player profile and view your match history.'
     : pathname === '/rallies' && params.has('session') ? 'Sign in to open this rally invitation.'
     : pathname === '/rallies' && params.get('create') === '1' ? 'Sign in to set a time, choose a court, and invite players.'
     : 'Sign in to access your RallyCircle account.'
