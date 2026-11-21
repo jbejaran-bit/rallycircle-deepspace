@@ -1,4 +1,5 @@
 import { findCourt, type Court } from '@/lib/courts'
+import EditRallyDetails from '@/components/EditRallyDetails'
 import { PlayerIdentity } from '@/components/PlayerIdentity'
 import { ConfirmModal, Dialog, DialogClose, DialogContent, DialogTitle, DialogTrigger } from '@/components/ui'
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
@@ -77,15 +78,26 @@ function ReadinessPanel({ confirmed, target, status, error, cancelled, full, for
   )
 }
 
-function CreateSession({ userId, onCreated, selectedCourt, prefillCourt, prefillArea, startOpen }: { startOpen: boolean; prefillCourt?: string; prefillArea?: string; userId: string; onCreated: (id: string) => void; selectedCourt?: Court }) {
+function CreateSession({ userId, onCreated, onDismissEntry, selectedCourt, prefillCourt, prefillArea, startOpen }: {
+  startOpen: boolean
+  prefillCourt?: string
+  prefillArea?: string
+  userId: string
+  onCreated: (id: string) => void
+  onDismissEntry: () => void
+  selectedCourt?: Court
+}) {
   const { createConfirmed, putConfirmed, ready } = useMutations<Omit<RallySession, 'hostId' | 'status'>>('sessions')
   const { createConfirmed: createChannel } = useMutations<Channel>('channels')
-  const [open, setOpen] = useState(Boolean(startOpen || selectedCourt || prefillCourt))
+  const entryCourt = selectedCourt?.name ?? prefillCourt ?? ''
+  const entryArea = selectedCourt?.area ?? prefillArea ?? ''
+  const entry = startOpen || entryCourt ? JSON.stringify([entryCourt, entryArea]) : null
+  const [open, setOpen] = useState(entry !== null)
+  const [previousEntry, setPreviousEntry] = useState(entry)
   const publishing = useRef(false)
   const titleInput = useRef<HTMLInputElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
-  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [hostRsvpError, setHostRsvpError] = useState<string | null>(null)
@@ -94,14 +106,28 @@ function CreateSession({ userId, onCreated, selectedCourt, prefillCourt, prefill
   const [retryingChat, setRetryingChat] = useState(false)
   const [format, setFormat] = useState<SessionFormat>('Practice')
   const [title, setTitle] = useState('')
-  const [court, setCourt] = useState(selectedCourt?.name ?? prefillCourt ?? '')
-  const [location, setLocation] = useState(selectedCourt?.area ?? prefillArea ?? '')
+  const [court, setCourt] = useState(entryCourt)
+  const [location, setLocation] = useState(entryArea)
   const [startsAt, setStartsAt] = useState('')
   const [durationMinutes, setDurationMinutes] = useState(90)
   const [targetPlayers, setTargetPlayers] = useState(4)
   const [capacity, setCapacity] = useState<number>()
   const [level, setLevel] = useState<Level>('All levels')
   const [notes, setNotes] = useState('')
+
+  // A new court link replaces only the location fields in a draft. A
+  // generic Create link just opens it, leaving the existing draft intact.
+  if (entry !== previousEntry) {
+    setPreviousEntry(entry)
+    if (entry !== null) {
+      setOpen(true)
+      setError(null)
+      if (entryCourt || entryArea) {
+        setCourt(entryCourt)
+        setLocation(entryArea)
+      }
+    }
+  }
 
   function fillExample() {
     const sampleTime = new Date(Date.now() + 3 * 86400_000)
@@ -189,7 +215,11 @@ function CreateSession({ userId, onCreated, selectedCourt, prefillCourt, prefill
   }
 
   return (
-    <Dialog open={open} onOpenChange={next => { if (!publishing.current) setOpen(next) }}>
+    <Dialog open={open} onOpenChange={next => {
+      if (publishing.current) return
+      setOpen(next)
+      if (!next && entry !== null) onDismissEntry()
+    }}>
       <DialogTrigger ref={trigger} className={`${accent} inline-flex items-center gap-2`}>
         <Plus size={17} strokeWidth={2.6} aria-hidden /> New session
       </DialogTrigger>
@@ -454,6 +484,9 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
             </button>
           </div>
         )}
+        {!cancelled && !session.matchScore && session.hostId === userId && (
+          <EditRallyDetails key={sessionId} sessionId={sessionId} title={session.title} notes={session.notes ?? ''} />
+        )}
         {!cancelled&&session.hostId===userId&&<button type="button" disabled={busy} onClick={() => setConfirmCancel(true)} className="min-h-11 text-sm text-rose-300/75 underline underline-offset-4 hover:text-rose-200">Cancel my session</button>}
         {busy && <p role="status" className="text-sm text-white/75">Saving rally changes…</p>}
         {!busy && attendanceNotice && <p role="status" className="text-sm text-white/80">{attendanceNotice}</p>}
@@ -528,6 +561,13 @@ export default function RalliesPage() {
       return next
     }, { replace: true })
   }
+  function dismissCreationEntry() {
+    setSearchParams(current => {
+      const next = new URLSearchParams(current)
+      for (const field of ['create', 'court', 'courtName', 'courtArea']) next.delete(field)
+      return next
+    }, { replace: true })
+  }
   const [view, setView] = useState<'upcoming'|'all'|'mine'|'playing'>('upcoming')
   const [now, setNow] = useState(Date.now)
   useEffect(() => {
@@ -563,7 +603,7 @@ export default function RalliesPage() {
           <h1 className="text-4xl font-black leading-[1.05] tracking-[-0.045em] sm:text-5xl lg:text-6xl">Rally sessions</h1>
           <p className="mt-4 max-w-2xl text-base leading-relaxed text-white/55">Set a time to play, share the invitation, and check who’s coming.</p>
         </div>
-        <CreateSession startOpen={searchParams.get('create') === '1'} userId={signedInId} onCreated={chooseSession} selectedCourt={selectedCourt} prefillCourt={searchParams.get('courtName')?.trim().slice(0, 100)} prefillArea={searchParams.get('courtArea')?.trim().slice(0, 100)}/>
+        <CreateSession startOpen={searchParams.get('create') === '1'} userId={signedInId} onCreated={chooseSession} onDismissEntry={dismissCreationEntry} selectedCourt={selectedCourt} prefillCourt={searchParams.get('courtName')?.trim().slice(0, 100)} prefillArea={searchParams.get('courtArea')?.trim().slice(0, 100)}/>
       </div>
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(300px,.85fr)_minmax(440px,1.15fr)]">
         <section aria-labelledby="sessions-heading" className={`${surface} min-w-0 p-5 sm:p-6`}>

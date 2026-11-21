@@ -41,6 +41,23 @@ test('shared link and live readiness update across two accounts', async ({ users
     await expect(createDialog.getByLabel('Session title')).toBeFocused()
     await expect(alice.page.getByPlaceholder('Schenley Park')).toHaveValue('Highland Park Tennis Courts')
     await expect(alice.page.getByPlaceholder('Pittsburgh, PA')).toHaveValue('Stanton Avenue, Pittsburgh')
+    await createDialog.getByLabel('Session title').fill('Draft title')
+    // A same-route navigation updates the court without remounting the
+    // creation form or silently losing the rest of the draft.
+    await alice.page.evaluate(() => {
+      const next = new URL(location.href)
+      next.search = new URLSearchParams({ courtName: 'Another court', courtArea: 'Another area' }).toString()
+      history.pushState(history.state, '', next)
+      dispatchEvent(new PopStateEvent('popstate', { state: history.state }))
+    })
+    await expect(createDialog.getByLabel('Court', { exact: true })).toHaveValue('Another court')
+    await expect(createDialog.getByLabel('Area', { exact: true })).toHaveValue('Another area')
+    await expect(createDialog.getByLabel('Session title')).toHaveValue('Draft title')
+    await createDialog.getByRole('button', { name: 'Close' }).press('Enter')
+    await expect(createDialog).toHaveCount(0)
+    await expect(alice.page).toHaveURL(url => !url.searchParams.has('courtName'))
+    await alice.page.getByRole('button', { name: 'New session' }).press('Enter')
+    await expect(createDialog.getByLabel('Session title')).toHaveValue('Draft title')
     await alice.page.getByPlaceholder('Sunday doubles & rallies').fill(title)
     await alice.page.getByPlaceholder('Schenley Park').fill('Test court')
     await alice.page.getByPlaceholder('Pittsburgh, PA').fill('Test location')
@@ -72,6 +89,14 @@ test('shared link and live readiness update across two accounts', async ({ users
     await expect(bob.page.getByRole('heading', { name: title }).last()).toBeVisible({ timeout: 30_000 })
     bobReady = true
     await expect(bob.page.getByRole('heading', { name: title }).last()).toBeFocused()
+    await expect(bob.page.getByRole('button', { name: 'Edit rally details' })).toHaveCount(0)
+    await alice.page.getByRole('button', { name: 'Edit rally details' }).click()
+    const edit = alice.page.getByRole('dialog', { name: 'Edit rally details' })
+    await edit.getByLabel('Notes').fill('Bring a fresh can of tennis balls.')
+    await edit.getByRole('button', { name: 'Save details' }).click()
+    await expect(alice.page.getByRole('status').filter({ hasText: 'Rally details saved.' })).toBeVisible()
+    await expect(bob.page.getByText('Bring a fresh can of tennis balls.', { exact: true })).toBeVisible()
+
     await bob.page.getByRole('link', { name: 'Session list' }).press('Enter')
     await expect(bob.page.getByRole('heading', { name: 'Find a rally' })).toBeFocused()
     expect(await bob.page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
