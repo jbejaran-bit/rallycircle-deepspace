@@ -14,6 +14,13 @@
  * Practice matches are never written to `matchResults` and so never
  * affect statistics.
  *
+ * Pending rows (issue #23 semantics): a host correction moves the
+ * session score to a newer revision awaiting fresh approval. The stored
+ * row is NOT deleted and its old outcome is NOT counted; instead the
+ * history surfaces the corrected outcome as `status: 'pending'` (visible,
+ * not counted) until re-approval finalizes it in place, when it becomes
+ * 'final' again. `summarizePlayerStats` counts final rows only.
+ *
  * Provisional status (C11/D03): fewer than PROVISIONAL_MATCH_THRESHOLD
  * matches is provisional. The threshold is a single named constant so a
  * future rating track can change it in one place.
@@ -37,6 +44,14 @@ export interface MatchResultRow {
   resultRevision: number
   finalizedAt: string
   visibility: ProfileVisibility
+  /**
+   * 'final' — the row's outcome is verified against the session's committed
+   * score and counts in statistics. 'pending' — the session's committed
+   * score moved to a newer revision (a host correction awaiting fresh
+   * approval); the match stays visible in history but must NOT count in
+   * statistics until the corrected result finalizes (issue #23 semantics).
+   */
+  status: 'final' | 'pending'
 }
 
 export interface PlayerStatsSummary {
@@ -59,16 +74,18 @@ export interface MatchHistoryEntry {
   sets: Array<[number, number]>
   finalizedAt: string
   resultRevision: number
+  /** 'pending' entries show the corrected (unapproved) outcome; 'final' entries are verified. */
+  status: 'final' | 'pending'
 }
 
-/** Summarize one player's rows for one format. Rows of other formats are ignored. */
+/** Summarize one player's rows for one format. Rows of other formats are ignored. Pending (unconfirmed) rows never count. */
 export function summarizePlayerStats(
   rows: readonly MatchResultRow[],
   userId: string,
   format: StatsFormat,
   visibility: ProfileVisibility,
 ): PlayerStatsSummary {
-  const own = rows.filter((row) => row.userId === userId && row.format === format)
+  const own = rows.filter((row) => row.userId === userId && row.format === format && row.status === 'final')
   const wins = own.filter((row) => row.won).length
   const losses = own.length - wins
   return {
@@ -86,7 +103,9 @@ export function summarizePlayerStats(
 /**
  * Build one player's match history, newest first. The caller supplies rows
  * already filtered to that player (a `records.query` by `userId`); this
- * function only orders and projects them.
+ * function only orders and projects them. Pending entries are included
+ * with their status so the UI can show a corrected result as awaiting
+ * approval instead of hiding the match entirely.
  */
 export function buildMatchHistory(rows: readonly MatchResultRow[]): MatchHistoryEntry[] {
   return [...rows]
@@ -98,6 +117,7 @@ export function buildMatchHistory(rows: readonly MatchResultRow[]): MatchHistory
       sets: row.sets,
       finalizedAt: row.finalizedAt,
       resultRevision: row.resultRevision,
+      status: row.status,
     }))
 }
 

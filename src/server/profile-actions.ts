@@ -53,6 +53,7 @@ async function loadVerifiedResults(
   userId: string,
   visibility: PlayerProfile['visibility'],
   limit = Infinity,
+  includePending = false,
 ): Promise<MatchResultRow[] | null> {
   const verified = new Map<string, MatchResultRow>()
   try {
@@ -73,11 +74,26 @@ async function loadVerifiedResults(
         const session = result.data.record.data
         const score = readMatchScore(typeof session.matchScore === 'string' ? session.matchScore : undefined)
         const format = session.format === 'Singles' ? 'singles' : session.format === 'Doubles' ? 'doubles' : null
-        if (!format || session.pendingResult || !score || !isEligibleForStats(score) || score.revision !== resultRevision) return null
+        if (!format || session.pendingResult || !score) return null
         const side = score.teams.findIndex(team => team.includes(userId))
-        if (side < 0) return null
-        return { recordId: record.recordId, sessionId, userId, format, resultRevision, finalizedAt,
-          visibility, won: side === score.winner, sets: score.sets } satisfies MatchResultRow
+        if (side < 0 || score.winner === null) return null
+        if (isEligibleForStats(score) && score.revision === resultRevision) {
+          return { recordId: record.recordId, sessionId, userId, format, resultRevision, finalizedAt,
+            visibility, won: side === score.winner, sets: score.sets, status: 'final' } satisfies MatchResultRow
+        }
+        // Superseded by a host correction awaiting fresh approval: the
+        // outcome must not count in verified statistics, but the match
+        // must not vanish from history either. Surface it as pending
+        // (visible, not counted) showing the corrected outcome, until
+        // re-approval finalizes it in place (issue #23 semantics). All
+        // other unverified states (disputed, partially approved,
+        // in-progress) stay hidden, as before.
+        if (includePending && score.revision !== resultRevision) {
+          return { recordId: record.recordId, sessionId, userId, format, resultRevision: score.revision,
+            finalizedAt, visibility, won: side === score.winner, sets: score.sets,
+            status: 'pending' } satisfies MatchResultRow
+        }
+        return null
       }))
       for (const row of checked) {
         if (row) verified.set(row.sessionId, row)
@@ -247,7 +263,10 @@ export const getMatchHistoryAction: ActionHandler<Env> = async ({ userId: caller
   }
   const requested = isRecord(params) && typeof params.limit === 'number' ? Math.floor(params.limit) : 20
   const limit = Math.min(50, Math.max(1, requested))
-  const rows = await loadVerifiedResults(tools, targetUserId, profile?.data.visibility ?? 'private', limit)
+  // History includes pending (corrected, unapproved) entries so a corrected
+  // match stays visible instead of vanishing until re-approval; statistics
+  // never see them (getPlayerStatsAction loads with includePending false).
+  const rows = await loadVerifiedResults(tools, targetUserId, profile?.data.visibility ?? 'private', limit, true)
   if (!rows) return failure('history_unavailable', 'Match history could not be loaded.')
   return {
     success: true,

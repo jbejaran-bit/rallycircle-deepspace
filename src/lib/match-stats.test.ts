@@ -19,6 +19,7 @@ function row(overrides: Partial<MatchResultRow> = {}): MatchResultRow {
     resultRevision: 1,
     finalizedAt: '2026-11-18T18:00:00.000Z',
     visibility: 'public',
+    status: 'final',
     ...overrides,
   }
 }
@@ -70,6 +71,18 @@ describe('summarizePlayerStats', () => {
     expect(summarizePlayerStats(four, 'alice', 'singles', 'public').provisional).toBe(true)
     expect(summarizePlayerStats(five, 'alice', 'singles', 'public').provisional).toBe(false)
   })
+
+  it('never counts pending (corrected, unapproved) rows in statistics', () => {
+    const rows = [
+      row({ sessionId: 's1', won: true }),
+      row({ recordId: 'r2', sessionId: 's2', won: true, status: 'pending' }),
+    ]
+    expect(summarizePlayerStats(rows, 'alice', 'singles', 'public')).toMatchObject({
+      wins: 1,
+      losses: 0,
+      matchesPlayed: 1,
+    })
+  })
 })
 
 describe('buildMatchHistory', () => {
@@ -79,8 +92,17 @@ describe('buildMatchHistory', () => {
       row({ recordId: 'r2', sessionId: 'new', finalizedAt: '2026-11-18T18:00:00.000Z', won: false }),
     ]
     expect(buildMatchHistory(rows)).toEqual([
-      { sessionId: 'new', format: 'singles', won: false, sets: [[6, 4], [6, 3]], finalizedAt: '2026-11-18T18:00:00.000Z', resultRevision: 1 },
-      { sessionId: 'old', format: 'singles', won: true, sets: [[6, 4], [6, 3]], finalizedAt: '2026-11-01T18:00:00.000Z', resultRevision: 1 },
+      { sessionId: 'new', format: 'singles', won: false, sets: [[6, 4], [6, 3]], finalizedAt: '2026-11-18T18:00:00.000Z', resultRevision: 1, status: 'final' },
+      { sessionId: 'old', format: 'singles', won: true, sets: [[6, 4], [6, 3]], finalizedAt: '2026-11-01T18:00:00.000Z', resultRevision: 1, status: 'final' },
+    ])
+  })
+
+  it('keeps pending entries visible with their status', () => {
+    const rows = [
+      row({ sessionId: 's1', status: 'pending', won: false }),
+    ]
+    expect(buildMatchHistory(rows)).toEqual([
+      { sessionId: 's1', format: 'singles', won: false, sets: [[6, 4], [6, 3]], finalizedAt: '2026-11-18T18:00:00.000Z', resultRevision: 1, status: 'pending' },
     ])
   })
 })
