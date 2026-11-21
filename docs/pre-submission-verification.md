@@ -39,21 +39,21 @@ npx deepspace auth whoami
 npx deepspace test accounts list
 ```
 
-On a headless terminal, use `npx deepspace auth login --email <your-owner-email> --password-stdin` and supply the password from your approved secret source on stdin. When the owner session works, use an existing authorized pool or let the owner create three dedicated test identities. Example command, repeat with unique email and label:
+On a headless terminal, use `npx deepspace auth login --email "$RALLYCIRCLE_OWNER_EMAIL" --password-stdin` after setting `RALLYCIRCLE_OWNER_EMAIL`, and supply the password from your approved secret source on stdin. When the owner session works, use an existing authorized pool or let the owner create three dedicated test identities. Example command, repeat with unique email and label:
 
 ```sh
-npx deepspace test accounts create --email=rallycircle-host-<unique>@deepspace.test --label=host --password-stdin
+npx deepspace test accounts create --email="$RALLYCIRCLE_TEST_EMAIL" --label=host --password-stdin
 ```
 
-Use labels `host`, `player`, and `waitlist`, and supply each test password on stdin. The CLI fixture stores the pool in `~/.deepspace/test-accounts.json`. Keep this file private and outside Git. Confirm a disposable app is available and approve any required test deployment separately before proceeding. Check the app ID, hostname, account roles, backing storage, and migration data source. Use a synthetic legacy fixture. Do not point these tests at the internship or production app.
+Set `RALLYCIRCLE_TEST_EMAIL` to a unique address ending in `@deepspace.test` for each account. Use labels `host`, `player`, and `waitlist`, and supply each test password on stdin. The CLI fixture stores the pool in `~/.deepspace/test-accounts.json`. Keep this file private and outside Git. Confirm a disposable app is available and approve any required test deployment separately before proceeding. Check the app ID, hostname, account roles, backing storage, and migration data source. Use a synthetic legacy fixture. Do not point these tests at the internship or production app.
 
-For a configured local Worker slot, use `npx deepspace test run all --env <disposable-slot> --secrets-config <disposable-config>`. For an already provisioned disposable preview, run:
+For a configured local Worker slot, use `npx deepspace test run all --env "$RALLYCIRCLE_DISPOSABLE_SLOT" --secrets-config "$RALLYCIRCLE_DISPOSABLE_CONFIG"`. For an already provisioned disposable preview, run:
 
 ```sh
-RALLYCIRCLE_TEST_URL=https://<disposable-app-host> npx playwright test -c tests/playwright.config.ts
+RALLYCIRCLE_TEST_URL="$RALLYCIRCLE_DISPOSABLE_URL" npx playwright test -c tests/playwright.config.ts
 ```
 
-Run only after verifying the target. The current worker session has no authorized DeepSpace login or test-account pool. Official references are the [CLI commands](https://docs.deep.space/cli-reference/commands#test-accounts), the [testing guide](https://docs.deep.space/guides/testing), and the [schema migration guide](https://docs.deep.space/agents/add-field-existing-app-without-losing-data).
+Set these variables to your approved slot, secrets config, or HTTPS preview URL. Run only after verifying the target. The current worker session has no authorized DeepSpace login or test-account pool. Official references are the [CLI commands](https://docs.deep.space/cli-reference/commands#test-accounts), the [testing guide](https://docs.deep.space/guides/testing), and the [schema migration guide](https://docs.deep.space/agents/add-field-existing-app-without-losing-data).
 
 ## Interview demo and rehearsal
 
