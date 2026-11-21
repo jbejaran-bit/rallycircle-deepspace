@@ -8,7 +8,7 @@ import { CalendarDays, Check, ChevronRight, Clock3, Copy, MapPin, MessageCircle,
 import { buildSessionUrl, formatSessionTime, groupSessionRsvps, parseLocalSessionStart, SESSION_FORMATS, summarizeAttendance, summarizeReadiness, validateSession, type Level, type RallyRSVP, type RallyWaitlist, type RallySession, type RSVPStatus, type SessionFormat } from '@/lib/rally'
 import { runRallyCommand } from '@/lib/rally-actions'
 import { readMatchScore } from '@/lib/rally-score'
-import { buildCalendarEvent } from '@/lib/rally-calendar'
+import { buildCalendarEvent, canDownloadCalendar } from '@/lib/rally-calendar'
 import RallyScoreboard from '@/components/RallyScoreboard'
 import LiveCourtboard from '@/components/LiveCourtboard'
 
@@ -240,13 +240,15 @@ function ChatPanel({ channelId, sessionId, userId }: { channelId: string; sessio
   const { peers, connected } = usePresenceRoom(`rally:${sessionId}`)
   const { getUser } = useUserLookup()
   const [draft, setDraft] = useState('')
+  const sending = useRef(false)
   const [pending, setPending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const msg = draft.trim()
-    if (!msg || msg.length > 500 || pending || !canSend || messagesStatus !== 'ready') return
+    if (!msg || msg.length > 500 || sending.current || !canSend || messagesStatus !== 'ready') return
+    sending.current = true
     setPending(true)
     setSendError(null)
     try {
@@ -255,6 +257,7 @@ function ChatPanel({ channelId, sessionId, userId }: { channelId: string; sessio
     } catch (cause) {
       setSendError(cause instanceof Error ? cause.message : 'Message could not be sent.')
     } finally {
+      sending.current = false
       setPending(false)
     }
   }
@@ -276,6 +279,7 @@ function ChatPanel({ channelId, sessionId, userId }: { channelId: string; sessio
         })}
       </div>
       <form onSubmit={e => void submit(e)} className="mt-3 flex gap-2"><input aria-label="Your message" maxLength={500} value={draft} onChange={e=>setDraft(e.target.value)} placeholder="Say something to the group…" className={`${field} min-w-0 flex-1`}/><button type="submit" aria-label="Send message" className={`${accent} flex shrink-0 items-center`} disabled={!draft.trim() || pending || !canSend || messagesStatus !== 'ready'}><Send size={17}/></button></form>
+      {messagesStatus === 'ready' && !canSend && <p role="status" className="mt-2 text-sm text-white/75">Chat sending is unavailable. Your draft stays here while the connection recovers.</p>}
       <ErrorMessage message={sendError || (messagesStatus === 'error' ? (messagesError ?? 'Chat could not load.') : null)} />
       <p className="mt-2 text-[11px] text-white/40">Public channel within this app; do not share sensitive information.</p>
     </div>
@@ -304,7 +308,7 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
   const canChangeRsvp = rsvpStatus === 'ready' && !busy && !cancelled
 
   const inviteUrl = buildSessionUrl(window.location.origin, sessionId)
-  const calendarEvent = !cancelled && (session.hostId === userId || myRSVP?.data.status === 'going')
+  const calendarEvent = canDownloadCalendar(session, userId, myRSVP?.data.status)
     ? buildCalendarEvent(session, inviteUrl)
     : null
 
@@ -354,15 +358,27 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
         )}
         <h2 className="max-w-lg text-3xl font-black tracking-tight text-white sm:text-4xl">{session.title}</h2>
         <div className="mt-5 grid gap-3 text-sm text-white/80 sm:grid-cols-2">
-          <div className="flex items-center gap-2"><CalendarDays size={16} className="text-[#d7fc83]"/>{formatSessionTime(session.startsAt)}</div>
+          <div className="flex items-center gap-2"><CalendarDays size={16} className="text-[#d7fc83]" aria-hidden/><time dateTime={session.startsAt}>{formatSessionTime(session.startsAt)}</time></div>
           <div className="flex items-center gap-2"><Clock3 size={16} className="text-[#d7fc83]"/>{session.durationMinutes} minutes</div>
           <div className="flex items-center gap-2"><MapPin size={16} className="text-[#d7fc83]"/>{session.court} · {session.location}</div>
           <div className="flex items-center gap-2"><Users size={16} className="text-[#d7fc83]"/>{going} going · target {session.targetPlayers}{session.capacity != null && ` · max ${session.capacity}`}</div>
         </div>
       </div>
     </div>
-    <div className="space-y-6 p-6 sm:p-8">
+    <nav aria-label="Rally details" className="flex flex-wrap gap-2 border-b border-white/15 px-4 py-3 sm:px-8">
+      {[
+        ['attendance', 'Attendance'],
+        ['match', 'Match score'],
+        ['courtboard', 'Courtboard'],
+        ['chat', 'Chat'],
+      ].filter(([id]) => id !== 'match' || session.matchScore || (session.hostId === userId && !cancelled && (session.format === 'Singles' || session.format === 'Doubles'))).map(([id, label]) => (
+        <a key={id} href={`#rally-${id}`} className="inline-flex min-h-11 items-center rounded-lg border border-white/20 px-3 text-sm font-semibold hover:bg-white/10 focus-visible:outline-2">{label}</a>
+      ))}
+    </nav>
+    <div className="space-y-6 p-4 sm:p-8">
+      <div id="rally-attendance" tabIndex={-1} className="scroll-mt-4">
       <ReadinessPanel confirmed={going} target={session.targetPlayers} status={rsvpStatus} error={rsvpError} cancelled={cancelled} full={full} format={session.format} />
+      </div>
       <section>
         <div className="mb-3 flex items-center justify-between"><h3 className="text-sm font-bold text-white">Who's playing</h3><span className="text-xs text-white/45">{going} confirmed · {maybe} maybe</span></div>
         <div className="flex flex-wrap gap-2">{people.filter(p=>p.data.status==='going').map(r=><span key={r.recordId} className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/80"><span className="mr-1.5 text-[#d7fc83]">●</span>{getName(r.data.userId) ?? 'Player'}</span>)}{going===0&&<p className="text-sm text-white/50">No confirmations yet. Be the first!</p>}</div>
@@ -384,6 +400,7 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
       )}
       {!cancelled&&session.hostId===userId&&<button type="button" disabled={busy} onClick={()=>void cancelSession()} className="text-xs text-rose-300/75 underline underline-offset-4 hover:text-rose-200">Cancel my session</button>}
       <ErrorMessage message={error}/>
+      <div id="rally-match" tabIndex={-1} className="scroll-mt-4">
       <RallyScoreboard
         userId={userId}
         session={session}
@@ -395,6 +412,8 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
         }))}
         nameOf={id => getName(id) ?? 'Player'}
       />
+      </div>
+      <div id="rally-courtboard" tabIndex={-1} className="scroll-mt-4">
       <LiveCourtboard
         sessionId={sessionId}
         userId={userId}
@@ -404,8 +423,10 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
         rsvpStatus={rsvpStatus}
         rsvpError={rsvpError}
       />
-      <div className="h-px bg-white/10"/>
+      </div>
+      <div id="rally-chat" tabIndex={-1} className="scroll-mt-4">
       {session.chatChannelId ? <ChatPanel channelId={session.chatChannelId} sessionId={sessionId} userId={userId}/> : <div className="rounded-2xl bg-white/5 p-5 text-sm text-white/60"><MessageCircle className="mb-2" size={20}/>Chat is not available for this session. RSVPs still work.</div>}
+      </div>
     </div>
   </div>
 }

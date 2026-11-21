@@ -1,5 +1,5 @@
 import { ConfirmModal } from '@/components/ui'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { RallySession } from '@/lib/rally'
 import { runRallyCommand } from '@/lib/rally-actions'
 import { displayPoints, isTiebreak, readMatchScore, resultStatus, type ScoreSide } from '@/lib/rally-score'
@@ -30,8 +30,16 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
   const [selected, setSelected] = useState<Record<string, string>>({})
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
+  const [awaitingRevision, setAwaitingRevision] = useState<number | null>(null)
+  const [slowRevision, setSlowRevision] = useState<number | null>(null)
   const score = readMatchScore(session.matchScore)
   const result = score && resultStatus(score)
+  const waitingForScore = score !== null && awaitingRevision !== null && score.revision === awaitingRevision
+  useEffect(() => {
+    if (!waitingForScore) return
+    const timer = window.setTimeout(() => setSlowRevision(awaitingRevision), 5000)
+    return () => window.clearTimeout(timer)
+  }, [awaitingRevision, waitingForScore])
   const canReview = session.status === 'open' && score &&
     (result === 'proposed' || result === 'confirmed') &&
     score.teams.flat().includes(userId) && !score.approvals.includes(userId)
@@ -50,6 +58,10 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
     setError('')
     try {
       await runRallyCommand(command)
+      if (command.operation === 'scorePoint') {
+        setSlowRevision(null)
+        setAwaitingRevision(command.revision)
+      }
       if (command.operation === 'reviewResult') setReview(null)
     } catch (cause) {
       setReview(null)
@@ -61,7 +73,7 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
   }
 
   function point(side: ScoreSide) {
-    if (score) void edit({ operation: 'scorePoint', sessionId, revision: score.revision, side })
+    if (score && !waitingForScore) void edit({ operation: 'scorePoint', sessionId, revision: score.revision, side })
   }
 
   return (
@@ -99,7 +111,7 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
           )}
           {editable && score.winner === null && (
             <div className="flex flex-wrap gap-2">
-              {sides.map(side => <button key={side} className={button} type="button" disabled={pending} onClick={() => point(side)}>Point to side {side + 1}</button>)}
+              {sides.map(side => <button key={side} className={button} type="button" disabled={pending || waitingForScore} onClick={() => point(side)}>Point to side {side + 1}</button>)}
             </div>
           )}
         </>
@@ -128,8 +140,11 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
           <button className={button} type="button" disabled={!canStart || pending} onClick={() => void edit({ operation: 'startMatch', sessionId, teams: [teams[0], teams[1]] })}>Start match</button>
         </>
       )}
+      {score?.winner != null && (result === 'proposed' || result === 'confirmed') && (
+        <p className="text-sm text-white/75">{score.approvals.length} of {score.teams.flat().length} recorded players approved this result.</p>
+      )}
       <ConfirmModal
-        open={review !== null}
+        open={review !== null && Boolean(canReview)}
         onClose={() => { if (!inFlight.current) setReview(null) }}
         onConfirm={() => { if (review && canReview) void edit({ operation: 'reviewResult', sessionId, decision: review }) }}
         title={review === 'dispute' ? 'Dispute this result?' : 'Confirm this result?'}
@@ -139,6 +154,13 @@ export default function RallyScoreboard({ session, sessionId, userId, isHost, pl
         loading={pending}
       />
       {pending && <p role="status">Saving score…</p>}
+      {waitingForScore && (
+        <div role="status" className="text-sm text-white/75">
+          {slowRevision === awaitingRevision ? (
+            <><p>Point saved. The live scoreboard has not caught up yet.</p><button type="button" className={button} onClick={() => window.location.reload()}>Reload latest score</button></>
+          ) : 'Point saved. Waiting for the live score…'}
+        </div>
+      )}
       {error && <p role="alert" className="text-sm text-rose-200">{error}</p>}
     </section>
   )

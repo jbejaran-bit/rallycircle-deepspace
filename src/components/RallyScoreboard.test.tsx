@@ -35,3 +35,10 @@ it('offers result review only to recorded participants who still need to vote', 
   expect(render('host', session)).not.toContain('Dispute result')
   expect(render('other', session)).not.toContain('Confirm result')
 })
+
+it('shows real approval progress to a neutral observer without granting a vote', () => {
+  const result = { ...score, winner: 0, sets: [[6, 1], [6, 4]], approvals: ['host'] }
+  const html = render('observer', { ...base, matchScore: JSON.stringify(result) })
+  expect(html).toContain('1 of 2 recorded players approved this result.')
+  expect(html).not.toContain('Dispute result')
+})

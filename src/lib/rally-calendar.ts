@@ -1,4 +1,4 @@
-import type { RallySession } from './rally'
+import type { RallySession, RSVPStatus } from './rally'
 
 const encoder = new TextEncoder()
 
@@ -25,14 +25,29 @@ function fold(line: string) {
   return output
 }
 
+export function canDownloadCalendar(
+  session: Pick<RallySession, 'status' | 'hostId'>,
+  userId: string,
+  response?: RSVPStatus,
+): boolean {
+  return Boolean(userId) && session.status === 'open' && (session.hostId === userId || response === 'going')
+}
+
 export function buildCalendarEvent(
-  session: Pick<RallySession, 'status' | 'startsAt' | 'durationMinutes' | 'title' | 'court' | 'location'>,
+  session: Pick<RallySession, 'status' | 'startsAt' | 'durationMinutes' | 'title' | 'court' | 'location'> & Partial<Pick<RallySession, 'format' | 'level'>>,
   invitation: string,
   now = new Date(),
 ): string | null {
+  const url = URL.parse(invitation)
+  if (!url || !['https:', 'http:'].includes(url.protocol) || url.username || url.password || /[\r\n]/.test(invitation)) return null
+  const description = [
+    session.format && `Format: ${session.format}`,
+    session.level && `Level: ${session.level}`,
+    `View rally: ${invitation}`,
+  ].filter(Boolean).join('\n')
   const start = new Date(session.startsAt)
   const end = new Date(start.getTime() + session.durationMinutes * 60_000)
-  if (session.status !== 'open' || !Number.isFinite(start.getTime()) ||
+  if (!Number.isFinite(now.getTime()) || session.status !== 'open' || !Number.isFinite(start.getTime()) ||
       !Number.isFinite(end.getTime()) || end <= start) return null
 
   return [
@@ -46,7 +61,8 @@ export function buildCalendarEvent(
     `DTEND:${timestamp(end)}`,
     `SUMMARY:${text(session.title)}`,
     `LOCATION:${text(`${session.court}, ${session.location}`)}`,
-    `URL:${invitation}`,
+    `DESCRIPTION:${text(description)}`,
+    `URL:${url.href}`,
     'END:VEVENT',
     'END:VCALENDAR',
     '',

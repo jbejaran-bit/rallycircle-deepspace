@@ -57,3 +57,22 @@ it('buckets the week using local dates and does not repeat events at a day bound
   expect(days[6].entries.map(entry => entry.recordId)).toEqual(['late'])
   expect(agendaWeek(sunday, 1, entries)[0].entries.map(entry => entry.recordId)).toEqual(['next'])
 })
+
+it('separates the next confirmed rally from actual community openings', () => {
+  const future = '2026-12-01T12:00:00Z'
+  const dashboard = buildDashboard([
+    row('tentative', { startsAt: future }),
+    row('confirmed', { startsAt: '2026-12-02T12:00:00Z' }),
+    row('full', { startsAt: future, capacity: 2, targetPlayers: 4 }),
+    row('open', { startsAt: future, capacity: 2, targetPlayers: 4 }),
+    row('cancelled', { startsAt: future, status: 'cancelled' }),
+  ], [
+    { sessionId: 'tentative', userId: 'me', status: 'maybe' },
+    { sessionId: 'confirmed', userId: 'me', status: 'going' },
+    { sessionId: 'full', userId: 'a', status: 'going' },
+    { sessionId: 'full', userId: 'b', status: 'going' },
+    { sessionId: 'open', userId: 'a', status: 'going' },
+  ], [], 'me', now)
+  expect(dashboard.nextRally?.recordId).toBe('confirmed')
+  expect(dashboard.gamesNeedingPlayers.map(({ recordId, needed }) => ({ recordId, needed }))).toEqual([{ recordId: 'open', needed: 1 }])
+})
