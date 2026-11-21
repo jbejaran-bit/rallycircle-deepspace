@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { agendaWeek, buildDashboard, filterAgenda } from './rally-dashboard'
+import { agendaWeek, buildDashboard, filterAgenda, groupAgendaByDay } from './rally-dashboard'
 import type { RallySession } from './rally'
 import { createMatchScore } from './rally-score'
 
@@ -88,4 +88,53 @@ it('keeps personal attendance visible when the community counts are unavailable'
     { sessionId: 'open', userId: 'another-player', status: 'going' },
   ])
   expect(available.gamesNeedingPlayers[0]).toMatchObject({ recordId: 'open', needed: 1 })
+})
+
+
+it('keeps current commitments visible through their scheduled end', () => {
+  const earlier = row('finished', { startsAt: '2026-11-20T09:00:00Z', hostId: 'me' })
+  const running = row('running', { startsAt: '2026-11-20T10:30:00Z', hostId: 'me' })
+  const upcoming = row('upcoming', { startsAt: '2026-11-20T13:00:00Z', hostId: 'me' })
+  const sessions = [running, earlier, upcoming]
+  const beforeEnd = buildDashboard(sessions, [], [], 'me', now - 1)
+  expect(beforeEnd.nextRally).toMatchObject({ recordId: 'running', inSession: true })
+  expect(filterAgenda(beforeEnd.entries, 'upcoming').map(entry => entry.recordId)).toEqual(['running', 'upcoming'])
+  const ended = buildDashboard(sessions, [], [], 'me', now)
+  expect(ended.nextRally?.recordId).toBe('upcoming')
+  expect(filterAgenda(ended.entries, 'past').map(entry => entry.recordId)).toEqual(['running', 'finished'])
+})
+
+it('asks only for results that still need this recorded player to respond', () => {
+  const score = createMatchScore([['me'], ['rival']])
+  const won = { ...score, winner: 1 }
+  const rows = [
+    row('needs-response', { matchScore: JSON.stringify({ ...won, approvals: ['rival'] }) }),
+    row('already-responded', { matchScore: JSON.stringify({ ...won, approvals: ['me'] }) }),
+    row('disputed', { matchScore: JSON.stringify({ ...won, disputed: true }) }),
+    row('unfinished', { matchScore: JSON.stringify(score) }),
+    row('cancelled', { status: 'cancelled', matchScore: JSON.stringify(won) }),
+    row('unrelated', { matchScore: JSON.stringify({ ...won, teams: [['other'], ['rival']] }) }),
+  ]
+  expect(buildDashboard(rows, [], [], 'me', now).awaitingResponse.map(entry => entry.recordId)).toEqual(['needs-response'])
+})
+
+it('groups the agenda by local date and keeps invalid legacy dates separate', () => {
+  const morning = new Date(2026, 11, 1, 10).toISOString()
+  const evening = new Date(2026, 11, 1, 19).toISOString()
+  const cancelled = row('unknown', { startsAt: '', hostId: 'me', status: 'cancelled' })
+  const entries = buildDashboard([row('morning', { hostId: 'me', startsAt: morning }),
+    row('evening', { hostId: 'me', startsAt: evening }), cancelled], [], [], 'me', now).entries
+  expect(groupAgendaByDay(filterAgenda(entries, 'hosting')).map(({ day, entries }) => ({
+    day, ids: entries.map(entry => entry.recordId),
+  }))).toEqual([{ day: new Date(2026, 11, 1).getTime(), ids: ['morning', 'evening'] }, { day: null, ids: ['unknown'] }])
+})
+
+it('deduplicates player confirmations and skips a game already joined when the personal query is stale', () => {
+  const community = [
+    { sessionId: 'open', userId: 'rival', status: 'going' as const },
+    { sessionId: 'open', userId: 'rival', status: 'going' as const },
+    { sessionId: 'joined', userId: 'me', status: 'going' as const },
+  ]
+  expect(buildDashboard([row('open'), row('joined')], [], [], 'me', now, community)
+    .gamesNeedingPlayers.map(({ recordId, needed }) => ({ recordId, needed }))).toEqual([{ recordId: 'open', needed: 1 }])
 })
