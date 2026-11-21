@@ -35,10 +35,12 @@ interface LiveCourtboardProps {
 }
 
 interface DragState {
+  pointerId: number
   shapeId: string
   label: CourtboardMarkerLabel
   offsetX: number
   offsetY: number
+  start: CourtboardPosition
   preview?: CourtboardPosition
 }
 
@@ -159,6 +161,7 @@ function ConnectedCourtboard({
   const [announcement, setAnnouncement] = useState('')
   const [activeDragId, setActiveDragId] = useState<string | null>(null)
   const drag = useRef<DragState | null>(null)
+  const [dragPreview, setDragPreview] = useState<{ shapeId: string; position: CourtboardPosition } | null>(null)
   const timers = useRef(new Map<string, number>())
   const serverPositions = useRef(new Map<string, CourtboardPosition>())
   const canEdit = connected && canWrite && !cancelled
@@ -276,7 +279,7 @@ function ConnectedCourtboard({
   }
 
   function beginDrag(event: PointerEvent<SVGGElement>, marker: RallyMarkerShape) {
-    if (!canEdit) return
+    if (!canEdit || drag.current || !event.isPrimary || event.button !== 0) return
     const svg = event.currentTarget.ownerSVGElement
     if (!svg) return
     const point = courtPoint(svg, event.clientX, event.clientY)
@@ -288,11 +291,12 @@ function ConnectedCourtboard({
     const x = preview?.x ?? marker.x
     const y = preview?.y ?? marker.y
     drag.current = {
+      pointerId: event.pointerId,
       shapeId: marker.id,
       label: marker.props.label,
       offsetX: point.x - x,
       offsetY: point.y - y,
-      preview: { x, y },
+      start: { x, y },
     }
     setActiveDragId(marker.id)
     if (event.pointerType !== 'touch') event.currentTarget.setPointerCapture(event.pointerId)
@@ -300,7 +304,7 @@ function ConnectedCourtboard({
 
   function moveDrag(event: PointerEvent<SVGSVGElement>) {
     const current = drag.current
-    if (!current || !canEdit) return
+    if (!current || current.pointerId !== event.pointerId || !canEdit) return
     const point = courtPoint(event.currentTarget, event.clientX, event.clientY)
     if (!point) return
     const preview = clampCourtboardPosition({
@@ -309,17 +313,20 @@ function ConnectedCourtboard({
     })
     if (!preview) return
     current.preview = preview
-    setMovePreviews((existing) => ({
-      ...existing,
-      [current.shapeId]: preview,
-    }))
+    setDragPreview({ shapeId: current.shapeId, position: preview })
   }
 
-  function finishDrag() {
+  function finishDrag(event: PointerEvent<SVGSVGElement>, cancelled: boolean) {
     const current = drag.current
+    if (!current || current.pointerId !== event.pointerId) return
     drag.current = null
     setActiveDragId(null)
-    if (!current || !current.preview || !canEdit) return
+    setDragPreview(null)
+    if (cancelled || !current.preview || !canEdit ||
+        (current.preview.x === current.start.x && current.preview.y === current.start.y)) return
+    if (!markers.some(marker => marker.id === current.shapeId)) return
+    const preview = current.preview
+    setMovePreviews(existing => ({ ...existing, [current.shapeId]: preview }))
     moveShape(current.shapeId, current.preview.x, current.preview.y)
     setAnnouncement(`${current.label} moved locally. The saved position is confirmed by another player or when the board reconnects.`)
   }
@@ -420,8 +427,9 @@ function ConnectedCourtboard({
           aria-label="Top-down tennis court. Drag a marker to move it. Focus a marker and use arrow keys or the move buttons."
           className="block h-auto w-full touch-none select-none"
           onPointerMove={moveDrag}
-          onPointerUp={finishDrag}
-          onPointerCancel={finishDrag}
+          onPointerUp={event => finishDrag(event, false)}
+          onPointerCancel={event => finishDrag(event, true)}
+          onLostPointerCapture={event => finishDrag(event, true)}
         >
           <defs>
             <linearGradient id="court-grass" x1="0" x2="1" y1="0" y2="1">
@@ -445,7 +453,7 @@ function ConnectedCourtboard({
           <text x="54" y="48" fill="#e9f7d8" fontSize="16" fontWeight="700" letterSpacing="2">DOUBLES</text>
 
           {markers.map((marker) => {
-            const preview = movePreviews[marker.id]
+            const preview = dragPreview?.shapeId === marker.id ? dragPreview.position : movePreviews[marker.id]
             const x = preview?.x ?? marker.x
             const y = preview?.y ?? marker.y
             const label = marker.props.label
