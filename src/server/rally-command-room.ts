@@ -365,16 +365,30 @@ async function isSessionParticipant(
 }
 
 async function refreshPollTally(tool: RecordTool, pollId: string, userId: string): Promise<void> {
-  const votes = await tool<QueryActionData<RallyPollVote>>(
-    'records.query',
-    { collection: 'pollVotes', where: { pollId }, limit: 500 },
-    userId,
-  )
-  if (!votes.success) return
-  const tally = tallyVotes(votes.data.records.map(record => ({
-    optionId: record.data.optionId,
-    userId: record.data.userId,
-  })))
+  // Page past the 500-row read cap: a single capped query silently
+  // dropped the oldest votes from the tally. A page that adds no new
+  // recordId stops the scan, so a store that ignores `offset` cannot
+  // loop forever (and cannot double-count).
+  const pageSize = 500
+  const seen = new Set<string>()
+  const votes: Array<{ optionId: string; userId: string }> = []
+  let offset = 0
+  for (let page = 0; page < 200; page++) {
+    const result = await tool<QueryActionData<RallyPollVote>>(
+      'records.query',
+      { collection: 'pollVotes', where: { pollId }, limit: pageSize, offset },
+      userId,
+    )
+    if (!result.success) return
+    const fresh = result.data.records.filter(record => !seen.has(record.recordId))
+    for (const record of fresh) {
+      seen.add(record.recordId)
+      votes.push({ optionId: record.data.optionId, userId: record.data.userId })
+    }
+    if (result.data.records.length < pageSize || fresh.length === 0) break
+    offset += result.data.records.length
+  }
+  const tally = tallyVotes(votes)
   await tool<MutateActionData>(
     'records.update',
     { collection: 'polls', recordId: pollId, data: { tally: serializePollTally(tally) } },
