@@ -19,7 +19,7 @@
  */
 
 import { haversineMiles, isValidLatLng, matchesArea, normalizePlaceName, type LatLng } from './geo.ts'
-import { groupSessionRsvps, type Level, type RallyRSVP, type RallySession } from './rally'
+import { groupSessionRsvps, type Level, type RallyRSVP, type RallySession } from './rally.ts'
 
 export type GameFormat = 'any' | 'singles' | 'doubles' | 'practice'
 export type GameSort = 'soonest' | 'nearest'

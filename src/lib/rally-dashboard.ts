@@ -1,4 +1,4 @@
-import { groupSessionRsvps, type RallyRSVP, type RallySession, type RallyWaitlist } from './rally'
+import { groupSessionRsvps, type RallyRSVP, type RallySession, type RallyWaitlist } from './rally.ts'
 import { readMatchScore, resultStatus } from './rally-score'
 
 type RecordWithId<T> = { recordId: string; data: T }
