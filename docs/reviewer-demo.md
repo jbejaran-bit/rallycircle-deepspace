@@ -15,6 +15,6 @@ Rehearse before recording. If the readiness badge or score fails to update, reco
 
 - **Public browser evidence.** The README desktop capture and the mobile sign-in gate below come from Chromium against the running local app. No sample player or match data was inserted.
 - **Local logic evidence.** The attendance regression covers duplicate rows, a player marked Maybe, a fourth distinct confirmation, and withdrawal. Existing server tests cover capacity and waitlist promotion. These tests do not exercise the hosted subscription.
-- **Live evidence pending.** DeepSpace returned `not_authenticated` in this workspace. The OAuth invite round-trip, four-account transition, live scoring, and the two-account release checklist remain pending on a disposable app. Preserve [9a032ca](https://github.com/jbejaran-bit/rallycircle-deepspace/commit/9a032ca) as the fallback.
+- **Live evidence pending.** DeepSpace returned `not_authenticated` in this workspace. The OAuth invite round-trip, four-account transition, live scoring, and the two-account release checklist remain pending on a disposable app. Local recovery tests also leave real Durable Object alarms and legacy schema upgrades unverified. Preserve [9a032ca](https://github.com/jbejaran-bit/rallycircle-deepspace/commit/9a032ca) as the fallback.
 
 ![Find Games sign-in gate at a 390-pixel mobile viewport, captured from the running app](screenshots/find-games-mobile-signed-out.jpg)

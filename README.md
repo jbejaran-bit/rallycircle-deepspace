@@ -33,4 +33,4 @@ npm run test:public
 
 For a signed-out preview, run `npm exec -- vite --host 127.0.0.1` and open the local URL it prints. For authenticated verification, use the [release checklist](docs/final-release-checklist.md) and the [official DeepSpace testing guide](https://docs.deep.space/guides/testing). Keep CLI state, local variables, and account files out of Git.
 
-The public browser suite and local command tests cover different layers. Live multi-account behavior remains a release gate. The [review notes](docs/reviewer-demo.md#verification) record the evidence and its limits.
+The public browser suite exercises the signed-out app. Local command tests use a harness for the storage and recovery paths. Authenticated multi-account behavior, hosted alarm recovery, and legacy migration compatibility remain release gates. The [review notes](docs/reviewer-demo.md#verification) record the evidence and its limits.
