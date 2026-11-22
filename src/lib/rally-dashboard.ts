@@ -1,4 +1,4 @@
-import type { RallyRSVP, RallySession, RallyWaitlist } from './rally'
+import { groupSessionRsvps, type RallyRSVP, type RallySession, type RallyWaitlist } from './rally'
 import { readMatchScore, resultStatus } from './rally-score'
 
 type RecordWithId<T> = { recordId: string; data: T }
@@ -12,15 +12,10 @@ export function buildDashboard(
   now: number,
   communityResponses: RallyRSVP[] | null = responses,
 ) {
-  // Keep the first valid membership per session, matching Find Games and
-  // rally detail. A later malformed or duplicate legacy row must not turn a
-  // confirmed RSVP into a tentative one or hide a joinable game.
-  const myResponses = new Map<string, RallyRSVP['status']>()
-  for (const response of responses) {
-    if (response.userId !== userId || typeof response.sessionId !== 'string' || !response.sessionId ||
-        (response.status !== 'going' && response.status !== 'maybe') || myResponses.has(response.sessionId)) continue
-    myResponses.set(response.sessionId, response.status)
-  }
+  const memberships = groupSessionRsvps(responses.filter(row => row.userId === userId).map(data => ({ data })))
+  const myResponses = new Map(
+    [...memberships].map(([sessionId, [row]]) => [sessionId, row.data.status] as const),
+  )
   const myWaitlist = new Set(waitlist.filter(row => row.userId === userId &&
     typeof row.sessionId === 'string' && row.sessionId).map(row => row.sessionId))
   const entries = sessions.flatMap(({ recordId, data }) => {

@@ -66,30 +66,24 @@ function hasValidMembership(rsvp: RallyRSVP): boolean {
     (rsvp.status === 'going' || rsvp.status === 'maybe')
 }
 
-/** Keep the first valid membership and its record ID for each player in a session. */
+/** Keep one valid membership per player. A confirmed seat takes precedence over Maybe. */
 export function groupSessionRsvps<T extends { data: RallyRSVP }>(records: readonly T[]): Map<string, T[]> {
   const memberships = new Map<string, Map<string, T>>()
   for (const record of records) {
     const rsvp = record.data
     if (!hasValidMembership(rsvp)) continue
     const group = memberships.get(rsvp.sessionId) ?? new Map<string, T>()
-    if (!group.has(rsvp.userId)) group.set(rsvp.userId, record)
+    const existing = group.get(rsvp.userId)
+    if (!existing || (existing.data.status === 'maybe' && rsvp.status === 'going')) group.set(rsvp.userId, record)
     memberships.set(rsvp.sessionId, group)
   }
   return new Map([...memberships].map(([sessionId, members]) => [sessionId, [...members.values()]]))
 }
 
 export function summarizeAttendance(rsvps: RallyRSVP[], sessionId: string) {
-  const seen = new Set<string>()
-  let going = 0
-  let maybe = 0
-  for (const rsvp of rsvps) {
-    if (rsvp.sessionId !== sessionId || !hasValidMembership(rsvp) || seen.has(rsvp.userId)) continue
-    seen.add(rsvp.userId)
-    if (rsvp.status === 'going') going++
-    else maybe++
-  }
-  return { going, maybe }
+  const members = groupSessionRsvps(rsvps.map(data => ({ data }))).get(sessionId) ?? []
+  const going = members.filter(({ data }) => data.status === 'going').length
+  return { going, maybe: members.length - going }
 }
 
 export function summarizeReadiness(confirmed: number, target: number, format?: SessionFormat) {

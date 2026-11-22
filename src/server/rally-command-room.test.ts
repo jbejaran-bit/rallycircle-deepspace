@@ -2,7 +2,7 @@ import { canCreate, canDelete, canRead, canUpdate, checkFieldPermissions } from 
 import type { ActionTools } from 'deepspace/worker'
 import { describe, expect, it } from 'vitest'
 import { rsvpsSchema, sessionsSchema, waitlistsSchema } from '../schemas/rally-schema.js'
-import type { RallyRSVP, RallySession, RallyWaitlist, RSVPStatus } from '../lib/rally.js'
+import { groupSessionRsvps, summarizeAttendance, type RallyRSVP, type RallySession, type RallyWaitlist, type RSVPStatus } from '../lib/rally.js'
 import type { Env } from '../../worker.js'
 import { awardPoint, createMatchScore, isEligibleForStats, readMatchScore, resultStatus } from '../lib/rally-score.js'
 import { rallyCommandAction, RallyCommandRoom } from './rally-command-room.js'
@@ -229,7 +229,7 @@ function createHarness() {
 }
 
 describe('RallyCircle server-side session and RSVP rules', () => {
-  it('counts unique confirmed players across RSVP pages and clears legacy duplicate rows on withdrawal', async () => {
+  it.each(['withdraw', 'maybe'] as const)('counts each legacy player once and promotes the waitlist on %s', async release => {
     const harness = createHarness()
     harness.addSession('legacy', 'host')
     harness.sessions.get('legacy')!.data.capacity = 2
@@ -237,11 +237,22 @@ describe('RallyCircle server-side session and RSVP rules', () => {
       harness.rsvps.set(recordId, { recordId, createdBy: 'host', createdAt: 1,
         data: { sessionId: 'legacy', userId: 'host', status: 'going' } })
     }
+    harness.rsvps.set('legacy-maybe', { recordId: 'legacy-maybe', createdBy: 'host', createdAt: 2,
+      data: { sessionId: 'legacy', userId: 'host', status: 'maybe' } })
+    harness.rsvps.set('invalid-status', { recordId: 'invalid-status', createdBy: 'host', createdAt: 3,
+      data: { sessionId: 'legacy', userId: 'host', status: 'invalid' as RSVPStatus } })
+    const roster = () => groupSessionRsvps([...harness.rsvps.values()].reverse()).get('legacy') ?? []
     await expect(harness.command('guest', { operation: 'rsvp', sessionId: 'legacy', status: 'going' })).resolves.toMatchObject({ success: true })
+    expect(summarizeAttendance(roster().map(row => row.data), 'legacy')).toEqual({ going: 2, maybe: 0 })
+    await expect(harness.command('host', { operation: 'rsvp', sessionId: 'legacy', status: 'going' })).resolves.toMatchObject({ success: true })
     await expect(harness.command('queued', { operation: 'rsvp', sessionId: 'legacy', status: 'going' })).resolves.toMatchObject({ success: false })
     await expect(harness.command('queued', { operation: 'joinWaitlist', sessionId: 'legacy' })).resolves.toMatchObject({ success: true })
-    await expect(harness.command('host', { operation: 'withdraw', sessionId: 'legacy' })).resolves.toMatchObject({ success: true })
-    expect([...harness.rsvps.values()].map(row => row.data.userId).sort()).toEqual(['guest', 'queued'])
+    await expect(harness.command('host', release === 'withdraw'
+      ? { operation: 'withdraw', sessionId: 'legacy' }
+      : { operation: 'rsvp', sessionId: 'legacy', status: 'maybe' })).resolves.toMatchObject({ success: true })
+    expect(roster().filter(row => row.data.status === 'going').map(row => row.data.userId).sort()).toEqual(['guest', 'queued'])
+    expect(roster().find(row => row.data.userId === 'host')?.data.status).toBe(release === 'maybe' ? 'maybe' : undefined)
+    if (release === 'withdraw') expect([...harness.rsvps.values()].some(row => row.data.userId === 'host')).toBe(false)
     expect(harness.waitlists.size).toBe(0)
   })
 

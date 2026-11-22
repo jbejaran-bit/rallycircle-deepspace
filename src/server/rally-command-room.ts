@@ -303,6 +303,17 @@ async function applyAttendance(command: AttendanceCommand, session: RallySession
       : tool<MutateActionData>('records.create', { collection: 'rsvps', data: { sessionId, status } }, player)
   const success = (recordId = sessionId): RallyCommandResult => ({ success: true, data: { recordId } })
 
+  async function findAttendance(player: string) {
+    const where = { sessionId, userId: player }
+    const current = await query<RallyRSVP>('rsvps', where)
+    const first = current.success ? current.data.records[0] : undefined
+    if (!first || first.data.status === 'going') return current
+    // Match the roster and capacity check: a valid Going row holds a seat
+    // even if a newer duplicate is Maybe or malformed.
+    const confirmed = await query<RallyRSVP>('rsvps', { ...where, status: 'going' })
+    return confirmed.success && confirmed.data.records.length === 0 ? current : confirmed
+  }
+
   async function clearOwnRows(collection: 'waitlists' | 'rsvps'): Promise<'query' | 'delete' | 'ok'> {
     // Delete by record ID and re-read from the start. An offset would skip
     // siblings after a deletion. Extremely damaged rosters can be retried.
@@ -352,7 +363,7 @@ async function applyAttendance(command: AttendanceCommand, session: RallySession
       const first = queued.data.records[0]
       if (!first) return { count, promoted }
       const player = first.data.userId
-      const response = await query<RallyRSVP>('rsvps', { sessionId, userId: player })
+      const response = await findAttendance(player)
       if (!response.success) return null
       const rsvp = response.data.records[0]
       let promotedRecordId: string | null = null
@@ -403,7 +414,7 @@ async function applyAttendance(command: AttendanceCommand, session: RallySession
   if (capacity == null && operation === 'joinWaitlist') return failure('This session has no waitlist.')
   const vacancy = capacity != null ? await fillVacancies() : { count: 0, promoted: [] }
   const filled = vacancy === null ? null : vacancy.count
-  const response = await query<RallyRSVP>('rsvps', owns)
+  const response = await findAttendance(userId)
   if (!response.success) return failure('Your existing RSVP could not be checked.')
   const existing = response.data.records[0]
   if (operation === 'joinWaitlist') {
@@ -426,6 +437,19 @@ async function applyAttendance(command: AttendanceCommand, session: RallySession
     if (filled >= capacity) return failure('This session is full. You can join the waitlist.')
   }
   const wasGoing = existing?.data.status === 'going'
+  if (command.status === 'maybe' && wasGoing) {
+    // Keep the canonical seat until the final update succeeds. On failure a
+    // retry can finish cleanup without leaving a half-released seat.
+    for (let removed = 0; ; removed++) {
+      const confirmed = await query<RallyRSVP>('rsvps', { ...owns, status: 'going' }, 2)
+      if (!confirmed.success) return failure('Your existing RSVP could not be checked.')
+      const duplicate = confirmed.data.records.find(row => row.recordId !== existing.recordId)
+      if (!duplicate) break
+      if (removed === 32 || !(await remove('rsvps', duplicate.recordId)).success) {
+        return failure('Your RSVP could not be saved.')
+      }
+    }
+  }
   const result = await save(userId, command.status, existing?.recordId)
   if (!result.success) return failure('Your RSVP could not be saved.')
   if (command.status === 'maybe' && wasGoing) {
