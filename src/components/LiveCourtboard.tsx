@@ -91,8 +91,8 @@ export default function LiveCourtboard({
     >
       <header className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 id="courtboard-title" className="mt-1 text-lg font-black text-white">Live Courtboard</h3>
-          <p className="mt-1 text-xs text-white/55">Place the doubles player markers to plan positions together.</p>
+          <h3 id="courtboard-title" className="text-lg font-semibold text-white">Live Courtboard</h3>
+          <p className="mt-2 max-w-sm text-sm leading-relaxed text-white/70">Plan your positions together. Add a player marker to get started.</p>
         </div>
         <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] font-semibold text-white/65">
           Session only
@@ -383,7 +383,7 @@ function ConnectedCourtboard({
         </p>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
         <div className="flex flex-wrap gap-2" role="group" aria-label="Add player markers">
           {COURTBOARD_MARKER_LABELS.map((label) => {
             const exists = markerByLabel.has(label)
@@ -534,7 +534,7 @@ function ConnectedCourtboard({
             : 'Server-synchronized plan · drag markers or focus one and use arrow keys.'}
         </p>
         <div role="group" aria-label="Move selected marker" className="flex items-center gap-1">
-          <span className="mr-1 text-[10px] font-bold uppercase tracking-wider text-white/40">Move</span>
+          <span className="mr-1 text-xs font-semibold text-white/70">Move</span>
           <NudgeButton label="Move selected marker up" disabled={!selectedMarker || !canEdit} onClick={() => selectedMarker && nudgeMarker(selectedMarker, 0, -12)}><ArrowUp size={14} /></NudgeButton>
           <NudgeButton label="Move selected marker left" disabled={!selectedMarker || !canEdit} onClick={() => selectedMarker && nudgeMarker(selectedMarker, -12, 0)}><ArrowLeft size={14} /></NudgeButton>
           <NudgeButton label="Move selected marker down" disabled={!selectedMarker || !canEdit} onClick={() => selectedMarker && nudgeMarker(selectedMarker, 0, 12)}><ArrowDown size={14} /></NudgeButton>

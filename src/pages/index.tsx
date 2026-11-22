@@ -20,18 +20,19 @@ export default function Home() {
         </a>
         <nav aria-label="Public navigation">
           <a href="#how-it-works" className="tennis-nav-guide">How it works</a>
-          <a href="/dashboard" className="tennis-account">My dashboard <ArrowDownRight size={16} aria-hidden /></a>
+          <a href="/dashboard" className="tennis-account">My dashboard <ArrowDownRight size={16} absoluteStrokeWidth aria-hidden /></a>
         </nav>
       </header>
 
       <section className="tennis-frame tennis-hero" aria-labelledby="tennis-heading">
         <div className="tennis-intro">
-          <h1 id="tennis-heading" tabIndex={-1}>Find players.<br />Play tennis.</h1>
+          <p className="tennis-eyebrow">Find your next hit</p>
+          <h1 id="tennis-heading" tabIndex={-1}>Find players.<br /><span>Play tennis.</span></h1>
           <p>Join a nearby game, invite your hitting partners, and keep score together.</p>
           <div className="tennis-actions">
-            <a className="tennis-primary" href="/games">Find a game <ArrowRight size={19} aria-hidden /></a>
-            <a className="tennis-secondary" href="/rallies?create=1"><Plus size={18} aria-hidden /> Create a rally</a>
-            <a className="tennis-secondary" href="/courts"><MapPin size={18} aria-hidden /> Explore courts</a>
+            <a className="tennis-primary" href="/games">Find a game <ArrowRight size={19} absoluteStrokeWidth aria-hidden /></a>
+            <a className="tennis-secondary" href="/rallies?create=1"><Plus size={18} absoluteStrokeWidth aria-hidden /> Create a rally</a>
+            <a className="tennis-secondary" href="/courts"><MapPin size={18} absoluteStrokeWidth aria-hidden /> Explore courts</a>
           </div>
         </div>
         <div className="tennis-art">
@@ -52,7 +53,7 @@ export default function Home() {
         <ul>
           {features.map(({ title, text, to, Icon }) => (
             <li key={title}>
-              <a href={to}><Icon size={21} aria-hidden /><h3>{title}</h3><p>{text}</p><ArrowRight className="tennis-feature-arrow" size={20} aria-hidden /></a>
+              <a href={to}><Icon size={21} absoluteStrokeWidth aria-hidden /><h3>{title}</h3><p>{text}</p><ArrowRight className="tennis-feature-arrow" size={20} absoluteStrokeWidth aria-hidden /></a>
             </li>
           ))}
         </ul>
@@ -63,7 +64,7 @@ export default function Home() {
           <h2 id="tennis-matchday-heading">Play it through.</h2>
           <p>Keep the singles or doubles score as you play. After the match, recorded players can confirm or dispute the result from the session scoreboard.</p>
         </div>
-        <a className="tennis-secondary" href="/dashboard">Open dashboard <ArrowRight size={18} aria-hidden /></a>
+        <a className="tennis-secondary" href="/dashboard">Open dashboard <ArrowRight size={18} absoluteStrokeWidth aria-hidden /></a>
       </section>
       <footer className="tennis-frame tennis-footer">
         <a href="/" className="tennis-wordmark">RallyCircle</a>
