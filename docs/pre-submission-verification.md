@@ -23,7 +23,7 @@ Git advertised PR #20 at `f49273616e7c834a1c20473bf85a7db9c524f735`. The operato
 
 Fresh local checks on `d7270b1` passed TypeScript, lint, the production build, 148 Vitest tests across 20 files, 31 Node tests and 22 public Chromium tests. The toolchain was Node 24.22.1, npm 11.9.0 and Chromium 156.0.8078.79. The stable branch adds this review document to that tested code.
 
-The independent Muse audit had no published review ref or delivered audit artifact visible in this workspace at verification time. Existing Muse delivery refs remain separate.
+Historical note: the initial PR #20 review did not yet have a Muse audit artifact visible to that workspace. Muse's subsequent backend delivery at `6bddf04` is incorporated into the integrated candidate lineage; see [current release evidence](submission-handoff.md).
 
 ## Blockers and isolated follow-up
 
