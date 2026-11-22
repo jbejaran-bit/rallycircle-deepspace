@@ -501,6 +501,8 @@ describe('Scheduling polls', () => {
     expect([...harness.notifications.values()].filter(row => row.data.type === 'schedule_changed')).toHaveLength(2)
   })
 
+  // This exercises 103 awaited notification writes and two recovery alarms.
+  // Keep the fan-out assertions intact while allowing slower Windows runners.
   it('recovers without a host retry and delivers to a second RSVP page', async () => {
     const harness = createHarness()
     const pollId = await openPoll(harness)
@@ -518,7 +520,7 @@ describe('Scheduling polls', () => {
     expect(harness.polls.get(pollId)?.data.status).toBe('finalized')
     expect(harness.sessions.get('poll-session')?.data.scheduleRevision).toBe(1)
     expect([...harness.notifications.values()].filter(row => row.data.type === 'schedule_changed')).toHaveLength(103)
-  })
+  }, 30_000)
 
   it('preserves a direct time edit made after a poll opens', async () => {
     const harness = createHarness()

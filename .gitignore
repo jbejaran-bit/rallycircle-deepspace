@@ -19,3 +19,4 @@ src/modals.tsx
 .claude/launch.json
 .claude/worktrees
 /.vite/
+/.vite-ui-fixtures/

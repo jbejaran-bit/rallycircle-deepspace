@@ -9,14 +9,14 @@ import { CalendarDays, Check, ChevronRight, Clock3, Copy, MapPin, MessageCircle,
 import { buildSessionUrl, formatSessionTime, groupSessionRsvps, parseLocalSessionStart, SESSION_FORMATS, summarizeAttendance, summarizeReadiness, validateSession, type Level, type RallyRSVP, type RallyWaitlist, type RallySession, type RSVPStatus, type SessionFormat } from '@/lib/rally'
 import { createRally, runRallyCommand } from '@/lib/rally-actions'
 import { readMatchScore } from '@/lib/rally-score'
-import { buildCalendarEvent, canDownloadCalendar } from '@/lib/rally-calendar'
+import { RallyCalendarActions } from '@/components/RallyCalendarActions'
 import RallySchedulingPoll from '@/components/RallySchedulingPoll'
 import RallyScoreboard from '@/components/RallyScoreboard'
 const LiveCourtboard = lazy(() => import('@/components/LiveCourtboard'))
 
-const surface = 'rounded-3xl border border-white/10 bg-[#141b1a] shadow-[0_18px_60px_rgba(0,0,0,0.17)]'
-const field = 'w-full rounded-xl border border-white/15 bg-[#0e1513] px-3.5 py-3 text-sm text-white outline-none transition focus:border-[#d7fc83] focus:ring-1 focus:ring-[#d7fc83]'
-const accent = 'rounded-xl bg-[#d7fc83] px-4 py-3 text-sm font-bold text-[#101a13] transition hover:bg-[#ebffb8] disabled:cursor-not-allowed disabled:opacity-50'
+const surface = 'rounded-2xl border border-white/10 bg-[#141b1a]'
+const field = 'w-full rounded-xl border border-[#738078] bg-[#0e1513] px-3.5 py-3 text-base sm:text-sm text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d7fc83]'
+const accent = 'min-h-11 rounded-xl bg-[#d7fc83] px-4 py-3 text-sm font-semibold text-[#101a13] transition-colors duration-150 hover:bg-[#ebffb8] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d7fc83] disabled:cursor-not-allowed disabled:opacity-50'
 
 function ErrorMessage({ message }: { message: string | null }) {
   return message ? <p role="alert" className="rounded-xl border border-rose-400/30 bg-rose-400/10 px-3 py-2 text-sm text-rose-200">{message}</p> : null
@@ -41,7 +41,7 @@ function ReadinessPanel({ confirmed, target, status, error, cancelled, full, for
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#d7fc83]">Ready to play</p>
-          <p data-testid="readiness-count" className="mt-1 text-2xl font-black text-white">
+          <p data-testid="readiness-count" className="mt-1 text-xl font-semibold tabular-nums text-white">
             {status === 'ready' && !cancelled ? `${readiness.confirmedPlayers} / ${readiness.targetPlayers} confirmed` : 'Player confirmations'}
           </p>
         </div>
@@ -65,7 +65,7 @@ function ReadinessPanel({ confirmed, target, status, error, cancelled, full, for
             aria-valuenow={progressValue}
             className="mt-4 h-2 overflow-hidden rounded-full bg-white/10"
           >
-            <div className="h-full rounded-full bg-[#d7fc83] transition-[width] duration-300" style={{ width: `${progressWidth}%` }} />
+            <div className="h-full rounded-full bg-[#d7fc83]" style={{ width: `${progressWidth}%` }} />
           </div>
           <div aria-live="polite" className="mt-3">
             <p data-testid="readiness-status" className={`text-sm font-bold ${readiness.ready ? 'text-[#d7fc83]' : 'text-white'}`}>
@@ -231,7 +231,7 @@ function CreateSession({ userId, onCreated, onDismissEntry, selectedCourt, prefi
           {retryingChat ? 'Linking chat…' : 'Retry chat setup'}
         </button>
       )}
-      <DialogContent hideClose initialFocus={titleInput} finalFocus={trigger} className="block max-h-[90dvh] overflow-y-auto rounded-3xl border-white/15 bg-[#17201c] p-5 text-white sm:max-w-xl sm:p-7">
+      <DialogContent hideClose initialFocus={titleInput} finalFocus={trigger} className="block max-h-[90dvh] overflow-y-auto overscroll-contain rounded-2xl border-white/15 bg-[#17201c] p-5 text-white sm:max-w-xl sm:p-7">
           <div className="mb-4 flex items-center justify-between gap-4">
             <DialogTitle className="text-2xl font-bold">Create a session</DialogTitle>
             <DialogClose disabled={pending} aria-label="Close" className="grid size-11 place-items-center rounded-full text-white/75 hover:bg-white/10 focus-visible:outline-2"><X size={22} aria-hidden /></DialogClose>
@@ -307,10 +307,10 @@ function ChatPanel({ channelId, sessionId, userId }: { channelId: string; sessio
   }
 
   return (
-    <div className="flex min-h-[26rem] min-w-0 flex-col">
+    <div className="flex min-h-[26rem] min-w-0 flex-col rounded-2xl border border-white/10 bg-[#101714] p-4 sm:p-5">
       <div className="mb-3 flex items-center justify-between">
         <h3 className="flex items-center gap-2 text-sm font-bold text-white"><MessageCircle size={17} className="text-[#d7fc83]"/> Session chat</h3>
-        <span className="flex items-center gap-1.5 text-xs text-white/50"><span className={`h-1.5 w-1.5 rounded-full ${connected?'bg-[#d7fc83]':'bg-white/30'}`}/>{connected ? `${peers.length + 1} here now` : 'Connecting'}</span>
+        <span className="flex items-center gap-1.5 text-xs tabular-nums text-white/70"><span aria-hidden className={`h-1.5 w-1.5 rounded-full ${connected?'bg-[#d7fc83]':'bg-white/30'}`}/>{connected ? `${peers.length + 1} here now` : 'Connecting'}</span>
       </div>
       <div ref={logRef} onScroll={event => {
         const { scrollTop, clientHeight, scrollHeight } = event.currentTarget
@@ -331,7 +331,7 @@ function ChatPanel({ channelId, sessionId, userId }: { channelId: string; sessio
       <form onSubmit={e => void submit(e)} className="mt-3 flex gap-2" aria-busy={pending}><input aria-label="Your message" maxLength={500} value={draft} onChange={e=>setDraft(e.target.value)} placeholder="Say something to the group…" className={`${field} min-w-0 flex-1`}/><button type="submit" aria-label="Send message" className={`${accent} flex shrink-0 items-center`} disabled={!draft.trim() || pending || !canSend || messagesStatus !== 'ready'}><Send size={17} aria-hidden /></button></form>
       {messagesStatus === 'ready' && !canSend && <p role="status" className="mt-2 text-sm text-white/75">Chat sending is unavailable. Your draft stays here while the connection recovers.</p>}
       <ErrorMessage message={sendError || (messagesStatus === 'error' ? (messagesError ?? 'Chat could not load.') : null)} />
-      <p className="mt-2 text-[11px] text-white/40">Public channel within this app; do not share sensitive information.</p>
+      <p className="mt-3 text-xs leading-relaxed text-white/65">Visible to signed-in members. Keep sensitive information out of chat.</p>
     </div>
   )
 }
@@ -362,11 +362,6 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
   const canChangeRsvp = canWithdraw && !cancelled
 
   const inviteUrl = buildSessionUrl(window.location.origin, sessionId)
-  const calendarEvent = canDownloadCalendar(session, userId, myRSVP?.data.status)
-    ? buildCalendarEvent(session, inviteUrl)
-    : cancelled && (session.hostId === userId || myRSVP?.data.status === 'going')
-      ? buildCalendarEvent(session, inviteUrl, undefined, { method: 'CANCEL' })
-      : null
 
   async function shareSession() {
     try {
@@ -406,20 +401,21 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
   }
 
   return <div className={`${surface} overflow-hidden`}>
-    <div className="relative overflow-hidden bg-[#243529] px-6 pb-7 pt-8 sm:px-8">
-      <div aria-hidden className="absolute -right-8 -top-6 h-44 w-44 rounded-full border-[18px] border-[#d7fc83]/15"/>
-      <div className="relative">
-        <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><span className="inline-flex items-center gap-1.5 rounded-full bg-[#d7fc83]/15 px-3 py-1 text-xs font-bold uppercase tracking-wider text-[#d7fc83]"><Radio size={12}/> {cancelled?'Cancelled':'Session details'}</span><span className="text-xs text-white/65">{[session.format, session.level].filter(Boolean).join(' · ')}</span></div>
-        <h2 id="selected-rally-title" tabIndex={-1} className="max-w-lg scroll-mt-4 break-words text-3xl font-black tracking-tight text-white sm:text-4xl">{session.title}</h2>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <button type="button" onClick={() => void shareSession()} className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/25 bg-black/15 px-3 py-2 text-xs font-semibold text-white hover:border-[#d7fc83] focus-visible:outline-2">
-            <Share2 size={14} aria-hidden />{copyState === 'copied' ? 'Link copied' : 'Copy invitation'}{copyState === 'copied' && <Copy size={13} aria-hidden />}
+    <div className="border-b border-white/10 bg-[#1b2a21] p-5 sm:p-7">
+      <div>
+        <div className="mb-4 flex flex-wrap items-center gap-2"><span className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold ${cancelled ? 'bg-rose-400/10 text-rose-200' : 'bg-[#d7fc83]/10 text-[#d7fc83]'}`}><Radio size={12} aria-hidden /> {cancelled?'Cancelled':'Session details'}</span><span className="text-xs text-white/70">{[session.format, session.level].filter(Boolean).join(' · ')}</span></div>
+        <h2 id="selected-rally-title" tabIndex={-1} className="max-w-xl scroll-mt-24 break-words text-2xl font-semibold leading-tight tracking-[-0.02em] text-white sm:text-3xl">{session.title}</h2>
+        <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-2">
+          <div className="flex items-start gap-2.5"><CalendarDays size={17} className="mt-0.5 shrink-0 text-[#d7fc83]" aria-hidden/><div className="min-w-0"><dt className="text-xs text-white/65">Date & time</dt><dd className="mt-1"><time dateTime={session.startsAt}>{formatSessionTime(session.startsAt)}</time></dd></div></div>
+          <div className="flex items-start gap-2.5"><Clock3 size={17} className="mt-0.5 shrink-0 text-[#d7fc83]" aria-hidden/><div><dt className="text-xs text-white/65">Duration</dt><dd className="mt-1 tabular-nums">{session.durationMinutes} minutes</dd></div></div>
+          <div className="flex items-start gap-2.5"><MapPin size={17} className="mt-0.5 shrink-0 text-[#d7fc83]" aria-hidden/><div className="min-w-0 break-words"><dt className="text-xs text-white/65">Court</dt><dd className="mt-1">{session.court}<span className="mt-0.5 block text-white/70">{session.location}</span></dd></div></div>
+          <div className="flex items-start gap-2.5"><Users size={17} className="mt-0.5 shrink-0 text-[#d7fc83]" aria-hidden/><div><dt className="text-xs text-white/65">Players</dt><dd className="mt-1 tabular-nums">{rsvpStatus === 'ready' && `${going} going · `}Target {session.targetPlayers}{session.capacity != null && ` · max ${session.capacity}`}</dd></div></div>
+        </dl>
+        <div className="mt-5 space-y-3 border-t border-white/10 pt-4">
+          <button type="button" onClick={() => void shareSession()} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-white/25 px-3 py-2 text-sm font-medium text-white hover:bg-white/5 focus-visible:outline-2">
+            <Share2 size={16} aria-hidden />{copyState === 'copied' ? 'Link copied' : 'Copy invitation'}{copyState === 'copied' && <Copy size={14} aria-hidden />}
           </button>
-          {calendarEvent && (
-            <a download={cancelled ? 'rallycircle-cancellation.ics' : 'rallycircle-session.ics'} href={`data:text/calendar;charset=utf-8,${encodeURIComponent(calendarEvent)}`} className="inline-flex min-h-11 items-center gap-2 rounded-full border border-white/25 px-3 py-2 text-xs font-semibold text-white hover:border-[#d7fc83] focus-visible:outline-2">
-              <CalendarDays size={14} aria-hidden /> {cancelled ? 'Download calendar cancellation' : 'Add to calendar'}
-            </a>
-          )}
+          <RallyCalendarActions session={session} invitationUrl={inviteUrl} userId={userId} response={myRSVP?.data.status} />
         </div>
         {copyState === 'copied' && <span role="status" className="sr-only">Session invitation copied.</span>}
         {copyState === 'error' && (
@@ -428,15 +424,9 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
             <input aria-label="Session invitation link" value={inviteUrl} readOnly className={field} onFocus={event => event.currentTarget.select()} />
           </div>
         )}
-        <div className="mt-5 grid gap-3 text-sm text-white/80 sm:grid-cols-2">
-          <div className="flex items-center gap-2"><CalendarDays size={16} className="text-[#d7fc83]" aria-hidden/><time dateTime={session.startsAt}>{formatSessionTime(session.startsAt)}</time></div>
-          <div className="flex items-center gap-2"><Clock3 size={16} className="text-[#d7fc83]"/>{session.durationMinutes} minutes</div>
-          <div className="flex items-center gap-2"><MapPin size={16} className="text-[#d7fc83]"/>{session.court} · {session.location}</div>
-          <div className="flex items-center gap-2"><Users size={16} className="text-[#d7fc83]"/>{rsvpStatus === 'ready' && `${going} going · `}Target {session.targetPlayers}{session.capacity != null && ` · max ${session.capacity}`}</div>
-        </div>
       </div>
     </div>
-    <nav aria-label="Rally details" className="flex flex-wrap gap-2 border-b border-white/15 px-4 py-3 sm:px-8">
+    <nav aria-label="Rally details" className="flex flex-wrap gap-2 border-b border-white/10 px-5 py-3 sm:px-7">
       <a href="#sessions-heading" className="inline-flex min-h-11 items-center rounded-lg border border-white/20 px-3 text-sm font-semibold hover:bg-white/10 focus-visible:outline-2">Session list</a>
       {[
         ['attendance', 'Attendance'],
@@ -447,7 +437,7 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
         <a key={id} href={`#rally-${id}`} className="inline-flex min-h-11 items-center rounded-lg border border-white/20 px-3 text-sm font-semibold hover:bg-white/10 focus-visible:outline-2">{label}</a>
       ))}
     </nav>
-    <div className="space-y-6 p-4 sm:p-8">
+    <div className="space-y-8 p-5 sm:p-7">
       <div id="rally-attendance" tabIndex={-1} className="scroll-mt-4 space-y-4">
         <ReadinessPanel confirmed={going} target={session.targetPlayers} status={rsvpStatus} error={rsvpError} cancelled={cancelled} full={full} format={session.format} />
         <section aria-labelledby="rally-players-title">
@@ -603,33 +593,34 @@ export default function RalliesPage() {
   }, [hash, openedRallyId])
 
   return <div className="min-h-[calc(100vh-64px)] bg-[#0b110f] text-white">
-    <div className="mx-auto max-w-7xl px-5 pb-20 pt-10 sm:px-8 lg:pt-16">
-      <div className="mb-10 flex flex-col justify-between gap-6 lg:flex-row lg:items-end">
+    <div className="mx-auto max-w-7xl px-4 pb-16 pt-8 sm:px-8 lg:pt-10">
+      <div className="mb-7 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div className="max-w-3xl">
-          <h1 className="text-4xl font-black leading-[1.05] tracking-[-0.045em] sm:text-5xl lg:text-6xl">Rally sessions</h1>
-          <p className="mt-4 max-w-2xl text-base leading-relaxed text-white/55">Set a time to play, share the invitation, and check who’s coming.</p>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-[#d7fc83]">Plan your next game</p>
+          <h1 className="text-3xl font-semibold leading-tight tracking-[-0.02em] sm:text-4xl">Rally sessions</h1>
+          <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">Set a time to play, share the invitation, and check who’s coming.</p>
         </div>
         <CreateSession startOpen={searchParams.get('create') === '1'} userId={signedInId} onCreated={chooseSession} onDismissEntry={dismissCreationEntry} selectedCourt={selectedCourt} prefillCourt={searchParams.get('courtName')?.trim().slice(0, 100)} prefillArea={searchParams.get('courtArea')?.trim().slice(0, 100)}/>
       </div>
-      <div className="grid items-start gap-6 lg:grid-cols-[minmax(300px,.85fr)_minmax(440px,1.15fr)]">
-        <section aria-labelledby="sessions-heading" className={`${surface} min-w-0 p-5 sm:p-6`}>
-          <div className="mb-5 flex items-center justify-between gap-2"><h2 id="sessions-heading" tabIndex={-1} className="scroll-mt-4 text-lg font-bold">Find a rally</h2><span className="text-xs text-white/40">Choose a session</span></div>
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(280px,.7fr)_minmax(0,1.3fr)]">
+        <section aria-labelledby="sessions-heading" className={`${surface} min-w-0 p-4 sm:p-5`}>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><h2 id="sessions-heading" tabIndex={-1} className="scroll-mt-24 text-lg font-semibold">Find a rally</h2><span className="text-xs text-white/65">Choose a session</span></div>
           <div className="mb-5 flex flex-wrap gap-2">{(['upcoming','all','mine','playing'] as const).map(tab=><button key={tab} type="button" aria-pressed={view === tab} onClick={()=>{setView(tab);chooseSession(null)}} className={`min-h-11 rounded-full px-3.5 py-2 text-xs font-bold capitalize transition focus-visible:outline-2 ${view===tab?'bg-[#d7fc83] text-[#0e180f]':'bg-white/5 text-white/75 hover:bg-white/10'}`}>{tab === 'mine' ? 'My sessions' : tab === 'playing' ? 'Playing now' : tab}</button>)}</div>
           {sessionStatus==='loading'||rsvpStatus==='loading'?<div role="status" className="space-y-3"><span className="sr-only">Loading sessions and responses…</span>{[1,2,3].map(n=><div key={n} className="h-32 motion-safe:animate-pulse rounded-2xl bg-white/5"/>)}</div>:sessionStatus==='error'||rsvpStatus==='error'?<ErrorMessage message={sessionStatus==='error'?(sessionsError??'Sessions could not load.'): (rsvpError??'Player confirmations could not load. Refresh to try again.')}/>:listings.length===0?<div className="rounded-2xl border border-dashed border-white/20 p-10 text-center"><Sparkles size={28} className="mx-auto mb-3 text-[#d7fc83]"/><p className="text-sm font-bold">{view === 'playing' ? 'No matches in progress' : 'No sessions here yet'}</p><p className="mt-2 text-xs leading-relaxed text-white/50">{view === 'playing' ? 'Matches appear here when a host starts scoring.' : 'Create a session and invite your hitting partners to join.'}</p></div>:<div className="space-y-3">{listings.map(s=>{
             const going = rsvpsBySession.get(s.recordId)?.filter(rsvp => rsvp.data.status === 'going').length ?? 0
             const chosen=selected?.recordId===s.recordId
-            return <button type="button" key={s.recordId} onClick={()=>chooseSession(s.recordId)} aria-pressed={chosen} className={`w-full rounded-2xl border p-4 text-left transition ${chosen?'border-[#d7fc83]/70 bg-[#d7fc83]/10':'border-white/10 bg-white/3 hover:border-white/25 hover:bg-white/7'}`}>
-              <div className="mb-3 flex items-center justify-between"><span className="rounded-lg bg-white/10 px-2.5 py-1 text-[11px] font-bold text-white/85">{[s.data.format, s.data.level].filter(Boolean).join(' · ')}</span><ChevronRight size={17} className={chosen?'text-[#d7fc83]':'text-white/30'}/></div>
-              <h3 className="break-words text-lg font-extrabold tracking-tight text-white">{s.data.title}</h3>
-              <p className="mt-2 flex items-center gap-2 text-xs text-white/60"><CalendarDays size={13}/>{formatSessionTime(s.data.startsAt)}</p>
-              <p className="mt-2 flex items-center gap-2 text-xs text-white/60"><MapPin size={13}/>{s.data.court}, {s.data.location}</p>
-              <div className="mt-4 flex items-center justify-between border-t border-white/10 pt-3"><span className="flex items-center gap-1.5 text-xs font-semibold text-white/75"><Users size={14} className="text-[#d7fc83]"/>{going} going / target {s.data.targetPlayers}</span><span className={`text-[11px] font-bold ${s.data.status==='cancelled'?'text-rose-300':'text-[#d7fc83]'}`}>{s.data.status==='cancelled'?'Cancelled':s.data.capacity != null && going >= s.data.capacity?'Full':going>=s.data.targetPlayers?'Target reached':'Open to join'}</span></div>
+            return <button type="button" key={s.recordId} onClick={()=>chooseSession(s.recordId)} aria-pressed={chosen} className={`w-full rounded-xl border p-4 text-start transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d7fc83] ${chosen?'border-[#d7fc83]/70 bg-[#d7fc83]/[0.06]':'border-white/15 bg-white/[0.02] hover:border-white/30 hover:bg-white/5'}`}>
+              <div className="mb-3 flex items-start justify-between gap-2"><span className="min-w-0 text-xs font-medium text-white/75">{[s.data.format, s.data.level].filter(Boolean).join(' · ')}</span><ChevronRight size={17} aria-hidden className={`shrink-0 ${chosen?'text-[#d7fc83]':'text-white/65'}`}/></div>
+              <h3 className="break-words text-base font-semibold leading-snug tracking-tight text-white">{s.data.title}</h3>
+              <p className="mt-3 flex items-start gap-2 text-xs leading-relaxed text-white/70"><CalendarDays size={14} className="mt-0.5 shrink-0" aria-hidden/><span>{formatSessionTime(s.data.startsAt)}</span></p>
+              <p className="mt-2 flex items-start gap-2 text-xs leading-relaxed text-white/70"><MapPin size={14} className="mt-0.5 shrink-0" aria-hidden/><span className="min-w-0 break-words">{s.data.court}, {s.data.location}</span></p>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3"><span className="flex items-center gap-1.5 text-xs font-medium tabular-nums text-white/75"><Users size={14} className="text-[#d7fc83]" aria-hidden/>{going} going / target {s.data.targetPlayers}</span><span className={`text-xs font-semibold ${s.data.status==='cancelled'?'text-rose-300':'text-[#d7fc83]'}`}>{s.data.status==='cancelled'?'Cancelled':s.data.capacity != null && going >= s.data.capacity?'Full':going>=s.data.targetPlayers?'Target reached':'Open to join'}</span></div>
             </button>
           })}</div>}
         </section>
         {activeId && !selected && sessionStatus === "ready" ? <section className={`${surface} p-6`}><h2 className="text-xl font-bold">Session unavailable</h2><p className="mt-2 text-sm text-white/65">Check the shared link or choose another session.</p></section> : selected ? <SessionDetail key={selected.recordId} sessionId={selected.recordId} session={selected.data} userId={signedInId} sessionRsvps={rsvpsBySession.get(selected.recordId) ?? []} rsvpStatus={rsvpStatus} rsvpError={rsvpError}/>:<section className={`${surface} flex min-h-96 flex-col items-center justify-center p-10 text-center`}><div className="mb-5 grid h-20 w-20 place-items-center rounded-full border border-[#d7fc83]/35 bg-[#d7fc83]/10"><Users size={35} className="text-[#d7fc83]"/></div><h2 className="text-2xl font-black">The next match starts here.</h2><p className="mt-3 max-w-sm text-sm leading-relaxed text-white/50">Select an upcoming session or create your own. Every RSVP syncs to the group automatically.</p></section>}
       </div>
-      <footer className="mt-12 flex flex-col justify-between gap-3 border-t border-white/10 pt-5 text-xs text-white/40 sm:flex-row"><span>RallyCircle / Made for hitting partners, not bookings</span><span className="flex items-center gap-2"><Radio size={13}/> Powered by DeepSpace auth, records, messaging and presence</span></footer>
+      <footer className="mt-10 flex flex-col justify-between gap-3 border-t border-white/10 pt-5 text-xs text-white/65 sm:flex-row"><span>RallyCircle · Find your next hitting partner</span><span>Session invitations do not reserve a court.</span></footer>
     </div>
   </div>
 }

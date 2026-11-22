@@ -60,8 +60,8 @@ export default function Navigation() {
         to={item.path}
         aria-current={active ? 'page' : undefined}
         className={cn(
-          'inline-flex min-h-11 items-center rounded-md px-3 py-1.5 text-sm focus-visible:outline-2',
-          active ? 'bg-muted font-semibold text-foreground' : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+          'inline-flex min-h-11 items-center rounded-lg px-3 py-2 text-sm transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-ring',
+          active ? 'bg-secondary font-semibold text-primary' : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
         )}
       >
         {item.label}
@@ -77,13 +77,13 @@ export default function Navigation() {
           menuButton.current?.focus()
         }
       }}>
-        <div className="mx-auto flex min-h-14 max-w-7xl items-center gap-2 px-4 sm:gap-4">
+        <div className="mx-auto flex min-h-16 max-w-7xl items-center gap-2 px-4 sm:gap-4 sm:px-6">
           <Link to={isSignedIn ? "/dashboard" : "/"} className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-md text-base font-extrabold tracking-tight text-foreground focus-visible:outline-2 focus-visible:outline-ring">
             <CircleDot size={18} className="text-primary" aria-hidden="true" />
             {APP_NAME}
           </Link>
 
-          <div className="hidden items-center lg:flex">{visibleNav.map(navLink)}</div>
+          <div className="hidden items-center gap-1 lg:flex">{visibleNav.map(navLink)}</div>
 
           <div className="flex-1" />
 
@@ -100,7 +100,7 @@ export default function Navigation() {
                 render={
                   <button
                     aria-label="Account menu"
-                    className="group flex items-center gap-2 rounded-full border border-border bg-card/60 py-1 pl-1 pr-2.5 text-sm transition-colors hover:bg-card"
+                    className="group flex min-h-11 items-center gap-2 rounded-lg border border-border bg-card py-1.5 pl-2 pr-2.5 text-sm transition-colors duration-150 hover:bg-secondary"
                   >
                     <Avatar className="h-6 w-6 ring-1 ring-inset ring-border">
                       <AvatarImage src={user.imageUrl ?? undefined} referrerPolicy="no-referrer" />
@@ -115,20 +115,20 @@ export default function Navigation() {
                       {user.name || user.email}
                     </span>
                     <ChevronDown
-                      className="h-3.5 w-3.5 text-muted-foreground transition-transform duration-150 group-data-[popup-open]:rotate-180"
+                      className="h-3.5 w-3.5 text-muted-foreground motion-safe:transition-transform motion-safe:duration-150 group-data-[popup-open]:rotate-180"
                       aria-hidden
                     />
                   </button>
                 }
               />
-              <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuContent align="end" className="w-64 max-w-[calc(100vw-2rem)]">
                 <DropdownMenuLabel>
-                  <div className="truncate font-medium text-foreground">
+                  <div className="break-words font-medium text-foreground">
                     {user.name || 'Signed in'}
                   </div>
                   <div
                     data-testid="nav-user-email"
-                    className="truncate text-xs font-normal text-muted-foreground"
+                    className="break-all text-xs font-normal text-muted-foreground"
                   >
                     {user.email}
                   </div>
@@ -149,7 +149,7 @@ export default function Navigation() {
             <button
               data-testid="nav-sign-in-button"
               onClick={() => setShowAuthModal(true)}
-              className="min-h-11 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90"
+              className="min-h-11 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition-colors duration-150 hover:bg-primary/90"
             >
               Sign in
             </button>
@@ -157,7 +157,7 @@ export default function Navigation() {
 
           <button
             ref={menuButton}
-            className="inline-flex h-11 w-11 shrink-0 rounded-md focus-visible:outline-2 items-center justify-center text-muted-foreground hover:text-foreground lg:hidden"
+            className="inline-flex h-11 w-11 shrink-0 rounded-lg focus-visible:outline-2 items-center justify-center text-muted-foreground hover:bg-secondary hover:text-foreground lg:hidden"
             onClick={() => setMobileMenuOpen((prev) => !prev)}
             aria-label="Toggle menu"
             aria-expanded={mobileMenuOpen}

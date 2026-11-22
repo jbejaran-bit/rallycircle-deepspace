@@ -11,7 +11,7 @@ import { formatSessionTime, type Level, type RallyRSVP, type RallySession, type 
 
 const LEVELS: (Level | 'Any level')[] = ['Any level', 'Beginner', 'Intermediate', 'Advanced']
 const DISTANCE_OPTIONS = [2, 5, 10, 25]
-const field = 'mt-1.5 min-h-11 w-full min-w-0 rounded-xl border border-white/20 bg-[#0e1513] px-3 py-2.5 text-sm text-white focus-visible:outline-2 focus-visible:outline-[#d7fc83] disabled:opacity-60'
+const field = 'mt-1.5 min-h-11 w-full min-w-0 rounded-xl border border-[#738078] bg-[#0e1513] px-3 py-2.5 text-base sm:text-sm text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d7fc83] disabled:opacity-60'
 const label = 'block min-w-0 text-xs font-semibold text-white/80'
 const button = 'inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-white/25 px-3 py-2 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d7fc83] hover:bg-white/5 disabled:opacity-60'
 
@@ -143,11 +143,12 @@ export function GamesDiscovery({
 
   return (
     <div className="min-h-screen bg-[#0b110f] text-white">
-      <div className="mx-auto max-w-7xl space-y-6 px-4 py-10 sm:px-8">
+      <div className="mx-auto max-w-7xl space-y-6 px-4 py-8 sm:px-8 lg:py-10">
         <header className="flex flex-wrap items-end justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-black tracking-tight sm:text-4xl">Find games near me</h1>
-            <p className="mt-2 max-w-xl text-white/75">Find a rally to join, or get a group together for a time that works for you.</p>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-[#d7fc83]">Find your hitting partners</p>
+            <h1 className="text-3xl font-semibold tracking-[-0.02em] sm:text-4xl">Find games near me</h1>
+            <p className="mt-3 max-w-xl text-sm leading-relaxed text-white/75">Find a rally to join, or get a group together for a time that works for you.</p>
           </div>
           <Link className={button} to="/rallies?create=1">Create a rally</Link>
         </header>
@@ -262,13 +263,13 @@ export function GamesDiscovery({
                 to={`/rallies?session=${encodeURIComponent(game.recordId)}`}
                 className="block w-full rounded-2xl p-4 text-left hover:bg-white/5 focus-visible:outline-2"
               >
-                <div className="mb-3 flex items-center justify-between">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <span className={`rounded-lg px-2.5 py-1 text-[11px] font-bold ${game.cancelled ? 'bg-rose-400/15 text-rose-200' : game.status === 'target-reached' ? 'bg-[#d7fc83]/15 text-[#d7fc83]' : 'bg-white/10 text-white/85'}`}>
                     {gameStatusLabel(game)}
                   </span>
                   <ChevronRight size={17} className="text-white/30" />
                 </div>
-                <h2 className="text-lg font-extrabold tracking-tight">{game.session.title}</h2>
+                <h2 className="break-words text-lg font-semibold leading-snug tracking-tight">{game.session.title}</h2>
                 <p className="mt-2 flex items-center gap-2 text-xs text-white/75"><CalendarDays size={13} aria-hidden className="shrink-0" />{formatSessionTime(game.session.startsAt)} · {game.session.level}</p>
                 <p className="mt-2 flex items-center gap-2 text-xs text-white/75"><MapPin size={13} aria-hidden className="shrink-0" /><span className="min-w-0 break-words">{game.session.court}, {game.session.location}
                   {game.distanceMiles !== null && ` · ${formatDistanceMiles(game.distanceMiles)}`}</span>
@@ -288,7 +289,7 @@ export function GamesDiscovery({
           </div>
         )}
 
-        <p className="text-xs text-white/40">
+        <p className="text-xs leading-relaxed text-white/65">
           Distances are straight-line estimates for courts with known coordinates. Find Games uses your location on this page only.
         </p>
       </div>

@@ -20,6 +20,7 @@
     "test": "deepspace test run",
     "test:smoke": "deepspace test run smoke",
     "test:public": "playwright test -c tests/playwright.public.config.ts",
+    "test:ui": "playwright test -c tests/playwright.ui.config.ts",
     "test:api": "deepspace test run api",
     "test:e2e": "deepspace test run e2e",
     "test:unit": "vitest run --passWithNoTests",

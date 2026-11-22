@@ -28,8 +28,8 @@ const matchLabels = {
   disputed: 'Disputed', corrected: 'Corrected · awaiting confirmation', final: 'Final',
 }
 
-const panel = 'rounded-2xl border border-white/15 bg-[#17251d] p-4 sm:p-6'
-const button = 'inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-bold focus-visible:outline-2 focus-visible:outline-offset-4'
+const panel = 'min-w-0 rounded-2xl border border-white/10 bg-[#141b1a] p-5 sm:p-6'
+const button = 'inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d7fc83]'
 const outline = `${button} border border-white/25 text-white hover:bg-white/10`
 
 export default function DashboardPage() {
@@ -69,12 +69,13 @@ export default function DashboardPage() {
   const empty: { message: string; label?: string; to?: string } = emptyAgenda[filter]
 
   return (
-    <div className="min-h-full bg-[#101b14] text-white">
-      <div className="mx-auto max-w-6xl space-y-8 px-4 py-8 sm:px-7 lg:py-12">
-        <header className="flex flex-wrap items-end justify-between gap-5 border-b border-white/15 pb-6">
-          <div>
-            <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">Your dashboard</h1>
-            {user?.name && <p className="mt-2 text-white/75">Welcome, {user.name}.</p>}
+    <div className="min-h-full bg-[#0b110f] text-white">
+      <div className="mx-auto max-w-7xl space-y-6 px-4 py-8 sm:px-8 lg:py-10">
+        <header className="flex flex-wrap items-end justify-between gap-5 pb-1">
+          <div className="min-w-0">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-[#d7fc83]">Your tennis week</p>
+            <h1 className="text-3xl font-semibold tracking-[-0.02em] sm:text-4xl">Your dashboard</h1>
+            {user?.name && <p className="mt-3 break-words text-sm text-white/75">Welcome, {user.name}.</p>}
           </div>
           <div className="flex flex-wrap gap-2">
             <Link to="/notifications" className={outline}>Notifications</Link>
@@ -90,24 +91,24 @@ export default function DashboardPage() {
           </div>
         ) : !ready ? <p role="status" className={panel}>Loading your rallies and matches…</p> : (
           <>
-          <section aria-labelledby="next-rally-title" className="overflow-hidden rounded-2xl border border-[#d7fc83]/40 bg-[#d7fc83] text-[#152015]">
+          <section aria-labelledby="next-rally-title" className="overflow-hidden rounded-2xl border border-[#d7fc83]/30 bg-[#1b2a21] text-white">
             <div className="grid gap-5 p-5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end sm:p-6">
               <div className="min-w-0">
-                <h2 id="next-rally-title" className="flex items-center gap-2 text-sm font-bold">
+                <h2 id="next-rally-title" className="flex items-center gap-2 text-sm font-semibold text-[#d7fc83]">
                   {next?.inSession ? <Clock3 size={16} aria-hidden /> : <CalendarDays size={16} aria-hidden />}
                   {next?.inSession ? 'Scheduled now' : 'Your next rally'}
                 </h2>
                 {next ? (
                   <>
-                    <p className="mt-2 break-words text-2xl font-bold sm:text-3xl">{next.data.title}</p>
-                    <p className="mt-2 break-words text-sm">
+                    <p className="mt-3 break-words text-2xl font-semibold leading-tight tracking-tight">{next.data.title}</p>
+                    <p className="mt-3 break-words text-sm leading-relaxed text-white/75">
                       <time dateTime={next.data.startsAt}>{formatSessionTime(next.data.startsAt)}</time> · {next.data.court} · {next.data.location}
                     </p>
-                    <p className="mt-2 text-sm font-semibold">{next.hosting ? 'You’re hosting' : 'You’re going'}</p>
+                    <p className="mt-3 text-xs font-medium text-white/75">{next.hosting ? 'You’re hosting' : 'You’re going'}</p>
                   </>
                 ) : <p className="mt-2">Host a rally or confirm an RSVP to see your next session here.</p>}
               </div>
-              <Link className={`${button} bg-[#152015] text-white sm:justify-self-end`} to={next ? rallyLink(next.recordId) : '/games'}>
+              <Link className={`${outline} sm:justify-self-end`} to={next ? rallyLink(next.recordId) : '/games'}>
                 {next ? 'Open rally' : 'Browse games'} <ArrowRight size={16} aria-hidden />
               </Link>
             </div>
