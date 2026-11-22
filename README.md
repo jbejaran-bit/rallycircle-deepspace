@@ -8,7 +8,7 @@ I built RallyCircle to answer the question that gets lost in group chats: do we 
 
 ## Experience the core workflow
 
-Follow the [60-second reviewer demo](docs/reviewer-demo.md) to discover a court, create a doubles rally, watch the fourth confirmation, and score a point. The live walkthrough requires an approved disposable DeepSpace app and four test accounts. The signed-out landing and sign-in gate can be explored locally.
+Follow the [60-second reviewer demo](docs/reviewer-demo.md) to discover a court, create a doubles rally, watch the fourth confirmation, and score a point. The four-account live walkthrough requires an approved disposable DeepSpace app and four test accounts; a shorter two-account path is also documented. At this review SHA, live authenticated workflows remain unverified because registering a disposable app returned `app_quota_exceeded`. The signed-out landing and sign-in gate can be explored locally.
 
 ## How it works
 
@@ -34,3 +34,7 @@ npm run test:public
 For a signed-out preview, run `npm exec -- vite --host 127.0.0.1` and open the local URL it prints. For authenticated verification, use the [release checklist](docs/final-release-checklist.md) and the [official DeepSpace testing guide](https://docs.deep.space/guides/testing). Keep CLI state, local variables, and account files out of Git.
 
 The public browser suite and local command tests cover different layers. Live multi-account behavior remains a release gate. The [review notes](docs/reviewer-demo.md#verification) record the evidence and its limits.
+
+## Submission status and evidence
+
+The [release evidence and submission handoff](docs/submission-handoff.md) records the pinned candidate SHA, automated checks, known limitations, integration inventory and outstanding owner actions. This repository uses DeepSpace authentication, synced records, messaging, presence and command-room primitives; it does **not** currently call a named DeepSpace catalog provider endpoint. The original private assignment must be checked before claiming any catalog integration-count requirement is met.

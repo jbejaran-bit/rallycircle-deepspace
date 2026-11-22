@@ -11,10 +11,14 @@ Use the exact reviewed commit in an approved disposable DeepSpace app. For the t
 
 Rehearse before recording. If the readiness badge or score fails to update, record the exact SHA, step, and browser logs with private data redacted. Keep the timing honest and omit the live segment from a submission until it passes. With two accounts you can test invite return, RSVPs and sync, but the doubles transition needs four distinct accounts.
 
+## Two-account evaluation path (when approved)
+
+With two authorized disposable test accounts, sign in as host and guest in separate browser profiles, create a future singles rally with capacity two, share its invite, join from the guest profile, and watch both attendance panels. Exchange one chat message, change one Courtboard element, and record a match point. Check host-only controls, reconnection, and score confirmation using the authorized participants. This is a **manual rehearsal plan**, not a completed test. Never run it against the existing production identity without verifying isolation and obtaining approval. Two accounts cannot demonstrate the four-distinct-player doubles transition or a three-person waitlist promotion.
+
 ## Verification
 
 - **Public browser evidence.** The README desktop capture and the mobile sign-in gate below come from Chromium against the running local app. No sample player or match data was inserted.
 - **Local logic evidence.** The attendance regression covers duplicate rows, a player marked Maybe, a fourth distinct confirmation, and withdrawal. Existing server tests cover capacity and waitlist promotion. These tests do not exercise the hosted subscription.
-- **Live evidence pending.** DeepSpace returned `not_authenticated` in this workspace. The OAuth invite round-trip, four-account transition, live scoring, and the two-account release checklist remain pending on a disposable app. Preserve [9a032ca](https://github.com/jbejaran-bit/rallycircle-deepspace/commit/9a032ca) as the fallback.
+- **Live evidence pending.** DeepSpace returned `not_authenticated` in the cloud workspace, and registration of a separate disposable app later returned `app_quota_exceeded` on the owner's workstation. The OAuth invite round-trip, four-account transition, live scoring, and the two-account release checklist remain pending on a disposable app. Preserve [9a032ca](https://github.com/jbejaran-bit/rallycircle-deepspace/commit/9a032ca) as the fallback.
 
 ![Find Games sign-in gate at a 390-pixel mobile viewport, captured from the running app](screenshots/find-games-mobile-signed-out.jpg)
