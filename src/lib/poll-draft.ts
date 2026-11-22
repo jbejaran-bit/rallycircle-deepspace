@@ -1,5 +1,5 @@
 import { POLL_MAX_OPTIONS, POLL_MIN_OPTIONS, validatePollOptions, type PollOptionInput } from './polls'
-import { parseLocalSessionStart } from './rally'
+import { parseLocalSessionStart } from './rally.ts'
 
 export function buildPollDraft(values: readonly string[], now = Date.now()):
   { options: PollOptionInput[] } | { error: string } {
