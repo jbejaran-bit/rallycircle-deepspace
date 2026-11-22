@@ -154,7 +154,9 @@ function compareValues(a: number | string, b: number | string): number {
   return a < b ? -1 : 1
 }
 
-export function createRaceHarness() {
+export function createRaceHarness({
+  yieldRecordRoom = () => new Promise<void>(resolve => setTimeout(resolve, 1)),
+}: { yieldRecordRoom?: () => Promise<void> } = {}) {
   const store = new Map<string, Map<string, Row>>()
   for (const name of COLLECTIONS) store.set(name, new Map())
   let nextRecordId = 0
@@ -303,7 +305,7 @@ export function createRaceHarness() {
         tool: string
         params: Record<string, unknown>
       }
-      await new Promise(resolve => setTimeout(resolve, 1))
+      await yieldRecordRoom()
       const coll = typeof params.collection === 'string' ? params.collection : ''
       const callNumber = countCall(tool, coll)
       void callNumber
