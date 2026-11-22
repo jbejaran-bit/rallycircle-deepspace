@@ -17,7 +17,6 @@
  * audit/provenance (matchResults rows + the 'corrected' audit row) is
  * preserved.
  */
-import { setImmediate } from 'node:timers/promises'
 import { describe, expect, it } from 'vitest'
 import type { ActionTools } from 'deepspace/worker'
 import { canCreate, checkFieldPermissions } from 'deepspace/worker'
@@ -176,7 +175,7 @@ describe('PR22-PORT', () => {
   it('PR22-PORT F3-cancel: cancelling a 150-RSVP session notifies every recipient exactly once', async () => {
     // Hundreds of sequential mock requests amplify OS timer granularity.
     // Yield without imposing a timer delay for this fan-out assertion.
-    const h = createRaceHarness({ yieldRecordRoom: () => setImmediate() })
+    const h = createRaceHarness({ yieldRecordRoom: () => new Promise<void>(resolve => setImmediate(resolve)) })
     h.addSession('s1', 'host', { targetPlayers: 2 })
     for (let i = 0; i < 150; i++) {
       h.addRsvp('s1', `player-${i}`, i % 2 === 0 ? 'going' : 'maybe')
