@@ -9,21 +9,21 @@ const session: RallySession = { status: 'open', startsAt: '2027-04-11T19:30:00-0
   level: 'All levels', notes: '', chatChannelId: 'chat' }
 const render = (changes = {}, userId = 'host') => renderToStaticMarkup(<RallyCalendarActions session={{ ...session, ...changes }} invitationUrl="https://rally.example/rallies?session=one" userId={userId} />)
 
-it('renders explicit Google and .ics labels without a saved claim or direct-save control', () => {
+it('renders the Google editor action without a download, saved claim or direct-save control', () => {
   const html = render()
   expect(html).toContain('Add to Google Calendar')
-  expect(html).toContain('Download .ics')
+  expect(html).not.toContain('Download .ics')
+  expect(html).not.toContain('data:text/calendar')
   expect(html).toContain('target="_blank"')
   expect(html).toContain('Review the event and select Save.')
-  expect(html).toContain('Apple Calendar, Outlook')
   expect(html).not.toContain('Saved to Google Calendar')
   expect(html).not.toContain('Save directly to Google Calendar')
   expect(GOOGLE_CALENDAR_DIRECT_SAVE_ENABLED).toBe(false)
 })
 
-it('offers an explicit cancellation export without adding a cancelled Google event', () => {
+it('explains cancellation without an export or Google create action', () => {
   const html = render({ status: 'cancelled' })
-  expect(html).toContain('rallycircle-cancellation.ics')
+  expect(html).not.toContain('data:text/calendar')
   expect(html).toContain('This session is cancelled.')
   expect(html).not.toContain('Add to Google Calendar')
 })

@@ -4,12 +4,14 @@
  *
  * The browser never talks to Overpass or Nominatim directly: coordinates
  * go to RallyCircle's own worker (authenticated with the SDK token), which
- * proxies, caches, and paces the upstream calls. The coordinates themselves
- * are never stored by the client.
+ * proxies, caches, and paces the upstream calls. Search-area coordinates
+ * stay ephemeral. A public venue pin explicitly selected in a rally form
+ * is saved with that rally by the separate create/edit command.
  */
 
 import { getAuthToken } from 'deepspace'
 import type { LatLng } from './geo'
+import { isValidLatLng } from './geo'
 import type { DiscoveredCourt, GeocodedPlace } from './osm'
 
 export interface NearbyCourtsResponse {
@@ -31,17 +33,14 @@ function isDiscoveredCourt(value: unknown): value is DiscoveredCourt {
   return (
     typeof c.id === 'string' &&
     typeof c.name === 'string' &&
-    typeof c.lat === 'number' &&
-    typeof c.lng === 'number' &&
-    Number.isFinite(c.lat) &&
-    Number.isFinite(c.lng)
+    isValidLatLng(c)
   )
 }
 
 function isGeocodedPlace(value: unknown): value is GeocodedPlace {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const p = value as Record<string, unknown>
-  return typeof p.displayName === 'string' && typeof p.lat === 'number' && typeof p.lng === 'number'
+  return typeof p.displayName === 'string' && isValidLatLng(p)
 }
 
 async function authedJson<T>(path: string, guard: (value: unknown) => value is T, signal?: AbortSignal): Promise<T> {

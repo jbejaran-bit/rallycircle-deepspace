@@ -2,6 +2,7 @@ import type { ActionTools } from 'deepspace/worker'
 import { expect, it, vi } from 'vitest'
 import type { Env } from '../../worker.js'
 import { createRallyAction } from './create-rally-action.js'
+import { serializeRallyPlace, type RallyPlace } from '../lib/rally-place.js'
 
 const draft = () => ({
   format: 'Singles',
@@ -84,4 +85,22 @@ it('fails closed when the command-room binding is missing instead of creating di
   })
   expect(result).toMatchObject({ success: false })
   expect(create).not.toHaveBeenCalled()
+})
+
+it('validates and forwards canonical selected-place JSON without inventing coordinates for text-only drafts', async () => {
+  const { requests, createRally } = harness()
+  const place: RallyPlace = { lat: 35.6895, lng: 139.6917, id: 'osm:node/1', name: 'Public courts', address: 'Tokyo, Japan', source: 'osm' }
+  const courtPlace = JSON.stringify({ source: place.source, address: place.address, name: place.name, id: place.id, lng: place.lng, lat: place.lat })
+  await expect(createRally({ ...draft(), courtPlace })).resolves.toMatchObject({ success: true })
+  expect((requests[0].body as { draft: { courtPlace: string } }).draft.courtPlace).toBe(serializeRallyPlace(place))
+})
+
+it.each([
+  '{bad', JSON.stringify({ lat: 95, lng: 0 }), 'x'.repeat(1201),
+])('rejects malformed selected places before requesting persistence: %s', courtPlace => {
+  const { roomFetch, createRally } = harness()
+  return createRally({ ...draft(), courtPlace }).then(result => {
+    expect(result.success).toBe(false)
+    expect(roomFetch).not.toHaveBeenCalled()
+  })
 })

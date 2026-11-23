@@ -13,8 +13,8 @@
  *   are never stored, logged, or written to a record. Overpass receives
  *   coordinates only as part of a radius query (unavoidable — it is the
  *   query), with no user identity attached.
- * - Upstream failures degrade to a clean JSON error and the Pittsburgh
- *   fallback, never a crash or a leaked upstream body.
+ * - Upstream failures degrade to a clean retryable JSON error, never a
+ *   crash or a leaked upstream body. Featured courts remain available.
  *
  * Usage-policy compliance, main Overpass instance (overpass-api.de):
  * - Well under 10,000 queries/day and 1 GB/day for one-off use; for a
@@ -101,7 +101,7 @@ function upstreamError(status: number): Response {
     {
       error: retryable
         ? 'Court search is busy right now. Please wait a moment and try again.'
-        : 'Court search is unavailable right now. You can still browse the Pittsburgh courts.',
+        : 'Court search is unavailable right now. Try another place or search again later.',
     },
     { status: 502 },
   )
@@ -208,7 +208,7 @@ export function registerCourtDiscoveryRoutes(
     } catch (error) {
       if (error instanceof Response) return error
       return c.json(
-        { error: 'Court search is unavailable right now. You can still browse the Pittsburgh courts.' },
+        { error: 'Court search is unavailable right now. Try another place or search again later.' },
         502,
       )
     }

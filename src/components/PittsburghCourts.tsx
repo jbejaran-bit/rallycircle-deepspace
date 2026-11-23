@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowUpRight, LocateFixed, MapPin } from 'lucide-react'
+import { ArrowUpRight, Check, LocateFixed } from 'lucide-react'
 import { courts, matchesCourt, rankCourts, type Court } from '@/lib/courts'
 import CourtDiscoveryMap, { CourtMapLayout } from '@/components/CourtDiscoveryMap'
 import { requestOneShotLocation } from '@/lib/location'
@@ -44,8 +44,8 @@ export default function PittsburghCourts({ active = true }: { active?: boolean }
     <div className="space-y-5">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-black tracking-tight">Pittsburgh tennis courts</h2>
-          <p className="mt-2 text-white/70">Explore Pittsburgh courts and check schedules with the city.</p>
+          <h2 className="text-2xl font-semibold tracking-tight">Featured in Pittsburgh</h2>
+          <p className="mt-2 max-w-xl text-sm leading-relaxed text-white/75">Three local courts with official city booking links. Use Search courts to find places in other cities.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button ref={locateButton} type="button" disabled={locating} onClick={() => void locate()} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-white/25 px-4 py-2 text-sm font-semibold focus-visible:outline-2">
@@ -69,6 +69,7 @@ export default function PittsburghCourts({ active = true }: { active?: boolean }
       ) : <CourtMapLayout map={active && <CourtDiscoveryMap courts={mapCourts} label="Pittsburgh tennis court map" selectedId={selected.id} onSelect={setSelected} />}
         details={
           <section className="rounded-2xl border border-white/15 bg-[#141b1a] p-5" aria-label="Selected court">
+            <p className="mb-2 flex items-center gap-2 text-xs font-semibold text-[#d7fc83]"><Check size={14} aria-hidden />Court {selected.pinNumber} selected</p>
             <h3 className="break-words text-xl font-bold">{selected.name}</h3>
             <p className="mt-1 text-sm text-white/70">{selected.area}</p>
             <p className="mt-3 text-sm text-white/70">
@@ -78,8 +79,8 @@ export default function PittsburghCourts({ active = true }: { active?: boolean }
               <a href={selected.bookingUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-[#d7fc83] px-4 py-3 text-sm font-bold text-[#101a13]">
                 {selected.directCalendar ? 'Open court calendar' : 'Open city booking'} <ArrowUpRight size={16} />
               </a>
-              <Link to={`/rallies?court=${selected.id}`} className="inline-flex min-h-11 items-center rounded-xl border border-white/25 px-4 py-2 text-sm font-semibold focus-visible:outline-2">
-                Plan a Rally here
+              <Link to={`/rallies?${new URLSearchParams({ create: '1', court: selected.id, courtName: selected.name, courtArea: selected.area, lat: String(selected.lat), lng: String(selected.lng), placeId: selected.id, placeSource: 'featured', address: selected.area })}`} className="inline-flex min-h-11 items-center rounded-xl border border-white/25 px-4 py-2 text-sm font-semibold focus-visible:outline-2">
+                Plan a rally here
               </Link>
             </div>
           </section>
@@ -87,9 +88,9 @@ export default function PittsburghCourts({ active = true }: { active?: boolean }
           <ul className="space-y-2" aria-label="Pittsburgh courts">
             {listed.map(({ court, distance }) => (
               <li key={court.id}>
-                <button type="button" onClick={() => setSelected(court)} aria-pressed={selected.id === court.id} className="flex w-full items-center gap-3 rounded-xl border border-white/15 px-3 py-3 text-left text-sm aria-pressed:border-[#d7fc83]">
-                  <MapPin size={16} className="shrink-0 text-[#d7fc83]" />
-                  <span className="min-w-0 flex-1 break-words">{court.pinNumber}. {court.name}</span>
+                <button type="button" onClick={() => setSelected(court)} aria-pressed={selected.id === court.id} className="flex min-h-11 w-full items-center gap-3 rounded-xl border border-white/15 px-3 py-3 text-left text-sm aria-pressed:border-[#d7fc83] aria-pressed:bg-[#d7fc83]/[0.06]">
+                  <span aria-hidden className={`grid size-8 shrink-0 place-items-center rounded-full border font-semibold tabular-nums ${selected.id === court.id ? 'border-[#d7fc83] bg-[#d7fc83] text-[#17231b]' : 'border-white/30 bg-[#24362b] text-white'}`}>{court.pinNumber}</span>
+                  <span className="min-w-0 flex-1 break-words"><span className="sr-only">{court.pinNumber}. </span>{court.name}{selected.id === court.id && <span className="mt-0.5 block text-xs font-semibold text-[#d7fc83]">Selected</span>}</span>
                   {distance !== undefined && <span className="shrink-0 text-white/65">{formatDistanceMiles(distance)}</span>}
                 </button>
               </li>

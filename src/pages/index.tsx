@@ -5,7 +5,7 @@ import './landing.css'
 
 const features = [
   { title: 'Find a game', text: 'Browse real sessions by date, area, format and skill level.', to: '/games', Icon: Radio },
-  { title: 'Explore courts', text: 'Search mapped courts near you or browse verified Pittsburgh booking links.', to: '/courts', Icon: MapPin },
+  { title: 'Explore courts', text: 'Search tennis courts in any city, or explore our featured Pittsburgh collection.', to: '/courts', Icon: MapPin },
   { title: 'Make a plan', text: 'Invite your group, track RSVPs and add confirmed sessions to your calendar.', to: '/rallies?create=1', Icon: CalendarDays },
 ]
 
@@ -28,7 +28,7 @@ export default function Home() {
         <div className="tennis-intro">
           <p className="tennis-eyebrow">Find your next hit</p>
           <h1 id="tennis-heading" tabIndex={-1}>Find players.<br /><span>Play tennis.</span></h1>
-          <p>Join a nearby game, invite your hitting partners, and keep score together.</p>
+          <p>Find a court in your city, invite your hitting partners, and keep score together.</p>
           <div className="tennis-actions">
             <a className="tennis-primary" href="/games">Find a game <ArrowRight size={19} absoluteStrokeWidth aria-hidden /></a>
             <a className="tennis-secondary" href="/rallies?create=1"><Plus size={18} absoluteStrokeWidth aria-hidden /> Create a rally</a>

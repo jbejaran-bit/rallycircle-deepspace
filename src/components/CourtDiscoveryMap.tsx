@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import type { LayerGroup, Map as LeafletMap, Marker as LeafletMarker } from 'leaflet'
 import { List, Map as MapIcon } from 'lucide-react'
-import type { LatLng } from '@/lib/geo'
+import { isValidLatLng, type LatLng } from '@/lib/geo'
 import 'leaflet/dist/leaflet.css'
+import './court-map.css'
 
 interface CourtPoint extends LatLng {
   id: string
@@ -44,37 +46,56 @@ export function CourtMapLayout({ map, details, children }: { map: ReactNode; det
   )
 }
 
-export default function CourtDiscoveryMap<T extends CourtPoint>({ courts, location, label, selectedId, onSelect }: {
+export default function CourtDiscoveryMap<T extends CourtPoint>({ courts, location, label, selectedId, onSelect, compact = false }: {
   courts: readonly T[]
   location?: LatLng | null
   label: string
   selectedId?: string
   onSelect: (court: T) => void
+  compact?: boolean
 }) {
   const container = useRef<HTMLDivElement>(null)
   const markerElements = useRef<Map<string, HTMLElement>>(new globalThis.Map())
+  const markers = useRef<Map<string, LeafletMarker>>(new globalThis.Map())
+  const mapView = useRef<LeafletMap | null>(null)
+  const markerLayer = useRef<LayerGroup | null>(null)
+  const leaflet = useRef<typeof import('leaflet') | null>(null)
+  const currentCourts = useRef(courts)
+  const selectCourt = useRef(onSelect)
   const activeId = useRef(selectedId)
   const [mapStatus, setMapStatus] = useState<'loading' | 'ready' | 'unavailable' | 'tiles-unavailable'>('loading')
+  const [ready, setReady] = useState(false)
+  // Equivalent result arrays and inline callbacks must not recreate the map.
+  const geometry = JSON.stringify(courts.map((court, index) => ({
+    id: court.id, name: court.name, lat: court.lat, lng: court.lng, number: court.pinNumber ?? index + 1,
+  })).filter(isValidLatLng))
+  const centerLat = isValidLatLng(location) ? location.lat : undefined
+  const centerLng = isValidLatLng(location) ? location.lng : undefined
+
+  useEffect(() => {
+    currentCourts.current = courts
+    selectCourt.current = onSelect
+  }, [courts, onSelect])
 
   useEffect(() => {
     activeId.current = selectedId
     for (const [id, element] of markerElements.current) {
       element.setAttribute('aria-pressed', String(id === selectedId))
+      markers.current.get(id)?.setZIndexOffset(id === selectedId ? 1000 : 0)
     }
   }, [selectedId])
 
   useEffect(() => {
     let disposed = false
     let remove: (() => void) | undefined
-    const elements = markerElements.current
-    void import('leaflet').then(({ map, tileLayer, marker, divIcon, circleMarker, latLngBounds }) => {
+    void import('leaflet').then(module => {
       if (disposed || !container.current) return
-      const view = map(container.current, { scrollWheelZoom: false })
+      leaflet.current = module
+      const view = module.map(container.current, { scrollWheelZoom: false }).setView([20, 0], 2)
+      mapView.current = view
+      markerLayer.current = module.layerGroup().addTo(view)
       remove = () => view.remove()
-      const points: [number, number][] = courts.map(court => [court.lat, court.lng])
-      if (location) points.push([location.lat, location.lng])
-      view.fitBounds(latLngBounds(points), { padding: [36, 36], maxZoom: 14 })
-      const layer = tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      const layer = module.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>',
       })
@@ -82,53 +103,74 @@ export default function CourtDiscoveryMap<T extends CourtPoint>({ courts, locati
         if (!disposed) setMapStatus('tiles-unavailable')
       })
       layer.addTo(view)
-
-      if (location) {
-        circleMarker([location.lat, location.lng], { radius: 8, color: '#ffffff', weight: 2, fillColor: '#3b82f6', fillOpacity: 0.9 })
-          .addTo(view)
-          .bindTooltip('Search location')
-      }
-
-      courts.forEach((court, index) => {
-        const number = document.createElement('span')
-        number.className = 'grid h-8 w-8 place-items-center rounded-full border-2 border-[#17231b] bg-[#d7fc83] font-bold text-[#17231b] group-aria-pressed:bg-white'
-        number.textContent = String(court.pinNumber ?? index + 1)
-        number.setAttribute('aria-hidden', 'true')
-        const pin = marker([court.lat, court.lng], {
-          title: court.name,
-          icon: divIcon({ className: 'group', html: number, iconSize: [32, 32], iconAnchor: [16, 16] }),
-        }).addTo(view).on('click', () => onSelect(court))
-        const element = pin.getElement()
-        if (element) {
-          element.setAttribute('aria-label', `Select ${court.name}`)
-          element.setAttribute('aria-pressed', String(court.id === activeId.current))
-          element.addEventListener('keydown', event => {
-            if (event.key !== 'Enter' && event.key !== ' ') return
-            event.preventDefault()
-            event.stopPropagation()
-            onSelect(court)
-          })
-          elements.set(court.id, element)
-        }
-      })
       setMapStatus('ready')
+      setReady(true)
     }).catch(() => {
       if (!disposed) setMapStatus('unavailable')
     })
     return () => {
       disposed = true
       remove?.()
-      elements.clear()
+      mapView.current = null
+      markerLayer.current = null
+      markerElements.current.clear()
+      markers.current.clear()
     }
-  }, [courts, location, onSelect])
+  }, [])
+
+  useEffect(() => {
+    const view = mapView.current
+    const layer = markerLayer.current
+    const module = leaflet.current
+    if (!ready || !view || !layer || !module) return
+    layer.clearLayers()
+    markerElements.current.clear()
+    markers.current.clear()
+    const points = JSON.parse(geometry) as { id: string; name: string; lat: number; lng: number; number: number }[]
+    const bounds: [number, number][] = points.map(point => [point.lat, point.lng])
+    if (centerLat !== undefined && centerLng !== undefined) {
+      bounds.push([centerLat, centerLng])
+      module.circleMarker([centerLat, centerLng], { radius: 7, color: '#ffffff', weight: 2, fillColor: '#3b82f6', fillOpacity: 0.9 })
+        .addTo(layer).bindTooltip('Search area')
+    }
+    for (const court of points) {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'rally-court-pin'
+      button.textContent = String(court.number)
+      button.setAttribute('aria-label', `Select ${court.name}`)
+      button.setAttribute('aria-pressed', String(court.id === activeId.current))
+      button.setAttribute('data-pin-number', String(court.number))
+      button.setAttribute('data-court-id', court.id)
+      button.addEventListener('click', event => {
+        event.stopPropagation()
+        const selected = currentCourts.current.find(point => point.id === court.id && isValidLatLng(point))
+        if (selected) selectCourt.current(selected)
+      })
+      // Native buttons supply both Enter and Space activation. Keep those
+      // keystrokes out of Leaflet's map keyboard controls without cancelling it.
+      button.addEventListener('keydown', event => event.stopPropagation())
+      const pin = module.marker([court.lat, court.lng], {
+        title: court.name,
+        keyboard: false,
+        zIndexOffset: court.id === activeId.current ? 1000 : 0,
+        icon: module.divIcon({ className: 'rally-court-marker', html: button, iconSize: [44, 44], iconAnchor: [22, 22] }),
+      }).addTo(layer)
+      markerElements.current.set(court.id, button)
+      markers.current.set(court.id, pin)
+    }
+    if (bounds.length) view.fitBounds(module.latLngBounds(bounds), { padding: [32, 32], maxZoom: 14, animate: false })
+    else view.setView([20, 0], 2, { animate: false })
+  }, [ready, geometry, centerLat, centerLng])
 
   return (
     <div>
-      <div ref={container} role="region" aria-label={label} aria-busy={mapStatus === 'loading'} className="relative z-0 h-72 min-w-0 rounded-2xl bg-[#202c25] sm:h-[360px] lg:h-[500px]" />
+      <div ref={container} role="region" aria-label={label} aria-busy={mapStatus === 'loading'} className={`relative z-0 min-w-0 rounded-2xl bg-[#202c25] ${compact ? 'h-56' : 'h-72 sm:h-[360px] lg:h-[500px]'}`} />
       {mapStatus === 'loading' && <p role="status" className="mt-2 text-sm text-white/75">Loading the court map…</p>}
       {(mapStatus === 'unavailable' || mapStatus === 'tiles-unavailable') && (
         <p role="status" className="mt-2 text-sm text-white/75">The map could not load completely. Use the court list for details and directions.</p>
       )}
+      {ready && JSON.parse(geometry).length === 0 && <p className="mt-2 text-sm text-white/75">No mapped courts to display. Choose a court from the results.</p>}
     </div>
   )
 }

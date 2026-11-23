@@ -37,6 +37,8 @@ export interface DiscoveredCourt {
 }
 
 export interface GeocodedPlace {
+  /** OSM identity when Nominatim supplies it; coordinates remain authoritative. */
+  id?: string
   displayName: string
   lat: number
   lng: number
@@ -165,14 +167,16 @@ export function parseNominatimResponse(payload: unknown): GeocodedPlace[] {
   const places: GeocodedPlace[] = []
   for (const raw of payload) {
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) continue
-    const entry = raw as { display_name?: unknown; lat?: unknown; lon?: unknown }
+    const entry = raw as { display_name?: unknown; lat?: unknown; lon?: unknown; osm_type?: unknown; osm_id?: unknown }
     const displayName = typeof entry.display_name === 'string' ? entry.display_name.trim() : ''
     const lat = typeof entry.lat === 'string' ? Number(entry.lat) : asNumber(entry.lat)
     const lng = typeof entry.lon === 'string' ? Number(entry.lon) : asNumber(entry.lon)
     if (!displayName || lat === undefined || lng === undefined) continue
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue
     if (lat < -90 || lat > 90 || lng < -180 || lng > 180) continue
-    places.push({ displayName, lat, lng })
+    const id = ['node', 'way', 'relation'].includes(String(entry.osm_type)) && Number.isSafeInteger(entry.osm_id) && Number(entry.osm_id) > 0
+      ? `osm:${entry.osm_type}/${entry.osm_id}` : undefined
+    places.push({ displayName, lat, lng, ...(id ? { id } : {}) })
   }
   return places
 }

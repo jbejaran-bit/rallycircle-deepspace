@@ -3,8 +3,10 @@ import type { MatchTeams, ScoreSide } from './rally-score'
 import type { RallySession, RSVPStatus } from './rally'
 import type { PollOptionInput } from './polls'
 import type { SeriesTemplate } from './recurrence'
+import type { RallyDetailsSnapshot } from './rally-place'
 
 type RallyCommand =
+  | { operation: 'editDetails'; sessionId: string; details: RallyDetailsSnapshot; expected: RallyDetailsSnapshot }
   | { operation: 'rsvp'; sessionId: string; status: RSVPStatus }
   | { operation: 'withdraw' | 'joinWaitlist' | 'leaveWaitlist'; sessionId: string }
   | { operation: 'cancel'; sessionId: string }
@@ -41,7 +43,7 @@ export async function runRallyCommand(command: RallyCommand): Promise<void> {
 }
 
 type RallyDraft = Pick<RallySession, 'format' | 'title' | 'court' | 'location' | 'startsAt' |
-  'durationMinutes' | 'targetPlayers' | 'capacity' | 'level' | 'notes'>
+  'durationMinutes' | 'targetPlayers' | 'capacity' | 'level' | 'notes' | 'courtPlace'>
 
 export function createRally(draft: RallyDraft): Promise<string> {
   return sendRallyAction('createRally', draft)

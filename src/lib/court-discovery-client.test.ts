@@ -27,3 +27,18 @@ it('forwards cancellation and sends only rounded coordinates to the court endpoi
     signal: request.signal,
   })
 })
+
+it.each([
+  { results: [{ displayName: 'Bad place', lat: 91, lng: 0 }], cached: false },
+  { results: [{ displayName: 'Bad place', lat: 0, lng: null }], cached: false },
+])('rejects invalid coordinates in place search responses', async payload => {
+  vi.mocked(getAuthToken).mockResolvedValue('fixture')
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json(payload)))
+  await expect(searchPlaces('City')).rejects.toThrow('unexpected response')
+})
+
+it('rejects invalid coordinates in nearby court responses', async () => {
+  vi.mocked(getAuthToken).mockResolvedValue('fixture')
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({ courts: [{ id: 'bad', name: 'Bad court', lat: 0, lng: 181 }], count: 1, attribution: 'OSM', cached: false })))
+  await expect(fetchNearbyCourts({ lat: 40, lng: -70 }, 5)).rejects.toThrow('unexpected response')
+})

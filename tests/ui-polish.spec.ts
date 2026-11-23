@@ -20,7 +20,7 @@ async function mockActions(page: Page) {
 for (const width of [320, 390, 768, 1440]) {
   test(`actual app components reflow at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 })
-    for (const view of ['landing', 'rallies', 'dashboard', 'games']) {
+    for (const view of ['landing', 'rallies', 'dashboard', 'games', 'courts']) {
       await page.goto(fixture(`view=${view}`))
       await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
       if (view === 'rallies') {
@@ -33,7 +33,7 @@ for (const width of [320, 390, 768, 1440]) {
   })
 }
 
-test('calendar template and ICS contain the same invitation and exact time', async ({ page }) => {
+test('calendar editor keeps exact session fields without a visible ICS action', async ({ page }) => {
   await page.goto(fixture('view=rallies'))
   const google = page.getByRole('link', { name: /Add to Google Calendar/ })
   await expect(google).toBeVisible()
@@ -51,15 +51,7 @@ test('calendar template and ICS contain the same invitation and exact time', asy
   const popup = await popupPromise
   await expect(popup).toHaveURL(url.href)
   await popup.close()
-  const download = page.waitForEvent('download')
-  const ics = page.getByRole('link', { name: 'Download .ics', exact: true })
-  const calendar = decodeURIComponent((await ics.getAttribute('href'))!.split(',').slice(1).join(','))
-  expect(calendar).toContain('DTSTART:20300615T140000Z')
-  expect(calendar).toContain('DTEND:20300615T153000Z')
-  expect(calendar.replaceAll('\r\n ', '')).toContain('/rallies?session=fixture-doubles')
-  await ics.click()
-  const file = await download
-  expect(file.suggestedFilename()).toMatch(/\.ics$/)
+  await expect(page.getByRole('link', { name: /Download .ics/ })).toHaveCount(0)
   expect(await page.getByText(/Saved to Google Calendar/).count()).toBe(0)
 })
 

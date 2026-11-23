@@ -5,7 +5,7 @@ import CourtsPage from '../pages/(app)/(protected)/courts'
 import { courts, distanceMiles, findCourt, matchesCourt, rankCourts } from './courts'
 
 describe('court discovery', () => {
-  it('keeps one main landmark and renders the court list without map tiles', () => {
+  it('starts with the general court finder and keeps featured booking links available without map tiles', () => {
     const html = renderToStaticMarkup(
       <MemoryRouter>
         <main><CourtsPage /></main>
@@ -14,10 +14,21 @@ describe('court discovery', () => {
 
     expect(html.match(/<main\b/g)).toHaveLength(1)
     expect(html).toContain('<h1')
+    expect(html).toContain('id="court-tab-nearby" aria-controls="court-source-nearby" tabindex="0" aria-selected="true"')
+    expect(html).toContain('Search any city or neighbourhood')
+    expect(html).toContain('City or neighbourhood')
+    expect(html).toContain('Featured Pittsburgh courts')
     expect(html).toContain('aria-label="Pittsburgh courts"')
     expect(html).toContain('aria-pressed="true"')
     expect(html).toContain('Schenley Oval Tennis Courts')
-    expect(html).toContain('href="/rallies?court=schenley"')
+    const rallyLink = [...html.matchAll(/href="([^"]+)"/g)].map(match => match[1].replaceAll('&amp;', '&')).find(href => href.startsWith('/rallies?'))!
+    const rally = new URL(rallyLink, 'https://rally.example')
+    expect(rally.searchParams.get('court')).toBe('schenley')
+    expect(rally.searchParams.get('lat')).toBe(String(courts[0].lat))
+    expect(rally.searchParams.get('lng')).toBe(String(courts[0].lng))
+    expect(rally.searchParams.get('placeSource')).toBe('featured')
+    expect(rally.searchParams.get('address')).toBe(courts[0].area)
+    expect(html).toContain('https://pittsburgh.recdesk.com/Community/Facility')
     expect(html).toContain('rel="noopener noreferrer"')
   })
 

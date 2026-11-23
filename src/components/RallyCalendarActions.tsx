@@ -1,7 +1,7 @@
 import { useId, useRef, useState } from 'react'
-import { CalendarDays, Download, ExternalLink } from 'lucide-react'
+import { CalendarDays, ExternalLink } from 'lucide-react'
 import type { RallySession, RSVPStatus } from '@/lib/rally'
-import { buildCalendarEvent, buildGoogleCalendarUrl, calendarTimeZone, canDownloadCalendar } from '@/lib/rally-calendar'
+import { buildGoogleCalendarUrl, calendarTimeZone, canDownloadCalendar } from '@/lib/rally-calendar'
 import { GOOGLE_CALENDAR_DIRECT_SAVE_ENABLED } from '@/lib/calendar-feature-flags'
 import { disconnectCalendarGoogle, saveGoogleCalendarEvent, type GoogleCalendarSaveResult } from '@/lib/google-calendar-save'
 
@@ -49,23 +49,17 @@ export function RallyCalendarActions({ session, invitationUrl, userId, response 
   const helpId = useId()
   const eligible = canDownloadCalendar(session, userId, response)
   const cancelled = session.status === 'cancelled' && Boolean(userId) && (session.hostId === userId || response === 'going')
-  const event = eligible ? buildCalendarEvent(session, invitationUrl) : cancelled
-    ? buildCalendarEvent(session, invitationUrl, undefined, { method: 'CANCEL' }) : null
   const timeZone = calendarTimeZone()
   const googleUrl = eligible ? buildGoogleCalendarUrl(session, invitationUrl, timeZone) : null
-  if (!event) return null
+  if (cancelled) return <p className="text-xs leading-relaxed text-white/75">This session is cancelled. Existing calendar copies do not update automatically.</p>
+  if (!googleUrl) return null
   return <div className="basis-full space-y-2" aria-label="Calendar options">
     <div className="flex flex-wrap gap-2">
       {googleUrl && <a href={googleUrl} target="_blank" rel="noopener noreferrer" aria-describedby={helpId} className={action}>
         <CalendarDays size={16} aria-hidden />Add to Google Calendar<ExternalLink size={13} aria-hidden />
       </a>}
-      <a download={cancelled ? 'rallycircle-cancellation.ics' : 'rallycircle-session.ics'} href={`data:text/calendar;charset=utf-8,${encodeURIComponent(event)}`} className={`${action} border-transparent text-white/80`} aria-describedby={helpId}>
-        <Download size={15} aria-hidden />Download .ics
-      </a>
     </div>
-    <p id={helpId} className="text-xs leading-relaxed text-white/75">{cancelled
-      ? 'This session is cancelled. Import the cancellation file to update a previously exported event.'
-      : `Google Calendar opens in a new tab. Review the event and select Save. Times use ${timeZone}. Download .ics for Apple Calendar, Outlook and other apps.`}</p>
+    <p id={helpId} className="text-xs leading-relaxed text-white/75">Google Calendar opens in a new tab. Review the event and select Save. Times use {timeZone}.</p>
     {GOOGLE_CALENDAR_DIRECT_SAVE_ENABLED && eligible && googleUrl && <DirectSave key={`${invitationUrl}:${JSON.stringify(session)}`} session={session} invitationUrl={invitationUrl} />}
   </div>
 }

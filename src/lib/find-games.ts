@@ -1,5 +1,5 @@
 /**
- * Find Games Near Me — pure filtering over live session records.
+ * Find Games — pure filtering over live session records in any city.
  *
  * Design choice (documented, deliberate): this is a small-scale filtered
  * experience over the records the client already syncs (`useQuery`), not a
@@ -20,6 +20,7 @@
 
 import { haversineMiles, isValidLatLng, matchesArea, normalizePlaceName, type LatLng } from './geo.ts'
 import { groupSessionRsvps, type Level, type RallyRSVP, type RallySession } from './rally.ts'
+import { parseRallyPlace } from './rally-place.ts'
 
 export type GameFormat = 'any' | 'singles' | 'doubles' | 'practice'
 export type GameSort = 'soonest' | 'nearest'
@@ -116,6 +117,7 @@ export function filterGames(
   }
   const annotated: AnnotatedGame[] = []
   for (const { recordId, data: session } of sessions) {
+    const selectedPlace = parseRallyPlace(session.courtPlace)
     const startMs = Date.parse(session.startsAt)
     if (!Number.isFinite(startMs)) continue
     const cancelled = session.status === 'cancelled'
@@ -123,7 +125,7 @@ export function filterGames(
     if (cancelled && !filters.showCancelled) continue
     if (past && !filters.showPast) continue
     if (terms.length) {
-      const text = normalizePlaceName(`${session.title} ${session.court} ${session.location}`)
+      const text = normalizePlaceName(`${session.title} ${session.court} ${session.location} ${selectedPlace?.address ?? ''}`)
       if (!terms.every(term => text.includes(term))) continue
     }
     if (filters.area && !matchesArea(`${session.court} ${session.location}`, filters.area)) continue
@@ -138,10 +140,11 @@ export function filterGames(
     if (filters.availability === 'spots' && (full || cancelled || past)) continue
     if (filters.availability === 'waitlist' && (!full || cancelled || past)) continue
 
-    // Keep distance unknown when a court name is ambiguous. Use locality
-    // when available, and never geocode a user's free-text session fields.
+    // Prefer a validated saved pin. Legacy name matching keeps distance
+    // unknown when ambiguous and never geocodes free-text session fields.
     let distanceMiles: number | null = null
-    if (userLocation) {
+    if (userLocation && selectedPlace) distanceMiles = haversineMiles(userLocation, selectedPlace)
+    if (userLocation && !selectedPlace) {
       const courtName = normalizePlaceName(session.court)
       const courtTokens = new Set(
         courtName.split(/[^a-z0-9]+/).filter(token => token.length >= 6 && !COURT_NAME_STOPWORDS.has(token)),

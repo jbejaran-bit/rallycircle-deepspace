@@ -33,6 +33,7 @@ import type { RallySession } from '../lib/rally.js'
 import type { Env } from '../../worker.js'
 import { createRallyAction } from './create-rally-action.js'
 import { rallyCommandAction, RallyCommandRoom, schedulingAction } from './rally-command-room.js'
+import { serializeRallyPlace, type RallyPlace } from '../lib/rally-place.js'
 
 type Row = { recordId: string; createdAt: number; data: Record<string, unknown> }
 
@@ -395,6 +396,21 @@ describe('item 7e — retry idempotency, cancel/re-create, distinct drafts, seri
     const ids = [sameTimeDifferentTitle, sameTimeDifferentCourt, differentTime, differentHost]
       .map(r => (r as unknown as { data: { recordId: string } }).data.recordId)
     expect(new Set(ids).size).toBe(4)
+  })
+
+  it('persists selected coordinates, deduplicates equivalent JSON and distinguishes different meeting points', async () => {
+    const harness = createHarness()
+    const place: RallyPlace = { lat: 48.8566, lng: 2.3522, id: 'osm:way/45', name: 'Public courts', address: 'Paris, France', source: 'osm' }
+    const input = { ...draft(), courtPlace: serializeRallyPlace(place) }
+    const first = await harness.createRally('host', input)
+    const retry = await harness.createRally('host', { ...input, courtPlace: JSON.stringify({ source: place.source, address: place.address, id: place.id, name: place.name, lng: place.lng, lat: place.lat }) })
+    expect(first).toEqual(retry)
+    expect(harness.sessions.size).toBe(1)
+    expect([...harness.sessions.values()][0].data.courtPlace).toBe(input.courtPlace)
+    const other = await harness.createRally('host', { ...input, courtPlace: serializeRallyPlace({ ...place, lat: 48.8567 }) })
+    expect(other.success).toBe(true)
+    expect(harness.sessions.size).toBe(2)
+    expect(other).not.toEqual(first)
   })
 
   it('series creation and occurrence generation still work (regression guard)', async () => {
