@@ -1,5 +1,9 @@
 import { findCourt, type Court } from '@/lib/courts'
 import EditRallyDetails from '@/components/EditRallyDetails'
+import RallyLocationField from '@/components/RallyLocationField'
+import RallyPlacePreview from '@/components/RallyPlacePreview'
+import { placePrefill } from '@/lib/rally-place-selection'
+import { serializeRallyPlace } from '@/lib/rally-place'
 import { PlayerIdentity } from '@/components/PlayerIdentity'
 import { ConfirmModal, Dialog, DialogClose, DialogContent, DialogTitle, DialogTrigger } from '@/components/ui'
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
@@ -79,10 +83,11 @@ function ReadinessPanel({ confirmed, target, status, error, cancelled, full, for
   )
 }
 
-function CreateSession({ userId, onCreated, onDismissEntry, selectedCourt, prefillCourt, prefillArea, startOpen }: {
+function CreateSession({ userId, onCreated, onDismissEntry, selectedCourt, prefillCourt, prefillArea, prefillPlace = '', startOpen }: {
   startOpen: boolean
   prefillCourt?: string
   prefillArea?: string
+  prefillPlace?: string
   userId: string
   onCreated: (id: string) => void
   onDismissEntry: () => void
@@ -92,7 +97,7 @@ function CreateSession({ userId, onCreated, onDismissEntry, selectedCourt, prefi
   const { createConfirmed: createChannel } = useMutations<Channel>('channels')
   const entryCourt = selectedCourt?.name ?? prefillCourt ?? ''
   const entryArea = selectedCourt?.area ?? prefillArea ?? ''
-  const entry = startOpen || entryCourt ? JSON.stringify([entryCourt, entryArea]) : null
+  const entry = startOpen || entryCourt ? JSON.stringify([entryCourt, entryArea, prefillPlace]) : null
   const [open, setOpen] = useState(entry !== null)
   const [previousEntry, setPreviousEntry] = useState(entry)
   const publishing = useRef(false)
@@ -109,6 +114,7 @@ function CreateSession({ userId, onCreated, onDismissEntry, selectedCourt, prefi
   const [title, setTitle] = useState('')
   const [court, setCourt] = useState(entryCourt)
   const [location, setLocation] = useState(entryArea)
+  const [courtPlace, setCourtPlace] = useState(prefillPlace)
   const [startsAt, setStartsAt] = useState('')
   const [durationMinutes, setDurationMinutes] = useState(90)
   const [targetPlayers, setTargetPlayers] = useState(4)
@@ -126,6 +132,7 @@ function CreateSession({ userId, onCreated, onDismissEntry, selectedCourt, prefi
       if (entryCourt || entryArea) {
         setCourt(entryCourt)
         setLocation(entryArea)
+        setCourtPlace(prefillPlace)
       }
     }
   }
@@ -135,8 +142,10 @@ function CreateSession({ userId, onCreated, onDismissEntry, selectedCourt, prefi
     const pad = (n: number) => String(n).padStart(2, '0')
     setFormat('Doubles')
     setTitle('Weekend doubles & rally practice')
-    setCourt('Schenley Park Tennis Courts')
-    setLocation('Pittsburgh, PA')
+    const sampleCourt = findCourt('schenley')!
+    setCourt(sampleCourt.name)
+    setLocation(sampleCourt.area)
+    setCourtPlace(serializeRallyPlace({ id: sampleCourt.id, name: sampleCourt.name, address: sampleCourt.area, lat: sampleCourt.lat, lng: sampleCourt.lng, source: 'featured' }))
     setStartsAt(`${sampleTime.getFullYear()}-${pad(sampleTime.getMonth() + 1)}-${pad(sampleTime.getDate())}T${pad(sampleTime.getHours())}:${pad(sampleTime.getMinutes())}`)
     setDurationMinutes(90)
     setTargetPlayers(4)
@@ -153,7 +162,7 @@ function CreateSession({ userId, onCreated, onDismissEntry, selectedCourt, prefi
       return
     }
     const candidate = {
-      format, title: title.trim(), court: court.trim(), location: location.trim(),
+      format, title: title.trim(), court: court.trim(), location: location.trim(), courtPlace,
       startsAt: start.toISOString(),
       durationMinutes, targetPlayers, capacity, level, notes: notes.trim(),
     }
@@ -191,7 +200,7 @@ function CreateSession({ userId, onCreated, onDismissEntry, selectedCourt, prefi
       }
       setFormat('Practice')
       setCapacity(undefined)
-      setTitle(''); setCourt(''); setLocation(''); setStartsAt(''); setNotes('')
+      setTitle(''); setCourt(''); setLocation(''); setCourtPlace(''); setStartsAt(''); setNotes('')
       setOpen(false)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not create session. Try again.')
@@ -241,10 +250,7 @@ function CreateSession({ userId, onCreated, onDismissEntry, selectedCourt, prefi
             <fieldset disabled={pending} className="min-w-0 space-y-4">
             <label className="block text-xs font-medium text-white/75">Format<select className={`${field} mt-1.5`} value={format} onChange={e => setFormat(e.target.value as SessionFormat)}>{SESSION_FORMATS.map(option => <option key={option}>{option}</option>)}</select></label>
             <label className="block text-xs font-medium text-white/75">Session title<input ref={titleInput} required maxLength={72} className={`${field} mt-1.5`} placeholder="Sunday doubles & rallies" value={title} onChange={e => setTitle(e.target.value)}/></label>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <label className="block text-xs font-medium text-white/75">Court<input required maxLength={100} className={`${field} mt-1.5`} placeholder="Schenley Park" value={court} onChange={e => setCourt(e.target.value)}/></label>
-              <label className="block text-xs font-medium text-white/75">Area<input required maxLength={100} className={`${field} mt-1.5`} placeholder="Pittsburgh, PA" value={location} onChange={e => setLocation(e.target.value)}/></label>
-            </div>
+            <RallyLocationField court={court} location={location} courtPlace={courtPlace} disabled={pending} onChange={next => { setCourt(next.court); setLocation(next.location); setCourtPlace(next.courtPlace) }} />
             <label className="block text-xs font-medium text-white/75">Date & local time<input required type="datetime-local" className={`${field} mt-1.5`} value={startsAt} onChange={e => setStartsAt(e.target.value)}/></label>
             <p className="text-xs text-white/70">Times are entered in {timezone.replaceAll("_", " ")}.</p>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -438,6 +444,7 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
       ))}
     </nav>
     <div className="space-y-8 p-5 sm:p-7">
+      <RallyPlacePreview courtPlace={session.courtPlace} />
       <div id="rally-attendance" tabIndex={-1} className="scroll-mt-4 space-y-4">
         <ReadinessPanel confirmed={going} target={session.targetPlayers} status={rsvpStatus} error={rsvpError} cancelled={cancelled} full={full} format={session.format} />
         <section aria-labelledby="rally-players-title">
@@ -478,7 +485,7 @@ function SessionDetail({ session, sessionId, userId, sessionRsvps, rsvpStatus, r
           </div>
         )}
         {!cancelled && !session.matchScore && session.hostId === userId && (
-          <EditRallyDetails key={sessionId} sessionId={sessionId} title={session.title} notes={session.notes ?? ''} />
+          <EditRallyDetails key={sessionId} sessionId={sessionId} title={session.title} notes={session.notes ?? ''} court={session.court} location={session.location} courtPlace={session.courtPlace} />
         )}
         {!cancelled&&session.hostId===userId&&<button type="button" disabled={busy} onClick={() => setConfirmCancel(true)} className="min-h-11 text-sm text-rose-300/75 underline underline-offset-4 hover:text-rose-200">Cancel my session</button>}
         {busy && <p role="status" className="text-sm text-white/75">Saving rally changes…</p>}
@@ -543,6 +550,7 @@ export default function RalliesPage() {
   const activeId = searchParams.get('session')
   const { hash } = useLocation()
   const selectedCourt = findCourt(searchParams.get('court'))
+  const prefillPlace = placePrefill(searchParams, selectedCourt)
   function chooseSession(id: string | null) {
     setSearchParams(current => {
       const next = new URLSearchParams(current)
@@ -552,6 +560,7 @@ export default function RalliesPage() {
         next.delete('court')
         next.delete('courtName')
         next.delete('courtArea')
+        for (const field of ['lat', 'lng', 'placeId', 'placeSource', 'address']) next.delete(field)
       }
       else next.delete('session')
       return next
@@ -560,7 +569,7 @@ export default function RalliesPage() {
   function dismissCreationEntry() {
     setSearchParams(current => {
       const next = new URLSearchParams(current)
-      for (const field of ['create', 'court', 'courtName', 'courtArea']) next.delete(field)
+      for (const field of ['create', 'court', 'courtName', 'courtArea', 'lat', 'lng', 'placeId', 'placeSource', 'address']) next.delete(field)
       return next
     }, { replace: true })
   }
@@ -600,7 +609,7 @@ export default function RalliesPage() {
           <h1 className="text-3xl font-semibold leading-tight tracking-[-0.02em] sm:text-4xl">Rally sessions</h1>
           <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">Set a time to play, share the invitation, and check who’s coming.</p>
         </div>
-        <CreateSession startOpen={searchParams.get('create') === '1'} userId={signedInId} onCreated={chooseSession} onDismissEntry={dismissCreationEntry} selectedCourt={selectedCourt} prefillCourt={searchParams.get('courtName')?.trim().slice(0, 100)} prefillArea={searchParams.get('courtArea')?.trim().slice(0, 100)}/>
+        <CreateSession startOpen={searchParams.get('create') === '1'} userId={signedInId} onCreated={chooseSession} onDismissEntry={dismissCreationEntry} selectedCourt={selectedCourt} prefillCourt={searchParams.get('courtName')?.trim().slice(0, 100)} prefillArea={searchParams.get('courtArea')?.trim().slice(0, 100)} prefillPlace={prefillPlace}/>
       </div>
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(280px,.7fr)_minmax(0,1.3fr)]">
         <section aria-labelledby="sessions-heading" className={`${surface} min-w-0 p-4 sm:p-5`}>

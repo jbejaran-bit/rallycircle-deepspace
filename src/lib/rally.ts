@@ -1,3 +1,5 @@
+import { normalizeCourtPlace, parseRallyPlace } from './rally-place.ts'
+
 export type Level = 'All levels' | 'Beginner' | 'Intermediate' | 'Advanced'
 export const SESSION_FORMATS = ['Singles', 'Doubles', 'Practice'] as const
 export type SessionFormat = typeof SESSION_FORMATS[number]
@@ -13,6 +15,8 @@ export interface RallySession {
   title: string
   court: string
   location: string
+  /** Optional validated JSON; missing/null/empty preserves legacy free-text locations. */
+  courtPlace?: string
   startsAt: string
   durationMinutes: number
   targetPlayers: number
@@ -41,6 +45,9 @@ export function validateSession(input: Omit<RallySession, 'hostId' | 'chatChanne
   if (typeof input.title !== 'string' || !input.title.trim() || input.title.trim().length > 72) return 'Use a title between 1 and 72 characters.'
   if (typeof input.court !== 'string' || !input.court.trim() || input.court.trim().length > 100) return 'Enter a court name (up to 100 characters).'
   if (typeof input.location !== 'string' || !input.location.trim() || input.location.trim().length > 100) return 'Enter a location (up to 100 characters).'
+  if (normalizeCourtPlace(input.courtPlace) === null) return 'Choose a location with valid coordinates and place details.'
+  const place = parseRallyPlace(input.courtPlace)
+  if (place && place.name !== input.court.trim()) return 'Select the court again after changing its name.'
   const time = Date.parse(input.startsAt)
   if (!Number.isFinite(time) || time <= now) return 'Choose a future date and time.'
   if (![60, 90, 120, 150].includes(input.durationMinutes)) return 'Select a valid session duration.'

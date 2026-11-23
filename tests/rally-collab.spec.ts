@@ -1,4 +1,5 @@
 /** Run via `npx deepspace test run tests/rally-collab.spec.ts` after configuring two CLI test accounts.
+ * Not run against live services in the location-UX follow-up; `test:ui` is separate fixture evidence.
  * This is an integration test against real DeepSpace services, not mocked.
  * A cancelled __test record is retained for audit: no delete endpoint is exposed.
  */
@@ -22,6 +23,7 @@ test('shared link and live readiness update across two accounts', async ({ users
     })
   })
   await alice.page.goto('/courts')
+  await alice.page.getByRole('tab', { name: 'Featured Pittsburgh courts' }).click()
   await bob.page.setViewportSize({ width: 390, height: 844 })
   try {
     await expect(alice.page.getByRole('main')).toHaveCount(1)
@@ -35,12 +37,12 @@ test('shared link and live readiness update across two accounts', async ({ users
     await expect(alice.page.getByRole('button', { name: /Frick Park Clay Courts/ })).toHaveCount(0)
     await alice.page.getByRole('button', { name: /Highland Park Tennis Courts/ }).click()
     await expect(alice.page.getByRole('link', { name: 'Open court calendar' })).toHaveAttribute('href', /pittsburgh\.recdesk\.com/)
-    await alice.page.getByRole('link', { name: 'Plan a Rally here' }).click()
+    await alice.page.getByRole('link', { name: /Plan a rally here/i }).click()
     await expect(alice.page.getByRole('main')).toHaveCount(1)
     const createDialog = alice.page.getByRole('dialog', { name: 'Create a session' })
     await expect(createDialog.getByLabel('Session title')).toBeFocused()
-    await expect(alice.page.getByPlaceholder('Schenley Park')).toHaveValue('Highland Park Tennis Courts')
-    await expect(alice.page.getByPlaceholder('Pittsburgh, PA')).toHaveValue('Stanton Avenue, Pittsburgh')
+    await expect(createDialog.getByLabel('Court', { exact: true })).toHaveValue('Highland Park Tennis Courts')
+    await expect(createDialog.getByLabel('Area', { exact: true })).toHaveValue('Stanton Avenue, Pittsburgh')
     await createDialog.getByLabel('Session title').fill('Draft title')
     // A same-route navigation updates the court without remounting the
     // creation form or silently losing the rest of the draft.
@@ -58,9 +60,9 @@ test('shared link and live readiness update across two accounts', async ({ users
     await expect(alice.page).toHaveURL(url => !url.searchParams.has('courtName'))
     await alice.page.getByRole('button', { name: 'New session' }).press('Enter')
     await expect(createDialog.getByLabel('Session title')).toHaveValue('Draft title')
-    await alice.page.getByPlaceholder('Sunday doubles & rallies').fill(title)
-    await alice.page.getByPlaceholder('Schenley Park').fill('Test court')
-    await alice.page.getByPlaceholder('Pittsburgh, PA').fill('Test location')
+    await createDialog.getByLabel('Session title', { exact: true }).fill(title)
+    await createDialog.getByLabel('Court', { exact: true }).fill('Test court')
+    await createDialog.getByLabel('Area', { exact: true }).fill('Test location')
     await alice.page.getByLabel('Format', { exact: true }).selectOption('Singles')
     await alice.page.getByLabel('Target players').selectOption('3')
     await alice.page.getByLabel('Maximum confirmed players').selectOption('3')
@@ -92,7 +94,7 @@ test('shared link and live readiness update across two accounts', async ({ users
     await expect(bob.page.getByRole('button', { name: 'Edit rally details' })).toHaveCount(0)
     await alice.page.getByRole('button', { name: 'Edit rally details' }).click()
     const edit = alice.page.getByRole('dialog', { name: 'Edit rally details' })
-    await edit.getByLabel('Notes').fill('Bring a fresh can of tennis balls.')
+    await edit.getByRole('textbox', { name: 'Notes', exact: true }).fill('Bring a fresh can of tennis balls.')
     await edit.getByRole('button', { name: 'Save details' }).click()
     await expect(alice.page.getByRole('status').filter({ hasText: 'Rally details saved.' })).toBeVisible()
     await expect(bob.page.getByText('Bring a fresh can of tennis balls.', { exact: true })).toBeVisible()
@@ -132,18 +134,15 @@ test('shared link and live readiness update across two accounts', async ({ users
     await alice.page.getByRole('button', { name: 'Send message' }).click()
     await expect(bob.page.getByText('Bring extra balls')).toBeVisible({ timeout: 30_000 })
 
-    const calendar = bob.page.getByRole('link', { name: 'Add to calendar' })
-    const downloadPromise = bob.page.waitForEvent('download')
-    await calendar.click()
-    const download = await downloadPromise
-    expect(download.suggestedFilename()).toBe('rallycircle-session.ics')
-    const calendarStream = await download.createReadStream()
-    const chunks: Buffer[] = []
-    for await (const chunk of calendarStream) chunks.push(Buffer.from(chunk))
-    const event = Buffer.concat(chunks).toString('utf8').replace(/\r\n /g, '')
-    expect(event).toContain('BEGIN:VEVENT')
-    expect(event).toContain(`SUMMARY:${title}`)
-    expect(event).toContain('LOCATION:Test court\\, Test location')
+    const calendar = bob.page.getByRole('link', { name: 'Add to Google Calendar', exact: true })
+    await expect(calendar).toBeVisible()
+    const event = new URL((await calendar.getAttribute('href'))!)
+    expect(event.origin).toBe('https://calendar.google.com')
+    expect(event.searchParams.get('action')).toBe('TEMPLATE')
+    expect(event.searchParams.get('text')).toBe(title)
+    expect(event.searchParams.get('location')).toBe('Test court, Test location')
+    expect(event.searchParams.get('details')).toContain(`/rallies?session=${encodeURIComponent(sessionId)}`)
+    await expect(bob.page.getByRole('link', { name: 'Download .ics', exact: true })).toHaveCount(0)
     const hostScoreboard = alice.page.getByRole('region', { name: 'Match scoreboard' })
     const team1 = hostScoreboard.getByRole('group', { name: 'Side 1', exact: true }).getByLabel('Player 1')
     const team2 = hostScoreboard.getByRole('group', { name: 'Side 2', exact: true }).getByLabel('Player 1')

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { discoveryAction, filterGames, gameStatusLabel, type KnownCourtLocation } from './find-games'
 import type { RallyRSVP, RallySession } from './rally'
+import { serializeRallyPlace } from './rally-place'
 
 const NOW = Date.parse('2026-11-20T12:00:00Z')
 const SCHENLEY: KnownCourtLocation = { name: 'Schenley Oval Tennis Courts', lat: 40.43295667, lng: -79.94131769 }
@@ -45,6 +46,18 @@ const rsvps: RallyRSVP[] = [
 ]
 
 const baseOpts = { now: NOW, knownCourts: [SCHENLEY, HIGHLAND] }
+
+it('uses stored coordinates in other cities before legacy court-name matching', () => {
+  const courtPlace = serializeRallyPlace({ id: 'osm:way/12', source: 'osm', name: 'Community courts', address: 'Sydney, New South Wales, Australia', lat: -33.8688, lng: 151.2093 })
+  const games = filterGames([session({ recordId: 'sydney', court: 'Community courts', location: 'Sydney', courtPlace })], [], { maxDistanceMiles: 1 }, { now: NOW, userLocation: { lat: -33.8688, lng: 151.2093 } })
+  expect(games).toHaveLength(1)
+  expect(games[0].distanceMiles).toBe(0)
+})
+
+it('never treats invalid stored coordinates as a measured distance', () => {
+  const courtPlace = JSON.stringify({ id: 'bad', source: 'osm', name: 'Community courts', address: 'Sydney', lat: 1000, lng: 151 })
+  expect(filterGames([session({ recordId: 'invalid-pin', court: 'Community courts', location: 'Sydney', courtPlace })], [], {}, { now: NOW, userLocation: { lat: -33.8688, lng: 151.2093 } })[0].distanceMiles).toBeNull()
+})
 
 describe('filterGames defaults', () => {
   it('excludes cancelled and past sessions by default', () => {

@@ -1,8 +1,8 @@
 /**
- * Pittsburgh fallback courts — unchanged data from the existing finder
+ * Featured Pittsburgh courts — unchanged data from the existing finder
  * (City of Pittsburgh "Courts and Rinks" dataset; RecDesk is the authority
  * for booking). Kept verbatim so the existing tab keeps working exactly as
- * before; dynamic discovery is additive, in the Nearby tab.
+ * before; general OpenStreetMap discovery is the default court finder.
  */
 
 import { haversineMiles, type LatLng } from './geo'

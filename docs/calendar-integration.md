@@ -15,9 +15,9 @@ No integration invocation, OAuth consent, event creation, purchase or production
 
 The session model stores an absolute ISO timestamp but no court IANA time zone. The link uses absolute UTC dates and `ctz` set to the viewer's browser time zone, matching the existing session display; an invalid zone falls back to UTC. Switching viewers' zones never changes the event instant or elapsed duration. Court time zones are not inferred from a location string.
 
-**Download .ics** remains the secondary option for Apple Calendar, Outlook and other calendar apps. Both formats use shared validation and descriptions. Cancelled sessions have no Google create link; eligible players can still download the existing iCalendar cancellation with its stable UID and sequence. These are one-time exports, not a calendar subscription: subsequent changes or cancellations do not automatically update events added through Google’s editor.
+The court-location follow-up removes the visible **Download .ics** action from session details. Local iCalendar generation and cancellation helpers remain available to existing code and tests, with stable UID/sequence behavior, but are not exposed as session actions. Cancelled sessions have no Google create link and explain that existing calendar copies do not update automatically. Google editor additions are one-time copies, not a calendar subscription.
 
-Calendar actions retain the existing host/confirmed-player eligibility. Invalid or floating dates, nonpositive or nonfinite durations and unsafe invitation URLs produce no event. Notes are escaped in `.ics`; Google values are encoded with URLSearchParams.
+The Google action retains the existing host/confirmed-player eligibility. Invalid or floating dates, nonpositive or nonfinite durations and unsafe invitation URLs produce no event. The retained iCalendar utility escapes notes; Google values are encoded with URLSearchParams.
 
 ## Direct OAuth save: implemented and disabled
 

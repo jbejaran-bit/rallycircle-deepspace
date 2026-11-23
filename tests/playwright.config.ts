@@ -21,7 +21,8 @@ const BASE_URL = deployedUrl ?? `http://127.0.0.1:${PORT}`
 export default defineConfig({
   testDir: '.',
   testMatch: '**/*.spec.ts',
-  testIgnore: ['public-navigation.spec.ts', 'product-public.spec.ts'],
+  // Fixture-only specs belong to test:ui and must never target app services.
+  testIgnore: ['public-navigation.spec.ts', 'product-public.spec.ts', 'ui-polish.spec.ts', 'location-ux.spec.ts'],
   timeout: 30_000,
   retries: 0,
   use: {

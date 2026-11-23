@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowUpRight, LocateFixed, MapPin, Navigation, Search } from 'lucide-react'
+import { Check, LocateFixed, MapPin, Navigation, Search } from 'lucide-react'
 import PittsburghCourts from '@/components/PittsburghCourts'
 import CourtDiscoveryMap, { CourtMapLayout } from '@/components/CourtDiscoveryMap'
 import { fetchNearbyCourts, searchPlaces } from '@/lib/court-discovery-client'
 import { clampRadiusKm, DEFAULT_RADIUS_KM, formatDistanceMiles, haversineMiles, RADIUS_OPTIONS_KM, type LatLng } from '@/lib/geo'
 import { requestOneShotLocation } from '@/lib/location'
 import type { DiscoveredCourt, GeocodedPlace } from '@/lib/osm'
+import { googleMapsDirectionsUrl } from '@/lib/rally-place'
 
 const DISCOVERED_STORAGE_KEY = 'rallycircle:discovered-courts'
 
@@ -33,7 +34,7 @@ function CourtAttributes({ court }: { court: DiscoveredCourt }) {
     <dl className="grid grid-cols-2 gap-2 text-sm">
       {rows.map(([label, value]) => (
         <div key={label} className="rounded-lg bg-white/5 px-3 py-2">
-          <dt className="text-[11px] font-bold uppercase tracking-wider text-white/45">{label}</dt>
+          <dt className="text-xs font-semibold uppercase tracking-wider text-white/70">{label}</dt>
           <dd className="mt-0.5 capitalize text-white/85">{value}</dd>
         </div>
       ))}
@@ -79,13 +80,13 @@ function NearbyCourts({ active }: { active: boolean }) {
       setStatus('ready')
       setMessage(
         sorted.length === 0
-          ? 'No tennis courts are mapped in OpenStreetMap within this radius. Try a larger radius or the Pittsburgh courts.'
+          ? 'No tennis courts are mapped in OpenStreetMap within this radius. Try a larger radius or another city or neighbourhood.'
           : `${sorted.length} court${sorted.length === 1 ? '' : 's'} found within ${radius} km (straight-line distance).`,
       )
     } catch (cause) {
       if (signal.aborted) return
       setStatus('error')
-      setMessage(cause instanceof Error ? cause.message : 'Court search failed. You can still browse the Pittsburgh courts.')
+      setMessage(cause instanceof Error ? cause.message : 'Court search failed. Try again or search a different place.')
     }
   }, [startRequest])
 
@@ -117,6 +118,11 @@ function NearbyCourts({ active }: { active: boolean }) {
       return
     }
     const signal = startRequest()
+    setFound([])
+    setSelected(null)
+    setLocation(null)
+    setLocationLabel('')
+    setStatus('idle')
     setPlaces([])
     setSearchingPlaces(true)
     setMessage('Searching for that place…')
@@ -158,7 +164,7 @@ function NearbyCourts({ active }: { active: boolean }) {
         </button>
         <label className="flex items-center gap-2 text-sm text-white/75">
           Radius
-          <select value={radiusKm} disabled={busy} onChange={e => changeRadius(Number(e.target.value))} className="rounded-xl border border-white/15 bg-[#0e1513] px-3 py-2.5 text-sm text-white focus-visible:outline-2 focus-visible:outline-[#d7fc83]">
+          <select value={radiusKm} disabled={busy} onChange={e => changeRadius(Number(e.target.value))} className="min-h-11 rounded-xl border border-[#738078] bg-[#0e1513] px-3 py-2.5 text-base sm:text-sm text-white focus-visible:outline-2 focus-visible:outline-[#d7fc83]">
             {RADIUS_OPTIONS_KM.map(km => <option key={km} value={km}>{km} km</option>)}
           </select>
         </label>
@@ -174,7 +180,7 @@ function NearbyCourts({ active }: { active: boolean }) {
             placeholder="Search by place, e.g. Boston, MA"
             maxLength={200}
             type="search"
-            className="w-full rounded-xl border border-white/15 bg-[#0e1513] px-3.5 py-3 text-sm text-white placeholder:text-white/50 focus-visible:outline-2 focus-visible:outline-[#d7fc83]"
+            className="w-full rounded-xl border border-[#738078] bg-[#0e1513] px-3.5 py-3 text-base sm:text-sm text-white placeholder:text-white/50 focus-visible:outline-2 focus-visible:outline-[#d7fc83]"
           />
         </label>
         <button type="submit" disabled={busy} className="inline-flex items-center gap-2 rounded-xl border border-white/20 px-4 py-3 text-sm font-semibold disabled:opacity-50">
@@ -207,28 +213,29 @@ function NearbyCourts({ active }: { active: boolean }) {
         <CourtMapLayout map={active && <CourtDiscoveryMap courts={found} location={location} label="Nearby tennis courts map" selectedId={selected?.id} onSelect={setSelected} />}
           details={selected && (
               <section className="rounded-2xl border border-white/15 bg-[#141b1a] p-5" aria-label="Selected court">
+                <p className="mb-2 flex items-center gap-2 text-xs font-semibold text-[#d7fc83]"><Check size={14} aria-hidden />Court {found.findIndex(court => court.id === selected.id) + 1} selected</p>
                 <h2 className="break-words text-xl font-bold">{selected.name}</h2>
                 <p className="mt-1 text-sm text-white/70">
                   {selected.locality ?? 'OpenStreetMap'} {location && `· ${formatDistanceMiles(haversineMiles(location, selected))} away (straight line)`}
                 </p>
                 <div className="mt-4"><CourtAttributes court={selected} /></div>
-                <p className="mt-3 text-xs text-white/50">
+                <p className="mt-3 text-xs text-white/70">
                   Check the venue for access and availability before you go.
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2">
                   <a
-                    href={`https://www.openstreetmap.org/directions?to=${selected.lat}%2C${selected.lng}`}
+                    href={googleMapsDirectionsUrl(selected) ?? undefined}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-2 rounded-xl bg-[#d7fc83] px-4 py-3 text-sm font-bold text-[#101a13]"
                   >
-                    <Navigation size={16} /> Directions
+                    <Navigation size={16} aria-hidden /> Get directions
                   </a>
                   <Link
-                    to={`/rallies?courtName=${encodeURIComponent(selected.name)}&courtArea=${encodeURIComponent(selected.locality ?? 'OpenStreetMap')}`}
+                    to={`/rallies?${new URLSearchParams({ create: '1', courtName: selected.name.slice(0, 100), courtArea: (selected.locality ?? locationLabel).slice(0, 100), lat: String(selected.lat), lng: String(selected.lng), placeId: selected.id, placeSource: 'osm', address: selected.locality ?? locationLabel })}`}
                     className="rounded-xl border border-white/20 px-4 py-3 text-sm font-semibold"
                   >
-                    Plan a Rally here
+                    Plan a rally here
                   </Link>
                 </div>
               </section>
@@ -236,9 +243,9 @@ function NearbyCourts({ active }: { active: boolean }) {
             <ul className="space-y-2" aria-label="Nearby courts">
               {found.map((court, index) => (
                 <li key={court.id}>
-                  <button type="button" onClick={() => setSelected(court)} aria-pressed={selected?.id === court.id} className="flex w-full items-center gap-3 rounded-xl border border-white/15 px-3 py-3 text-left text-sm aria-pressed:border-[#d7fc83]">
-                    <MapPin size={16} className="shrink-0 text-[#d7fc83]" />
-                    <span className="min-w-0 flex-1 break-words">{index + 1}. {court.name}</span>
+                  <button type="button" onClick={() => setSelected(court)} aria-pressed={selected?.id === court.id} className="flex min-h-11 w-full items-center gap-3 rounded-xl border border-white/15 px-3 py-3 text-left text-sm aria-pressed:border-[#d7fc83] aria-pressed:bg-[#d7fc83]/[0.06]">
+                    <span aria-hidden className={`grid size-8 shrink-0 place-items-center rounded-full border font-semibold tabular-nums ${selected?.id === court.id ? 'border-[#d7fc83] bg-[#d7fc83] text-[#17231b]' : 'border-white/30 bg-[#24362b] text-white'}`}>{index + 1}</span>
+                    <span className="min-w-0 flex-1 break-words"><span className="sr-only">{index + 1}. </span>{court.name}{selected?.id === court.id && <span className="mt-0.5 block text-xs font-semibold text-[#d7fc83]">Selected</span>}</span>
                     {location && <span className="shrink-0 text-white/65">{formatDistanceMiles(haversineMiles(location, court))}</span>}
                   </button>
                 </li>
@@ -248,11 +255,11 @@ function NearbyCourts({ active }: { active: boolean }) {
       ) : status === 'ready' ? (
         <div className="rounded-2xl border border-dashed border-white/20 p-10 text-center">
           <p className="text-sm font-bold">No courts mapped nearby</p>
-          <p className="mt-2 text-xs leading-relaxed text-white/50">OpenStreetMap coverage varies by area. Try a larger radius, a different place, or the Pittsburgh courts.</p>
+          <p className="mt-2 text-sm leading-relaxed text-white/70">OpenStreetMap coverage varies by area. Try a larger radius or a different city or neighbourhood.</p>
         </div>
       ) : null}
 
-      <p className="text-xs text-white/40">
+      <p className="text-xs leading-relaxed text-white/65">
         Court data © <a className="underline" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a> (ODbL).
         Nearby search uses your shared location once per request. Distances are straight-line estimates.
       </p>
@@ -261,8 +268,8 @@ function NearbyCourts({ active }: { active: boolean }) {
 }
 
 export default function CourtsPage() {
-  const [tab, setTab] = useState<'nearby' | 'pittsburgh'>('pittsburgh')
-  const [nearbyOpened, setNearbyOpened] = useState(false)
+  const [tab, setTab] = useState<'nearby' | 'pittsburgh'>('nearby')
+  const [nearbyOpened, setNearbyOpened] = useState(true)
   function showSource(source: 'nearby' | 'pittsburgh') {
     if (source === 'nearby') setNearbyOpened(true)
     setTab(source)
@@ -272,8 +279,8 @@ export default function CourtsPage() {
     <div className="min-h-screen bg-[#0b110f] text-white">
       <div className="mx-auto max-w-7xl space-y-6 px-4 py-10 sm:px-8">
         <header>
-          <h1 className="text-4xl font-black tracking-tight">Find a court</h1>
-          <p className="mt-2 text-white/70">Discover tennis courts near you through OpenStreetMap, or browse the Pittsburgh courts with official booking links.</p>
+          <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Find a court</h1>
+          <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/75">Search any city or neighbourhood for tennis courts through OpenStreetMap. Organize a rally wherever you play, or explore our featured Pittsburgh collection.</p>
         </header>
         <div className="flex flex-wrap gap-2" role="tablist" aria-label="Court sources" onKeyDown={event => {
           if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
@@ -283,10 +290,10 @@ export default function CourtsPage() {
           event.currentTarget.querySelector<HTMLButtonElement>(`#court-tab-${next}`)?.focus()
         }}>
           {([
-            { id: 'nearby', label: 'Courts near me' },
-            { id: 'pittsburgh', label: 'Pittsburgh courts' },
+            { id: 'nearby', label: 'Search courts' },
+            { id: 'pittsburgh', label: 'Featured Pittsburgh courts' },
           ] as const).map(({ id, label }) => (
-            <button key={id} type="button" role="tab" id={`court-tab-${id}`} aria-controls={`court-source-${id}`} tabIndex={tab === id ? 0 : -1} aria-selected={tab === id} onClick={() => showSource(id)} className={`min-h-11 rounded-full px-4 py-2 focus-visible:outline-2 text-xs font-bold ${tab === id ? 'bg-[#d7fc83] text-[#0e180f]' : 'bg-white/5 text-white/55 hover:bg-white/10'}`}>
+            <button key={id} type="button" role="tab" id={`court-tab-${id}`} aria-controls={`court-source-${id}`} tabIndex={tab === id ? 0 : -1} aria-selected={tab === id} onClick={() => showSource(id)} className={`min-h-11 rounded-xl px-4 py-2 focus-visible:outline-2 text-sm font-semibold ${tab === id ? 'bg-[#d7fc83] text-[#0e180f]' : 'bg-white/5 text-white/75 hover:bg-white/10'}`}>
               {label}
             </button>
           ))}

@@ -10,23 +10,31 @@ const people: Record<string, { id: string; name: string; email: string; role: st
   drew: { id: 'drew', name: 'Drew Ellis', email: 'drew@example.test', role: 'member' },
 }
 const params = new URLSearchParams(location.search)
+const fixturePlace = { id: 'osm:way/101', source: 'osm', name: 'Boston Common Tennis Courts', address: 'Boston, Massachusetts', lat: 42.3548, lng: -71.0692 }
 const session = {
   title: 'Saturday doubles at Schenley', format: 'Doubles', court: 'Schenley Park Tennis Courts',
   location: 'Pittsburgh, PA', startsAt: '2030-06-15T14:00:00.000Z', durationMinutes: 90,
   targetPlayers: 4, capacity: 4, level: 'Intermediate', notes: 'Bring a fresh can of tennis balls. We’ll warm up, then rotate partners.',
   hostId: 'alice', chatChannelId: 'fixture-chat', status: params.has('cancelled') ? 'cancelled' : 'open',
+  ...(params.has('mapped') ? { court: fixturePlace.name, location: fixturePlace.address, courtPlace: JSON.stringify(fixturePlace) } : {}),
 }
 type FixtureRecord = { recordId: string; data: Record<string, unknown>; createdAt: string }
 const row = (recordId: string, data: Record<string, unknown>): FixtureRecord => ({ recordId, data, createdAt: '2030-06-13T16:10:00.000Z' })
 let data: Record<string, FixtureRecord[]> = {
-  sessions: params.has('empty') ? [] : [row('fixture-doubles', session), row('fixture-practice', { ...session, title: 'Evening rally practice', format: 'Practice', startsAt: '2030-06-17T22:00:00.000Z', court: 'Highland Park Tennis Courts', hostId: 'bob', capacity: 6 })],
+  sessions: params.has('empty') ? [] : [row('fixture-doubles', session), row('fixture-practice', { ...session, title: 'Evening rally practice', format: 'Practice', startsAt: '2030-06-17T22:00:00.000Z', court: 'Highland Park Tennis Courts', location: 'Pittsburgh, PA', courtPlace: '', hostId: 'bob', capacity: 6 })],
   rsvps: ['alice', 'bob', 'casey', 'drew'].map(id => row(`rsvp-${id}`, { sessionId: 'fixture-doubles', userId: id, status: 'going' })),
   waitlists: [], polls: [], profiles: [],
   messages: [row('message-1', { channelId: 'fixture-chat', authorId: 'bob', content: 'I’ll bring the balls. See you on court 2!', edited: false }), row('message-2', { channelId: 'fixture-chat', authorId: 'alice', content: 'Perfect. Let’s warm up for ten minutes before we start.', edited: false })],
 }
+if (params.has('persist')) {
+  try { data = JSON.parse(sessionStorage.getItem('rallycircle:location-fixture') ?? 'null') ?? data } catch { /* A fresh fixture remains usable when storage is unavailable. */ }
+}
 let revision = 0
 const listeners = new Set<() => void>()
-const notify = () => { revision++; listeners.forEach(listener => listener()) }
+const notify = () => {
+  if (params.has('persist')) sessionStorage.setItem('rallycircle:location-fixture', JSON.stringify(data))
+  revision++; listeners.forEach(listener => listener())
+}
 function useRevision() { useSyncExternalStore(listener => { listeners.add(listener); return () => listeners.delete(listener) }, () => revision) }
 export const useAuth = () => ({ userId: params.get('user') ?? 'alice', isSignedIn: true, isLoaded: true })
 export const useUser = () => ({ user: people[params.get('user') ?? 'alice'], loading: false })
@@ -74,6 +82,12 @@ export function applyFixtureAction(action: string, input: Record<string, unknown
     data = { ...data, sessions: [...data.sessions, row('fixture-created', { ...input, hostId: userId, status: 'open', chatChannelId: '' })] }
     notify(); return 'fixture-created'
   }
+  if (input.operation === 'editDetails') {
+    const patch = typeof input.details === 'object' && input.details !== null ? input.details : input
+    const { title, notes, court, location, courtPlace } = patch as Record<string, unknown>
+    data = { ...data, sessions: data.sessions.map(record => record.recordId === input.sessionId
+      ? { ...record, data: { ...record.data, title, notes, court, location, courtPlace } } : record) }
+  }
   const membership = (record: FixtureRecord) => record.data.sessionId === input.sessionId && record.data.userId === userId
   if (input.operation === 'rsvp') data = { ...data, rsvps: [...data.rsvps.filter(record => !membership(record)), row(`rsvp-${userId}`, { sessionId: input.sessionId, userId, status: input.status })] }
   if (input.operation === 'withdraw') data = { ...data, rsvps: data.rsvps.filter(record => !membership(record)) }
@@ -84,4 +98,4 @@ export function applyFixtureAction(action: string, input: Record<string, unknown
 
 // Keep Playwright on the same module instance consumed by the React hooks.
 // Importing a bare SDK alias again can create a separate optimizer module.
-Object.assign(globalThis, { __rallycircleFixtureAction: applyFixtureAction })
+Object.assign(globalThis, { __rallycircleFixtureAction: applyFixtureAction, __rallycircleFixtureRecords: () => data })

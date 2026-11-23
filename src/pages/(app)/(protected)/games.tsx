@@ -147,8 +147,8 @@ export function GamesDiscovery({
         <header className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-[#d7fc83]">Find your hitting partners</p>
-            <h1 className="text-3xl font-semibold tracking-[-0.02em] sm:text-4xl">Find games near me</h1>
-            <p className="mt-3 max-w-xl text-sm leading-relaxed text-white/75">Find a rally to join, or get a group together for a time that works for you.</p>
+            <h1 className="text-3xl font-semibold tracking-[-0.02em] sm:text-4xl">Find a game</h1>
+            <p className="mt-3 max-w-xl text-sm leading-relaxed text-white/75">Find rallies in any city by court or area, or get your own group together.</p>
           </div>
           <Link className={button} to="/rallies?create=1">Create a rally</Link>
         </header>

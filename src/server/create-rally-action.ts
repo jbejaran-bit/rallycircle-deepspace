@@ -2,12 +2,14 @@ import type { ActionHandler } from 'deepspace/worker'
 import { z } from 'zod'
 import type { Env } from '../../worker.js'
 import { SESSION_FORMATS, validateSession } from '../lib/rally.js'
+import { MAX_COURT_PLACE_LENGTH, normalizeCourtPlace } from '../lib/rally-place.js'
 
 const rallyDraft = z.object({
   format: z.enum(SESSION_FORMATS).optional(),
   title: z.string().trim().max(72),
   court: z.string().trim().max(100),
   location: z.string().trim().max(100),
+  courtPlace: z.string().max(MAX_COURT_PLACE_LENGTH).optional(),
   startsAt: z.iso.datetime(),
   durationMinutes: z.number(),
   targetPlayers: z.number(),
@@ -28,6 +30,7 @@ export const createRallyAction: ActionHandler<Env> = async ({ userId, params, en
   const draft = { ...parsed.data, notes: parsed.data.notes ?? '' }
   const problem = validateSession(draft)
   if (problem) return { success: false, error: problem }
+  if (draft.courtPlace !== undefined) draft.courtPlace = normalizeCourtPlace(draft.courtPlace)!
   // Creation is serialized per host in a dedicated command room
   // (`rally:<appId>:user:<userId>`): the room returns the existing open
   // session when the draft exactly matches one, so a double-submit or a

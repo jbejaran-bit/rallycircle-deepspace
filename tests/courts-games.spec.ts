@@ -1,10 +1,10 @@
 /**
  * Playwright smoke tests for court discovery and Find Games.
  *
- * STATUS: written, NOT RUN. They need `deepspace test run` (two test
- * accounts + a local dev server), which was unavailable in this
- * environment — no DeepSpace CLI login exists here and the worktree was
- * never created. Do not claim these pass until they are executed.
+ * STATUS: NOT RUN in the location-UX follow-up. These require an explicitly
+ * configured isolated app and test accounts through `deepspace test run`.
+ * The local `test:ui` fixture suite is separate evidence. Do not claim these
+ * live authenticated checks pass until they are executed.
  *
  * Design: the specs never touch the live Overpass/Nominatim endpoints.
  * `/api/courts/nearby` and `/api/geocode` are intercepted with fixture
@@ -32,6 +32,7 @@ test.describe('court discovery', () => {
     const [{ page }] = await users(1)
     await page.setViewportSize({ width: 375, height: 820 })
     await page.goto('/courts')
+    await page.getByRole('tab', { name: 'Featured Pittsburgh courts' }).click()
     const map = page.getByRole('region', { name: 'Pittsburgh tennis court map' })
     const list = page.getByRole('list', { name: 'Pittsburgh courts' })
     const selected = page.getByRole('region', { name: 'Selected court' })
@@ -55,7 +56,7 @@ test.describe('court discovery', () => {
       }
     })
     await page.goto('/courts')
-    await page.getByRole('tab', { name: 'Courts near me' }).click()
+    await page.getByRole('tab', { name: 'Search courts', exact: true }).click()
     await page.getByRole('button', { name: /find courts near me/i }).click()
     await expect(page.getByText('2 courts found within 10 km')).toBeVisible()
     await expect(page.getByRole('region', { name: /nearby tennis courts map/i })).toBeVisible()
@@ -83,7 +84,7 @@ test.describe('court discovery', () => {
       }
     })
     await page.goto('/courts')
-    await page.getByRole('tab', { name: 'Courts near me' }).click()
+    await page.getByRole('tab', { name: 'Search courts', exact: true }).click()
     await page.getByRole('button', { name: /find courts near me/i }).click()
     await expect(page.getByText(/permission was denied/i)).toBeVisible()
     await page.getByPlaceholder(/search by place/i).fill('Boston, MA')
@@ -101,7 +102,7 @@ test.describe('court discovery', () => {
       }
     })
     await page.goto('/courts')
-    await page.getByRole('tab', { name: 'Courts near me' }).click()
+    await page.getByRole('tab', { name: 'Search courts', exact: true }).click()
     await page.getByRole('button', { name: /find courts near me/i }).click()
     await expect(page.getByText(/Court search failed|unavailable/i)).toBeVisible()
     await expect(page.getByRole('button', { name: 'Retry court search' })).toBeVisible()
@@ -115,7 +116,7 @@ test.describe('find games', () => {
   test('filters combine and an empty result explains itself', async ({ users }) => {
     const [{ page }] = await users(1)
     await page.goto('/games')
-    await page.getByPlaceholder(/e\.g\. Schenley, Oakland/i).fill('Tokyo')
+    await page.getByRole('searchbox', { name: 'Rally title, court or area' }).fill('Tokyo')
     await expect(page.getByText(/No games match these filters/)).toBeVisible()
     await page.getByRole('button', { name: 'Show all upcoming games' }).click()
     await expect(page.getByRole('searchbox', { name: 'Rally title, court or area' })).toHaveValue('')

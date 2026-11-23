@@ -4,8 +4,6 @@ import { SESSION_FORMATS } from '../lib/rally.js'
 const sessionMemberWritableFields = [
   'format',
   'title',
-  'court',
-  'location',
   'durationMinutes',
   'targetPlayers',
   'capacity',
@@ -24,6 +22,9 @@ export const sessionsSchema: CollectionSchema = {
     { name: 'title', storage: 'text', interpretation: 'plain', required: true, maxLength: 72 },
     { name: 'court', storage: 'text', interpretation: 'plain', required: true, maxLength: 100 },
     { name: 'location', storage: 'text', interpretation: 'plain', required: true, maxLength: 100 },
+    // Additive and optional: old rows remain text-only. Location updates go
+    // through the serialized command so the text and coordinates stay together.
+    { name: 'courtPlace', storage: 'text', interpretation: 'plain', default: '', maxLength: 1200 },
     { name: 'startsAt', storage: 'text', interpretation: { kind: 'datetime' }, required: true },
     { name: 'durationMinutes', storage: 'number', interpretation: 'plain', required: true },
     { name: 'capacity', storage: 'number', interpretation: 'plain', immutable: true },

@@ -10,6 +10,7 @@ import { emitNotification, type EmitNotificationInput } from './notifications.js
 import type { z } from 'zod'
 import { applyFinalization, markSessionResults, writeAudit } from './result-finalization.js'
 import { fetchGeocodedPlaces, GEOCODER_MIN_GAP_MS } from './court-discovery.js'
+import { getRallyDetails, normalizeCourtPlace, parseRallyPlace, validateRallyDetails, type RallyDetailsSnapshot } from '../lib/rally-place.js'
 import type { Env } from '../../worker.js'
 
 /** Largest command body the room will read (K05). Commands are small JSON; anything larger is rejected, never parsed. */
@@ -30,6 +31,7 @@ type ScoreEdit = z.infer<typeof scoreEditSchema> & { sessionId: string; userId: 
 
 type RallyCommand =
   | ScoreEdit
+  | { operation: 'editDetails'; sessionId: string; userId: string; details: RallyDetailsSnapshot; expected: RallyDetailsSnapshot }
   | { operation: 'rsvp'; sessionId: string; status: RSVPStatus; userId: string }
   | { operation: 'withdraw' | 'joinWaitlist' | 'leaveWaitlist'; sessionId: string; userId: string }
   | { operation: 'cancel'; sessionId: string; userId: string }
@@ -85,6 +87,10 @@ function parseCommand(value: unknown): RallyCommand | null {
   }
   if (value.operation === 'rsvp' && (value.status === 'going' || value.status === 'maybe')) {
     return { operation: value.operation, sessionId: value.sessionId, status: value.status, userId: value.userId }
+  }
+  if (value.operation === 'editDetails' && validateRallyDetails(value.details) && validateRallyDetails(value.expected)) {
+    return { operation: 'editDetails', sessionId: value.sessionId, userId: value.userId,
+      details: getRallyDetails(value.details), expected: getRallyDetails(value.expected) }
   }
   if (value.operation === 'createPoll' && Array.isArray(value.options)) {
     // Option shape is validated in applyPollCommand; parse only checks it is a list.
@@ -172,6 +178,25 @@ async function applyCommand(command: RallyCommand, tool: RecordTool, recovery: R
   if (!sessionResult.success) return failure('This session is unavailable.')
 
   const session = sessionResult.data.record.data
+  if (command.operation === 'editDetails') {
+    if (session.hostId !== command.userId) return failure('Only the session host can edit these details.')
+    if (session.status !== 'open' || session.matchScore) return failure('Details cannot change after cancellation or match scoring starts.')
+    const details = { ...command.details, title: command.details.title.trim(), court: command.details.court.trim(),
+      location: command.details.location.trim(), notes: command.details.notes.trim() }
+    const place = parseRallyPlace(details.courtPlace)
+    if (place && place.name !== details.court) return failure('Select the court again after changing its name.')
+    const current = getRallyDetails(session)
+    // A retry after a lost acknowledgement is a harmless success.
+    if (JSON.stringify(current) === JSON.stringify(details)) return { success: true, data: { recordId: command.sessionId } }
+    if (JSON.stringify(current) !== JSON.stringify(command.expected)) {
+      return failure('These details changed while you were editing. Close and reopen the form to see the latest version.')
+    }
+    const result = await tool<MutateActionData>('records.update', {
+      collection: 'sessions', recordId: command.sessionId, data: details,
+    }, command.userId)
+    return result.success ? { success: true, data: { recordId: command.sessionId } }
+      : failure('The details could not be saved. Your edits are still here.')
+  }
   if (command.operation === 'cancel') {
     if (session.hostId !== command.userId) return failure('Only the session host can cancel it.')
     if (session.status === 'cancelled') return { success: true, data: { recordId: command.sessionId } }
@@ -1143,6 +1168,8 @@ export const rallyCommandAction: ActionHandler<Env> = async ({ userId, params, t
     options: params.options,
     pollId: params.pollId,
     optionId: params.optionId,
+    details: params.details,
+    expected: params.expected,
     userId,
   })
   if (!command) return failure('Invalid rally command.')
@@ -1233,6 +1260,7 @@ function parseCreateRallyCommand(value: unknown): CreateRallyCommand | null {
   if (typeof draft.durationMinutes !== 'number' || typeof draft.targetPlayers !== 'number') return null
   if (draft.capacity !== undefined && typeof draft.capacity !== 'number') return null
   if (typeof draft.level !== 'string') return null
+  if (draft.courtPlace != null && typeof draft.courtPlace !== 'string') return null
   return { operation: 'createRally', userId: value.userId, draft: draft as CreateRallyCommand['draft'] }
 }
 
@@ -1412,6 +1440,7 @@ async function applyCreateRallyCommand(command: CreateRallyCommand, tool: Record
   }
   const problem = validateSession(draft)
   if (problem) return failure(problem)
+  if (draft.courtPlace !== undefined) draft.courtPlace = normalizeCourtPlace(draft.courtPlace)!
   const existing = await tool<QueryActionData<RallySession>>('records.query', {
     collection: 'sessions',
     where: { hostId: command.userId, startsAt: draft.startsAt, status: 'open' },
@@ -1433,6 +1462,7 @@ function sameRallyDraft(stored: RallySession, draft: CreateRallyCommand['draft']
     stored.title === draft.title &&
     stored.court === draft.court &&
     stored.location === draft.location &&
+    normalizeCourtPlace(stored.courtPlace) === normalizeCourtPlace(draft.courtPlace) &&
     stored.startsAt === draft.startsAt &&
     stored.durationMinutes === draft.durationMinutes &&
     stored.targetPlayers === draft.targetPlayers &&
